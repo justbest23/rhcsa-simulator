@@ -46,7 +46,7 @@ class CreateFilesystemTask(BaseTask):
         else:
             self.fstype, fstype_desc = random.choice(fstypes)
 
-        self.device = params.get('device', '/dev/vdb1')
+        self.device = params.get('device') or get_practice_device() or '/dev/vdb1'
 
         self.description = (
             f"Create a filesystem:\n"
@@ -108,7 +108,7 @@ class MountFilesystemTask(BaseTask):
 
     def generate(self, **params):
         """Generate mount task."""
-        self.device = params.get('device', '/dev/vdb1')
+        self.device = params.get('device') or get_practice_device() or '/dev/vdb1'
         self.mount_point = params.get('mount_point', f'/mnt/data{random.randint(1,99)}')
 
         self.description = (
@@ -197,7 +197,7 @@ class PersistentMountTask(BaseTask):
 
     def generate(self, **params):
         """Generate persistent mount task."""
-        self.device = params.get('device', '/dev/vdb1')
+        self.device = params.get('device') or get_practice_device() or '/dev/vdb1'
         self.mount_point = params.get('mount_point', f'/mnt/persistent{random.randint(1,99)}')
         self.fstype = params.get('fstype', random.choice(['xfs', 'ext4']))
         self.options = params.get('options', 'defaults')

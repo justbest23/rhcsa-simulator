@@ -247,47 +247,81 @@ def clamp(value, min_val, max_val):
 def get_available_block_devices():
     """
     Get list of available unused block devices.
+    Prioritizes completely empty disks (no partitions) for practice.
 
     Returns:
-        list: List of device paths (e.g., ['/dev/vdb', '/dev/sdc'])
+        list: List of device paths (e.g., ['/dev/sdd', '/dev/vdb'])
     """
     import subprocess
 
     try:
-        # Get all block devices
         result = subprocess.run(
-            ['lsblk', '-dpno', 'NAME,TYPE,MOUNTPOINT'],
+            ['lsblk', '-dpno', 'NAME,TYPE,SIZE'],
             capture_output=True, text=True, timeout=10
         )
 
         if result.returncode != 0:
             return []
 
-        available = []
-        for line in result.stdout.strip().split('\n'):
+        empty_disks = []
+        unused_disks = []
+
+        for line in result.stdout.strip().splitlines():
             if not line.strip():
                 continue
             parts = line.split()
             if len(parts) >= 2:
                 device = parts[0]
                 dtype = parts[1]
-                mountpoint = parts[2] if len(parts) > 2 else ''
 
-                # Skip if it's mounted or is a loop/rom device
-                if dtype == 'disk' and not mountpoint:
-                    # Skip the root disk (usually vda, sda, nvme0n1)
-                    if not any(x in device for x in ['vda', 'sda', 'nvme0n1', 'xvda']):
-                        # Check if it has partitions in use
-                        part_check = subprocess.run(
+                if dtype != 'disk':
+                    continue
+
+                # Skip known system disks
+                if any(x in device for x in ['vda', 'sda', 'nvme0n1', 'xvda']):
+                    continue
+
+                # Skip CD-ROM/removable
+                if 'sr' in device or 'fd' in device:
+                    continue
+
+                # Check if disk has any partitions
+                part_result = subprocess.run(
+                    ['lsblk', '-no', 'NAME', device],
+                    capture_output=True, text=True, timeout=5
+                )
+                children = [l.strip() for l in part_result.stdout.strip().splitlines() if l.strip()]
+                has_partitions = len(children) > 1
+
+                if not has_partitions:
+                    # Completely empty disk - check not a PV
+                    pv_check = subprocess.run(
+                        ['pvs', '--noheadings', '-o', 'pv_name'],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if device not in pv_check.stdout:
+                        empty_disks.append(device)
+                else:
+                    # Has partitions - check if used by LVM
+                    pv_check = subprocess.run(
+                        ['pvs', '--noheadings', '-o', 'pv_name'],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    disk_basename = device.split('/')[-1]
+                    if disk_basename not in pv_check.stdout:
+                        mount_check = subprocess.run(
                             ['lsblk', '-no', 'MOUNTPOINT', device],
                             capture_output=True, text=True, timeout=5
                         )
-                        if not part_check.stdout.strip():
-                            available.append(device)
+                        mounts = [m for m in mount_check.stdout.strip().splitlines() if m.strip()]
+                        if not mounts:
+                            unused_disks.append(device)
 
-        return available
+        return empty_disks + unused_disks
     except Exception as e:
         return []
+
+
 
 
 def get_loop_devices():
