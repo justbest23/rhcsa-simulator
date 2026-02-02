@@ -335,7 +335,7 @@ class ConfigureSwapTask(BaseTask):
 
     def generate(self, **params):
         """Generate swap configuration task."""
-        self.device = params.get('device', '/dev/vdc1')
+        self.device = params.get('device') or get_practice_device() or '/dev/vdc1'
         self.size_mb = params.get('size', random.choice([512, 1024, 2048]))
 
         self.description = (
