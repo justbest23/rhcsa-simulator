@@ -492,3 +492,67 @@ def get_all_practice_devices():
     devices.extend(get_loop_devices())
 
     return devices
+
+
+def get_practice_lv():
+    """
+    Get an existing non-system LV suitable for practice (extend tasks).
+    Returns tuple of (vg_name, lv_name) or (None, None) if none found.
+    """
+    import subprocess
+    
+    try:
+        result = subprocess.run(
+            ['lvs', '--noheadings', '-o', 'vg_name,lv_name'],
+            capture_output=True, text=True, timeout=10
+        )
+        
+        if result.returncode != 0:
+            return None, None
+        
+        # System VGs to skip
+        system_vgs = ['rl', 'rl00', 'rhel', 'centos', 'fedora']
+        
+        for line in result.stdout.strip().splitlines():
+            parts = line.split()
+            if len(parts) >= 2:
+                vg_name = parts[0]
+                lv_name = parts[1]
+                # Skip system VGs
+                if vg_name not in system_vgs:
+                    return vg_name, lv_name
+        
+        return None, None
+    except Exception:
+        return None, None
+
+
+def get_practice_vg():
+    """
+    Get an existing non-system VG suitable for practice.
+    Returns vg_name or None if none found.
+    """
+    import subprocess
+    
+    try:
+        result = subprocess.run(
+            ['vgs', '--noheadings', '-o', 'vg_name,vg_free'],
+            capture_output=True, text=True, timeout=10
+        )
+        
+        if result.returncode != 0:
+            return None
+        
+        # System VGs to skip
+        system_vgs = ['rl', 'rl00', 'rhel', 'centos', 'fedora']
+        
+        for line in result.stdout.strip().splitlines():
+            parts = line.split()
+            if len(parts) >= 1:
+                vg_name = parts[0]
+                if vg_name not in system_vgs:
+                    return vg_name
+        
+        return None
+    except Exception:
+        return None

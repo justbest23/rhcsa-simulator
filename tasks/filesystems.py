@@ -13,7 +13,7 @@ from validators.system_validators import (
     validate_persistent_mount, validate_swap_active, get_total_swap
 )
 from validators.file_validators import validate_file_contains
-from utils.helpers import get_practice_device
+from utils.helpers import get_practice_device, get_practice_lv
 
 
 logger = logging.getLogger(__name__)
@@ -335,7 +335,7 @@ class ConfigureSwapTask(BaseTask):
 
     def generate(self, **params):
         """Generate swap configuration task."""
-        self.device = params.get('device') or get_practice_device() or '/dev/vdc1'
+        self.device = params.get('device', '/dev/vdc1')
         self.size_mb = params.get('size', random.choice([512, 1024, 2048]))
 
         self.description = (
@@ -439,7 +439,13 @@ class ExtendFilesystemTask(BaseTask):
 
     def generate(self, **params):
         """Generate filesystem extend task."""
-        self.device = params.get('device', '/dev/mapper/vg_data-lv_data')
+        # Try to detect existing practice LV
+        vg, lv = get_practice_lv()
+        if vg and lv:
+            default_dev = f'/dev/mapper/{vg}-{lv}'
+        else:
+            default_dev = '/dev/mapper/vg_practice-lv_practice'
+        self.device = params.get('device') or default_dev
         self.fstype = params.get('fstype', random.choice(['xfs', 'ext4']))
         self.expected_size_mb = params.get('size', random.choice([1500, 2000, 3000]))
 

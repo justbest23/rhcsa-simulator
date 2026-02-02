@@ -7,7 +7,7 @@ from tasks.base import BaseTask
 from tasks.registry import TaskRegistry
 from core.validator import ValidationCheck, ValidationResult
 from validators.system_validators import validate_lv_exists, get_lv_size_mb
-from utils.helpers import get_practice_device, get_all_practice_devices
+from utils.helpers import get_practice_device, get_all_practice_devices, get_practice_lv, get_practice_vg
 
 
 @TaskRegistry.register("lvm")
@@ -201,8 +201,14 @@ class CreateLVTask(BaseTask):
         self.lv_size_mb = None
 
     def generate(self, **params):
-        self.vg_name = params.get('vg_name', f'vg_data{random.randint(1,99)}')
-        self.lv_name = params.get('lv_name', f'lv_vol{random.randint(1,99)}')
+        # Try to detect existing practice LV
+        existing_vg, existing_lv = get_practice_lv()
+        if existing_vg and existing_lv:
+            self.vg_name = params.get('vg_name', existing_vg)
+            self.lv_name = params.get('lv_name', existing_lv)
+        else:
+            self.vg_name = params.get('vg_name', 'vg_practice')
+            self.lv_name = params.get('lv_name', 'lv_practice')
         self.lv_size_mb = params.get('size', random.choice([500, 1000, 2000]))
 
         self.description = (
@@ -264,8 +270,14 @@ class ExtendLVTask(BaseTask):
         self.extend_by_mb = None
 
     def generate(self, **params):
-        self.vg_name = params.get('vg_name', f'vg_data{random.randint(1,99)}')
-        self.lv_name = params.get('lv_name', f'lv_vol{random.randint(1,99)}')
+        # Try to detect existing practice LV
+        existing_vg, existing_lv = get_practice_lv()
+        if existing_vg and existing_lv:
+            self.vg_name = params.get('vg_name', existing_vg)
+            self.lv_name = params.get('lv_name', existing_lv)
+        else:
+            self.vg_name = params.get('vg_name', 'vg_practice')
+            self.lv_name = params.get('lv_name', 'lv_practice')
         self.extend_by_mb = params.get('extend_by', random.choice([500, 1000]))
         self.new_size_mb = params.get('new_size', random.choice([1500, 2500, 3000]))
 
