@@ -459,21 +459,62 @@ class DeviceManager:
 
     def _safety_cleanup(self) -> bool:
         """
-        Safety cleanup of practice device - catches anything missed.
-        This is the nuclear option that ensures the device is clean.
+        Safety cleanup of ALL practice resources - catches anything missed.
+        Cleans: practice device, loop devices, any non-system LVM.
         """
         device = self.get_practice_device()
-        if not device:
-            return True
-
-        self.logger.info(f"Running safety cleanup on {device}")
+        self.logger.info(f"Running safety cleanup (practice device: {device})")
         success = True
 
-        # 1. Unmount anything on the device
+        # Collect all devices to clean (practice device + loop devices with practice LVM)
+        devices_to_clean = set()
+        if device:
+            devices_to_clean.add(device)
+
+        # Find loop devices that have non-system LVM
+        system_vgs = {'rl', 'rl00', 'rhel', 'centos', 'fedora'}
+        try:
+            result = subprocess.run(
+                ['pvs', '--noheadings', '-o', 'pv_name,vg_name'],
+                capture_output=True, text=True, timeout=5
+            )
+            for line in result.stdout.strip().splitlines():
+                parts = line.split()
+                if len(parts) >= 2:
+                    pv_name = parts[0].strip()
+                    vg_name = parts[1].strip()
+                    # If this PV is on a loop device and not a system VG, clean it
+                    if '/dev/loop' in pv_name and vg_name not in system_vgs:
+                        devices_to_clean.add(pv_name)
+                    # Also add any non-system PV on other devices
+                    elif vg_name not in system_vgs:
+                        devices_to_clean.add(pv_name)
+        except Exception:
+            pass
+
+        self.logger.info(f"Devices to clean: {devices_to_clean}")
+
+        # 1. Unmount anything on practice devices or mapper devices from non-system VGs
         try:
             result = subprocess.run(['mount'], capture_output=True, text=True, timeout=5)
             for line in result.stdout.splitlines():
-                if device in line or '/dev/mapper/' in line:
+                should_unmount = False
+                mount_point = None
+
+                # Check if mount is on any device we're cleaning
+                for dev in devices_to_clean:
+                    if dev in line:
+                        should_unmount = True
+                        break
+
+                # Check mapper devices for non-system VGs
+                if '/dev/mapper/' in line:
+                    mapper_name = line.split()[0].replace('/dev/mapper/', '')
+                    vg_part = mapper_name.split('-')[0]
+                    if vg_part not in system_vgs:
+                        should_unmount = True
+
+                if should_unmount:
                     parts = line.split()
                     if len(parts) >= 3:
                         mount_point = parts[2]
@@ -562,23 +603,25 @@ class DeviceManager:
         except Exception:
             pass
 
-        # 5. Remove PV from practice device
-        try:
-            subprocess.run(
-                ['pvremove', '-f', '-y', device],
-                capture_output=True, timeout=15
-            )
-        except Exception:
-            pass
+        # 5. Remove PVs from all practice devices (including loop devices)
+        for dev in devices_to_clean:
+            try:
+                subprocess.run(
+                    ['pvremove', '-f', '-y', dev],
+                    capture_output=True, timeout=15
+                )
+            except Exception:
+                pass
 
-        # 6. Wipe device signatures
-        try:
-            subprocess.run(
-                ['wipefs', '-a', device],
-                capture_output=True, timeout=15
-            )
-        except Exception:
-            pass
+        # 6. Wipe device signatures on all practice devices
+        for dev in devices_to_clean:
+            try:
+                subprocess.run(
+                    ['wipefs', '-a', dev],
+                    capture_output=True, timeout=15
+                )
+            except Exception:
+                pass
 
         # 7. Clean up fstab entries for practice mounts
         self._cleanup_practice_fstab_entries()
