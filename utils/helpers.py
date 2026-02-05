@@ -453,12 +453,24 @@ def cleanup_practice_devices():
 def get_practice_device():
     """
     Get a device suitable for LVM practice.
-    First checks for real unused devices, then falls back to loop devices.
+    Uses DeviceManager for smart detection (handles system disks, caching,
+    and disks with existing practice LVM), then falls back to loop devices.
 
     Returns:
         str: Device path or None if none available
     """
-    # First try real devices
+    # Use DeviceManager for smart detection (skips system disks, caches result,
+    # recognizes disks with existing practice PVs/VGs)
+    try:
+        from device import get_device_manager
+        dm = get_device_manager()
+        device = dm.get_practice_device()
+        if device:
+            return device
+    except Exception:
+        pass
+
+    # Fallback: try raw block device detection
     real_devices = get_available_block_devices()
     if real_devices:
         return real_devices[0]

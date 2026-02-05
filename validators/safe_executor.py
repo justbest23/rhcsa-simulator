@@ -201,7 +201,8 @@ class SafeCommandExecutor:
             subcommand = command[1]
             if subcommand not in ['status', 'is-active', 'is-enabled',
                                  'is-failed', 'list-units', 'list-unit-files',
-                                 'show', 'cat', 'list-dependencies']:
+                                 'show', 'cat', 'list-dependencies',
+                                 'get-default']:
                 raise SecurityError(
                     f"systemctl subcommand '{subcommand}' is not allowed. "
                     f"Only read-only operations permitted."
