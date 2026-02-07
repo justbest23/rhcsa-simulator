@@ -227,17 +227,19 @@ For detailed RHCSA exam info: https://www.redhat.com/rhcsa
 
     def show_setup(self):
         """Show setup and configuration options."""
-        from device import get_device_manager
+        from device import get_device_manager, get_network_manager
 
         fmt.clear_screen()
         fmt.print_header("SETUP")
 
         dm = get_device_manager()
+        nm = get_network_manager()
         device = dm.get_practice_device()
 
         print(fmt.bold("Current Configuration"))
         print(f"  Practice Device: {device or 'Not detected'}")
         print(f"  Auto-Cleanup: {'Enabled' if dm._cleanup_enabled else 'Disabled'}")
+        print(f"  Primary Network: {nm.get_primary_interface() or 'Unknown'} ({nm.get_primary_ip() or 'No IP'})")
         print()
 
         print(fmt.bold("Options"))
@@ -245,6 +247,7 @@ For detailed RHCSA exam info: https://www.redhat.com/rhcsa
         print("  2. Toggle Auto-Cleanup")
         print("  3. View Task Statistics")
         print("  4. Refresh Device Detection")
+        print("  5. Network Backup/Restore")
         print("  0. Return to Menu")
         print()
 
@@ -268,6 +271,8 @@ For detailed RHCSA exam info: https://www.redhat.com/rhcsa
             new_device = dm.get_practice_device()
             print(fmt.info(f"Practice device: {new_device or 'None detected'}"))
             input("Press Enter to continue...")
+        elif choice == '5':
+            self.network_management()
 
     def show_stats(self):
         """Show task statistics."""
@@ -497,6 +502,110 @@ For detailed RHCSA exam info: https://www.redhat.com/rhcsa
                     print(fmt.success("Practice disks cleaned up"))
                 else:
                     print(fmt.error("Cleanup failed"))
+
+        print()
+        input("Press Enter to return...")
+
+    def network_management(self):
+        """Network backup and restore management."""
+        from device import get_network_manager
+        from utils.helpers import confirm_action
+
+        nm = get_network_manager()
+
+        fmt.clear_screen()
+        fmt.print_header("NETWORK BACKUP/RESTORE")
+
+        # Show current state
+        print(fmt.bold("Current Network State:"))
+        print(f"  Primary Interface: {nm.get_primary_interface() or 'Unknown'}")
+        print(f"  Primary IP: {nm.get_primary_ip() or 'Unknown'}")
+        print()
+
+        # Show warning
+        print(fmt.warning("WARNING: Network practice can disconnect SSH!"))
+        print(fmt.dim("Always backup before practicing networking tasks."))
+        print()
+
+        # List existing backups
+        backups = nm.list_backups()
+        if backups:
+            print(fmt.bold(f"Available Backups ({len(backups)}):"))
+            for i, b in enumerate(backups[:5], 1):
+                print(f"  {i}. {b['timestamp'][:19]} - {b['hostname']} ({b['primary_ip']})")
+            if len(backups) > 5:
+                print(fmt.dim(f"     ... and {len(backups) - 5} more"))
+        else:
+            print(fmt.dim("No backups found."))
+        print()
+
+        print(fmt.bold("Options:"))
+        print("  1. Backup Current State")
+        print("  2. Show Recovery Commands")
+        print("  3. Cleanup Practice Connections")
+        print("  4. Full Restore from Backup")
+        print("  0. Return to Setup")
+        print()
+
+        choice = input("Select option: ").strip()
+
+        if choice == '1':
+            print()
+            print("Backing up network state...")
+            filepath = nm.backup_state("manual")
+            print(fmt.success(f"Backup saved!"))
+            print(f"  Location: {filepath}")
+            print()
+            # Also show recovery commands
+            nm.print_recovery_commands()
+
+        elif choice == '2':
+            nm.print_recovery_commands()
+
+        elif choice == '3':
+            print()
+            print("This will remove connections matching: lab-*, test-*, practice-*, team0, team1")
+            if confirm_action("Proceed with cleanup?", default=True):
+                removed = nm.cleanup_practice_connections()
+                if removed:
+                    print(fmt.success(f"Removed {len(removed)} connections:"))
+                    for conn in removed:
+                        print(f"  - {conn}")
+                else:
+                    print(fmt.info("No practice connections found to remove."))
+
+        elif choice == '4':
+            if not backups:
+                print(fmt.error("No backups available!"))
+            else:
+                print()
+                print("Available backups:")
+                for i, b in enumerate(backups[:5], 1):
+                    print(f"  {i}. {b['timestamp'][:19]} - {b['hostname']}")
+                print()
+                sel = input("Select backup number [1]: ").strip() or '1'
+                try:
+                    idx = int(sel) - 1
+                    if 0 <= idx < len(backups):
+                        if confirm_action("This will restore network settings. Continue?", default=False):
+                            print()
+                            print("Restoring network state...")
+                            result = nm.full_cleanup(backups[idx]['file'])
+                            if 'error' in result:
+                                print(fmt.error(result['error']))
+                            else:
+                                print(fmt.success("Cleanup complete!"))
+                                if result['connections_removed']:
+                                    print(f"  Removed connections: {', '.join(result['connections_removed'])}")
+                                if result['hostname_restored']:
+                                    print(f"  Hostname restored")
+                                fw = result.get('firewall_cleaned', {})
+                                if any(fw.values()):
+                                    print(f"  Firewall rules cleaned")
+                    else:
+                        print(fmt.error("Invalid selection"))
+                except ValueError:
+                    print(fmt.error("Invalid input"))
 
         print()
         input("Press Enter to return...")

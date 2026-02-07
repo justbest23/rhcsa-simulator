@@ -13,6 +13,7 @@ from device.cleanup_strategies import (
     UserCleanupStrategy,
     FstabCleanupStrategy,
 )
+from device.network_manager import NetworkStateManager, get_network_manager
 
 __all__ = [
     'DeviceManager',
@@ -24,4 +25,6 @@ __all__ = [
     'SwapCleanupStrategy',
     'UserCleanupStrategy',
     'FstabCleanupStrategy',
+    'NetworkStateManager',
+    'get_network_manager',
 ]

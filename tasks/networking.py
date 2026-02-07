@@ -18,6 +18,45 @@ from validators.file_validators import validate_file_contains
 logger = logging.getLogger(__name__)
 
 
+def _get_practice_interface():
+    """Get an interface suitable for practice (prefers non-primary)."""
+    try:
+        from device.network_manager import (
+            get_practice_interface, get_primary_interface,
+            get_connection_for_interface
+        )
+        iface = get_practice_interface()
+        if iface:
+            return iface
+    except Exception:
+        pass
+    return 'eth0'  # Fallback
+
+
+def _get_primary_interface():
+    """Get the primary network interface."""
+    try:
+        from device.network_manager import get_primary_interface
+        iface = get_primary_interface()
+        if iface:
+            return iface
+    except Exception:
+        pass
+    return 'eth0'  # Fallback
+
+
+def _get_connection_name(interface):
+    """Get connection name for an interface."""
+    try:
+        from device.network_manager import get_connection_for_interface
+        conn = get_connection_for_interface(interface)
+        if conn:
+            return conn
+    except Exception:
+        pass
+    return interface  # Fallback to interface name
+
+
 @TaskRegistry.register("networking")
 class ConfigureStaticIPTask(BaseTask):
     """Configure static IP address using nmcli."""
@@ -36,7 +75,7 @@ class ConfigureStaticIPTask(BaseTask):
 
     def generate(self, **params):
         """Generate static IP configuration task."""
-        self.interface = params.get('interface', 'eth0')
+        self.interface = params.get('interface') or _get_practice_interface()
         self.ip_address = params.get('ip', f'192.168.{random.randint(1,254)}.{random.randint(10,250)}')
         self.netmask = params.get('netmask', '24')
         self.connection_name = params.get('connection', self.interface)
@@ -155,7 +194,8 @@ class ConfigureDefaultGatewayTask(BaseTask):
     def generate(self, **params):
         """Generate gateway configuration task."""
         self.gateway = params.get('gateway', f'192.168.{random.randint(1,254)}.1')
-        self.connection_name = params.get('connection', 'eth0')
+        iface = _get_practice_interface()
+        self.connection_name = params.get('connection') or _get_connection_name(iface) or iface
 
         self.description = (
             f"Configure default gateway:\n"
@@ -240,7 +280,8 @@ class ConfigureDNSTask(BaseTask):
         self.dns_servers = params.get('dns', ['8.8.8.8', '8.8.4.4'])
         if isinstance(self.dns_servers, str):
             self.dns_servers = [self.dns_servers]
-        self.connection_name = params.get('connection', 'eth0')
+        iface = _get_practice_interface()
+        self.connection_name = params.get('connection') or _get_connection_name(iface) or iface
 
         dns_list = ' '.join(self.dns_servers)
 
@@ -422,14 +463,14 @@ class ConfigureNetworkFullTask(BaseTask):
 
     def generate(self, **params):
         """Generate complete network configuration task."""
-        self.interface = params.get('interface', 'eth0')
+        self.interface = params.get('interface') or _get_practice_interface()
         self.ip_address = params.get('ip', f'192.168.{random.randint(1,254)}.{random.randint(10,250)}')
         self.netmask = params.get('netmask', '24')
         self.gateway = params.get('gateway', f'192.168.{self.ip_address.split(".")[2]}.1')
         self.dns = params.get('dns', ['8.8.8.8', '8.8.4.4'])
         if isinstance(self.dns, str):
             self.dns = [self.dns]
-        self.connection_name = params.get('connection', self.interface)
+        self.connection_name = params.get('connection') or _get_connection_name(self.interface) or self.interface
 
         self.description = (
             f"Configure complete network settings:\n"
@@ -817,7 +858,14 @@ class CreateConnectionTask(BaseTask):
     def generate(self, **params):
         """Generate create connection task."""
         self.connection_name = params.get('connection', 'lab-connection')
-        self.interface = params.get('interface', 'eth1')
+        # Prefer secondary interface for new connections to avoid SSH disruption
+        try:
+            from device.network_manager import get_secondary_interfaces
+            secondary = get_secondary_interfaces()
+            default_iface = secondary[0] if secondary else _get_practice_interface()
+        except Exception:
+            default_iface = _get_practice_interface()
+        self.interface = params.get('interface') or default_iface
         self.ip_address = params.get('ip', f'10.0.{random.randint(1,254)}.{random.randint(10,250)}')
         self.netmask = params.get('netmask', '24')
 
@@ -923,7 +971,7 @@ class ConfigureFirewallZoneTask(BaseTask):
         """Generate firewall zone task."""
         zones = ['trusted', 'home', 'internal', 'work', 'dmz', 'external', 'block']
         self.zone = params.get('zone', random.choice(zones))
-        self.interface = params.get('interface', 'eth0')
+        self.interface = params.get('interface') or _get_practice_interface()
         self.set_default = params.get('set_default', random.choice([True, False]))
 
         if self.set_default:
@@ -1042,7 +1090,8 @@ class NetworkTroubleshootingTask(BaseTask):
 
     def generate(self, **params):
         """Generate troubleshooting task."""
-        self.connection_name = params.get('connection', 'eth0')
+        iface = _get_practice_interface()
+        self.connection_name = params.get('connection') or _get_connection_name(iface) or iface
         self.expected_ip = params.get('ip', f'192.168.100.{random.randint(10,250)}')
         self.expected_gateway = params.get('gateway', '192.168.100.1')
 
@@ -1195,7 +1244,14 @@ class ConfigureNetworkTeamTask(BaseTask):
         self.team_ip = params.get('ip', f'10.10.10.{random.randint(10,250)}')
         runners = ['activebackup', 'roundrobin', 'loadbalance']
         self.runner = params.get('runner', random.choice(runners))
-        self.port_interfaces = params.get('ports', ['eth1', 'eth2'])
+        # Get secondary interfaces for teaming (need at least 2)
+        try:
+            from device.network_manager import get_secondary_interfaces
+            secondary = get_secondary_interfaces()
+            default_ports = secondary[:2] if len(secondary) >= 2 else ['eth1', 'eth2']
+        except Exception:
+            default_ports = ['eth1', 'eth2']
+        self.port_interfaces = params.get('ports') or default_ports
 
         runner_desc = {
             'activebackup': 'Active-Backup (failover)',
@@ -1366,7 +1422,8 @@ class SwitchToStaticIPTask(BaseTask):
 
     def generate(self, **params):
         """Generate DHCP to static task."""
-        self.connection_name = params.get('connection', 'eth0')
+        iface = _get_practice_interface()
+        self.connection_name = params.get('connection') or _get_connection_name(iface) or iface
         self.ip_address = params.get('ip', f'172.16.{random.randint(1,254)}.{random.randint(10,250)}')
 
         self.description = (
