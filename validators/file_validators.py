@@ -375,7 +375,7 @@ def validate_selinux_boolean(boolean_name, expected_value):
 
 # File Content Validators
 
-def validate_file_contains(path, search_string, regex=False):
+def validate_file_contains(path, search_string, regex=False, case_sensitive=True):
     """
     Check if file contains a string or pattern.
 
@@ -383,15 +383,26 @@ def validate_file_contains(path, search_string, regex=False):
         path (str): File path
         search_string (str): String or regex pattern to search
         regex (bool): Whether to use regex matching
+        case_sensitive (bool): Whether search is case-sensitive (default True)
 
     Returns:
         bool: True if string/pattern found
     """
-    if regex:
-        result = execute_safe(['grep', '-E', search_string, path])
-    else:
-        result = execute_safe(['grep', '-F', search_string, path])
+    grep_args = ['grep']
 
+    # Add case-insensitive flag if needed
+    if not case_sensitive:
+        grep_args.append('-i')
+
+    # Add regex or fixed string flag
+    if regex:
+        grep_args.append('-E')
+    else:
+        grep_args.append('-F')
+
+    grep_args.extend([search_string, path])
+
+    result = execute_safe(grep_args)
     return result.success
 
 
