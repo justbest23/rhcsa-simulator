@@ -1441,29 +1441,48 @@ class ConfigureNetworkTeamTask(BaseTask):
             ))
 
         # Check 5: At least one port configured (4 points)
-        # Look for team-slave connections with this team as master
-        result = execute_safe(['nmcli', '-t', '-f', 'NAME,TYPE,DEVICE', 'con', 'show'])
+        # Method 1: Use teamdctl to check team state (most reliable)
         ports_found = []
-        if result.success:
-            for line in result.stdout.splitlines():
-                # Format: connection-name:type:device
-                if 'team-slave' in line.lower() or 'ethernet' in line.lower():
-                    parts = line.split(':')
-                    if len(parts) >= 1:
-                        conn_name = parts[0]
-                        # Check if this connection is a slave of our team
-                        slave_check = execute_safe(['nmcli', '-g', 'connection.master', 'con', 'show', conn_name])
-                        if slave_check.success and self.team_name in slave_check.stdout:
-                            ports_found.append(conn_name)
+        team_state = execute_safe(['teamdctl', self.team_name, 'state'])
+        if team_state.success:
+            # teamdctl output shows ports - parse for interface names
+            for port in self.port_interfaces:
+                if port in team_state.stdout:
+                    ports_found.append(port)
+            # Also check for generic port detection in output
+            if not ports_found and 'link watches:' in team_state.stdout.lower():
+                # If we see link watches, there's at least one port
+                ports_found.append('detected')
 
-        # Also check using teamdctl if available
+        # Method 2: Check all connections for slave-type = team
         if not ports_found:
-            team_state = execute_safe(['teamdctl', self.team_name, 'state'])
-            if team_state.success and 'ports:' in team_state.stdout.lower():
-                # teamdctl shows ports, so at least one exists
-                for port in self.port_interfaces:
-                    if port in team_state.stdout:
-                        ports_found.append(port)
+            result = execute_safe(['nmcli', '-t', '-f', 'NAME', 'con', 'show'])
+            if result.success:
+                for line in result.stdout.splitlines():
+                    conn_name = line.strip()
+                    if not conn_name:
+                        continue
+                    # Check if this connection is a team slave
+                    slave_type = execute_safe(['nmcli', '-g', 'connection.slave-type', 'con', 'show', conn_name])
+                    if slave_type.success and slave_type.stdout.strip() == 'team':
+                        # Verify it belongs to our team
+                        master = execute_safe(['nmcli', '-g', 'connection.master', 'con', 'show', conn_name])
+                        if master.success:
+                            master_val = master.stdout.strip()
+                            # Master can be team name, interface name, or UUID
+                            if master_val == self.team_name or self.team_name in master_val:
+                                ports_found.append(conn_name)
+
+        # Method 3: Check for connections with team name prefix (common naming pattern)
+        if not ports_found:
+            result = execute_safe(['nmcli', '-t', '-f', 'NAME', 'con', 'show'])
+            if result.success:
+                for line in result.stdout.splitlines():
+                    conn_name = line.strip()
+                    # Look for port naming patterns like "team0-port1", "team0-slave1", etc.
+                    if conn_name.startswith(f'{self.team_name}-') or conn_name.startswith(f'{self.team_name}_'):
+                        if 'port' in conn_name.lower() or 'slave' in conn_name.lower():
+                            ports_found.append(conn_name)
 
         port_found = len(ports_found) > 0
 
@@ -1472,16 +1491,23 @@ class ConfigureNetworkTeamTask(BaseTask):
                 name="team_ports",
                 passed=True,
                 points=4,
-                message="Team ports configured"
+                message=f"Team ports configured: {', '.join(ports_found[:2])}"
             ))
             total_points += 4
         else:
+            # Provide helpful debug info
+            debug_info = ""
+            if team_state.success:
+                debug_info = " (teamdctl worked but no ports detected)"
+            else:
+                debug_info = " (teamdctl failed - team may not be active)"
             checks.append(ValidationCheck(
                 name="team_ports",
                 passed=False,
                 points=0,
                 max_points=4,
-                message="No team ports found"
+                message=f"No team slave ports found for {self.team_name}{debug_info}. "
+                        f"Create with: nmcli con add type team-slave con-name {self.team_name}-port1 ifname <interface> master {self.team_name}"
             ))
 
         passed = total_points >= (self.points * 0.7)
