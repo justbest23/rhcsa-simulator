@@ -723,3 +723,358 @@ class ConfigureSwapPartitionTask(BaseTask):
 
         passed = total_points >= (self.points * 0.7)
         return ValidationResult(self.id, passed, total_points, self.points, checks)
+
+
+# ============================================================================
+# RAID TASKS
+# ============================================================================
+
+@TaskRegistry.register("storage")
+class CreateRAIDArrayTask(BaseTask):
+    """Create a RAID array using mdadm."""
+
+    def __init__(self):
+        super().__init__(
+            id="raid_create_001",
+            category="storage",
+            difficulty="hard",
+            points=12
+        )
+        self.raid_level = None
+        self.devices = None
+        self.md_device = None
+
+    def generate(self, **params):
+        """Generate RAID creation task."""
+        self.raid_level = params.get('level', 1)
+        self.devices = params.get('devices', ['/dev/sdb1', '/dev/sdc1'])
+        self.md_device = params.get('md_device', '/dev/md0')
+
+        self.description = (
+            f"Create a RAID array:\n"
+            f"  - RAID level: {self.raid_level}\n"
+            f"  - Devices: {', '.join(self.devices)}\n"
+            f"  - MD device: {self.md_device}\n"
+            f"  - Create filesystem and mount at /mnt/raid"
+        )
+
+        device_str = ' '.join(self.devices)
+        self.hints = [
+            "Install mdadm: dnf install mdadm",
+            f"Create array: mdadm --create {self.md_device} --level={self.raid_level} --raid-devices={len(self.devices)} {device_str}",
+            f"Watch sync: cat /proc/mdstat",
+            f"Create filesystem: mkfs.ext4 {self.md_device}",
+            "Mount: mkdir -p /mnt/raid && mount /dev/md0 /mnt/raid"
+        ]
+
+        return self
+
+    def validate(self):
+        """Validate RAID array creation."""
+        checks = []
+        total_points = 0
+
+        # Check 1: MD device exists (4 points)
+        result = execute_safe(['mdadm', '--detail', self.md_device])
+        if result.success:
+            checks.append(ValidationCheck(
+                name="md_exists",
+                passed=True,
+                points=4,
+                message=f"RAID device {self.md_device} exists"
+            ))
+            total_points += 4
+
+            # Check RAID level (3 points)
+            if f"raid{self.raid_level}" in result.stdout.lower() or f"Raid Level : raid{self.raid_level}" in result.stdout:
+                checks.append(ValidationCheck(
+                    name="raid_level",
+                    passed=True,
+                    points=3,
+                    message=f"RAID level is {self.raid_level}"
+                ))
+                total_points += 3
+            else:
+                checks.append(ValidationCheck(
+                    name="raid_level",
+                    passed=False,
+                    points=0,
+                    max_points=3,
+                    message=f"RAID level mismatch"
+                ))
+        else:
+            checks.append(ValidationCheck(
+                name="md_exists",
+                passed=False,
+                points=0,
+                max_points=4,
+                message=f"RAID device {self.md_device} not found"
+            ))
+
+        # Check 2: Filesystem exists (3 points)
+        result = execute_safe(['blkid', self.md_device])
+        if result.success and ('ext4' in result.stdout or 'xfs' in result.stdout):
+            checks.append(ValidationCheck(
+                name="has_fs",
+                passed=True,
+                points=3,
+                message="Filesystem created on RAID"
+            ))
+            total_points += 3
+        else:
+            checks.append(ValidationCheck(
+                name="has_fs",
+                passed=False,
+                points=0,
+                max_points=3,
+                message="No filesystem on RAID"
+            ))
+
+        # Check 3: Mounted (2 points)
+        result = execute_safe(['findmnt', '/mnt/raid'])
+        if result.success:
+            checks.append(ValidationCheck(
+                name="mounted",
+                passed=True,
+                points=2,
+                message="RAID is mounted"
+            ))
+            total_points += 2
+        else:
+            checks.append(ValidationCheck(
+                name="mounted",
+                passed=False,
+                points=0,
+                max_points=2,
+                message="RAID is not mounted"
+            ))
+
+        passed = total_points >= (self.points * 0.7)
+        return ValidationResult(self.id, passed, total_points, self.points, checks)
+
+
+@TaskRegistry.register("storage")
+class PersistentRAIDTask(BaseTask):
+    """Make RAID configuration persistent."""
+
+    def __init__(self):
+        super().__init__(
+            id="raid_persist_001",
+            category="storage",
+            difficulty="medium",
+            points=10
+        )
+        self.md_device = None
+        self.mountpoint = None
+
+    def generate(self, **params):
+        """Generate persistent RAID task."""
+        self.md_device = params.get('md_device', '/dev/md0')
+        self.mountpoint = params.get('mountpoint', '/mnt/raid')
+
+        self.description = (
+            f"Make RAID configuration persistent:\n"
+            f"  - RAID device: {self.md_device}\n"
+            f"  - Mount point: {self.mountpoint}\n"
+            f"  - Save mdadm configuration\n"
+            f"  - Add fstab entry for automount"
+        )
+
+        self.hints = [
+            "Save config: mdadm --detail --scan >> /etc/mdadm.conf",
+            "Or: mdadm --examine --scan >> /etc/mdadm.conf",
+            "Update initramfs: dracut --regenerate-all --force",
+            f"fstab entry using UUID: blkid {self.md_device}",
+            f"fstab: UUID=xxx {self.mountpoint} ext4 defaults 0 0"
+        ]
+
+        return self
+
+    def validate(self):
+        """Validate persistent RAID configuration."""
+        checks = []
+        total_points = 0
+
+        # Check 1: mdadm.conf has entry (5 points)
+        if validate_file_contains('/etc/mdadm.conf', 'ARRAY'):
+            checks.append(ValidationCheck(
+                name="mdadm_conf",
+                passed=True,
+                points=5,
+                message="RAID config saved in /etc/mdadm.conf"
+            ))
+            total_points += 5
+        else:
+            checks.append(ValidationCheck(
+                name="mdadm_conf",
+                passed=False,
+                points=0,
+                max_points=5,
+                message="No ARRAY entry in /etc/mdadm.conf"
+            ))
+
+        # Check 2: fstab entry (5 points)
+        if validate_file_contains('/etc/fstab', self.mountpoint):
+            checks.append(ValidationCheck(
+                name="fstab_entry",
+                passed=True,
+                points=5,
+                message=f"Mount entry for {self.mountpoint} in fstab"
+            ))
+            total_points += 5
+        else:
+            checks.append(ValidationCheck(
+                name="fstab_entry",
+                passed=False,
+                points=0,
+                max_points=5,
+                message="No fstab entry for RAID mount"
+            ))
+
+        passed = total_points >= (self.points * 0.7)
+        return ValidationResult(self.id, passed, total_points, self.points, checks)
+
+
+@TaskRegistry.register("storage")
+class ManageRAIDArrayTask(BaseTask):
+    """Monitor and manage a RAID array."""
+
+    def __init__(self):
+        super().__init__(
+            id="raid_manage_001",
+            category="storage",
+            difficulty="medium",
+            points=8
+        )
+        self.md_device = None
+        self.output_file = None
+
+    def generate(self, **params):
+        """Generate RAID management task."""
+        self.md_device = params.get('md_device', '/dev/md0')
+        self.output_file = params.get('output', '/tmp/raid_status.txt')
+
+        self.description = (
+            f"Monitor RAID array status:\n"
+            f"  - RAID device: {self.md_device}\n"
+            f"  - Save detailed status to: {self.output_file}\n"
+            f"  - Include sync status and device health"
+        )
+
+        self.hints = [
+            f"Get status: mdadm --detail {self.md_device}",
+            "Check sync: cat /proc/mdstat",
+            "Examine members: mdadm --examine /dev/sdX1",
+            f"Save: mdadm --detail {self.md_device} > {self.output_file}"
+        ]
+
+        return self
+
+    def validate(self):
+        """Validate RAID status output."""
+        checks = []
+        total_points = 0
+
+        # Check 1: Output file exists (4 points)
+        if validate_file_exists(self.output_file):
+            checks.append(ValidationCheck(
+                name="file_exists",
+                passed=True,
+                points=4,
+                message="Status file created"
+            ))
+            total_points += 4
+
+            # Check content (4 points)
+            if validate_file_contains(self.output_file, 'ARRAY') or \
+               validate_file_contains(self.output_file, 'Raid Level') or \
+               validate_file_contains(self.output_file, 'State'):
+                checks.append(ValidationCheck(
+                    name="has_content",
+                    passed=True,
+                    points=4,
+                    message="File contains RAID information"
+                ))
+                total_points += 4
+            else:
+                checks.append(ValidationCheck(
+                    name="has_content",
+                    passed=False,
+                    points=0,
+                    max_points=4,
+                    message="File missing RAID details"
+                ))
+        else:
+            checks.append(ValidationCheck(
+                name="file_exists",
+                passed=False,
+                points=0,
+                max_points=4,
+                message="Status file not found"
+            ))
+
+        passed = total_points >= (self.points * 0.7)
+        return ValidationResult(self.id, passed, total_points, self.points, checks)
+
+
+@TaskRegistry.register("storage")
+class StopRemoveRAIDTask(BaseTask):
+    """Stop and remove a RAID array."""
+
+    def __init__(self):
+        super().__init__(
+            id="raid_remove_001",
+            category="storage",
+            difficulty="medium",
+            points=8
+        )
+        self.md_device = None
+
+    def generate(self, **params):
+        """Generate RAID removal task."""
+        self.md_device = params.get('md_device', '/dev/md0')
+
+        self.description = (
+            f"Stop and remove a RAID array:\n"
+            f"  - RAID device: {self.md_device}\n"
+            f"  - Unmount filesystem first\n"
+            f"  - Stop the array\n"
+            f"  - Zero superblocks on member disks"
+        )
+
+        self.hints = [
+            "Unmount: umount /mnt/raid",
+            f"Stop array: mdadm --stop {self.md_device}",
+            "Zero superblocks: mdadm --zero-superblock /dev/sdb1 /dev/sdc1",
+            "Remove from mdadm.conf if present",
+            "Update initramfs: dracut --regenerate-all --force"
+        ]
+
+        return self
+
+    def validate(self):
+        """Validate RAID removal."""
+        checks = []
+        total_points = 0
+
+        # Check: MD device no longer exists
+        result = execute_safe(['mdadm', '--detail', self.md_device])
+        if not result.success or 'No such file' in result.stderr:
+            checks.append(ValidationCheck(
+                name="md_removed",
+                passed=True,
+                points=8,
+                message=f"RAID device {self.md_device} removed"
+            ))
+            total_points += 8
+        else:
+            checks.append(ValidationCheck(
+                name="md_removed",
+                passed=False,
+                points=0,
+                max_points=8,
+                message=f"RAID device {self.md_device} still exists"
+            ))
+
+        passed = total_points >= (self.points * 0.7)
+        return ValidationResult(self.id, passed, total_points, self.points, checks)

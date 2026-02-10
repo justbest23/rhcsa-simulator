@@ -27,7 +27,7 @@ DEFAULT_EXAM_TASKS = 15
 EXAM_PASS_THRESHOLD = 0.70  # 70% to pass
 
 # Task configuration
-DIFFICULTY_LEVELS = ["easy", "exam", "hard"]
+DIFFICULTY_LEVELS = ["easy", "medium", "exam", "hard"]
 TASK_CATEGORIES = [
     "essential_tools",
     "users_groups",
@@ -40,7 +40,14 @@ TASK_CATEGORIES = [
     "boot",
     "processes",
     "scheduling",
-    "containers"
+    "containers",
+    "scripting",
+    "packages",
+    "storage",
+    "ssh",
+    "time_services",
+    "partitioning",
+    "network_storage"
 ]
 
 # Practice mode configuration
@@ -95,6 +102,27 @@ SAFE_VALIDATION_COMMANDS = {
     # Containers
     'podman',
 
+    # Package management (read-only)
+    'rpm', 'dnf', 'yum',
+
+    # Time services (read-only)
+    'timedatectl', 'chronyc',
+
+    # Network storage (read-only)
+    'showmount', 'exportfs',
+
+    # Partitioning (read-only - query only)
+    'parted', 'fdisk', 'gdisk', 'partprobe',
+
+    # RAID (read-only)
+    'mdadm',
+
+    # Stratis (read-only)
+    'stratis',
+
+    # Shell/scripting (read-only)
+    'bash', 'test', 'which', 'type',
+
     # Miscellaneous
     'grep', 'awk', 'sed', 'cut', 'sort', 'uniq', 'wc', 'date'
 }
@@ -110,8 +138,6 @@ DANGEROUS_PATTERNS = [
     r'>\s*/etc/',              # System config redirection
     r'dd\s+.*of=/dev/',        # Dangerous dd operations
     r'mkfs',                   # Filesystem creation (not read-only)
-    r'fdisk',                  # Partition modification
-    r'parted',                 # Partition modification
 ]
 
 # Logging configuration
@@ -153,5 +179,5 @@ RHCSA_OBJECTIVES = {
 }
 
 # Version
-VERSION = "2.0.0"
+VERSION = "3.0.0"
 APP_NAME = "RHCSA Mock Exam Simulator"

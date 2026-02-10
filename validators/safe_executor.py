@@ -266,6 +266,107 @@ class SafeCommandExecutor:
                     "firewall-cmd --permanent is only allowed with query operations."
                 )
 
+        # Ensure parted is read-only
+        elif base_cmd == 'parted':
+            cmd_str = ' '.join(command)
+            # Only allow print operations, block everything else
+            if 'print' not in cmd_str and '-s' not in cmd_str:
+                raise SecurityError(
+                    "parted is only allowed for print/query operations"
+                )
+            modify_ops = ['mkpart', 'mklabel', 'rm', 'resizepart', 'set', 'name']
+            if any(op in cmd_str for op in modify_ops):
+                raise SecurityError(
+                    "parted modification operations are not allowed"
+                )
+
+        # Ensure fdisk is read-only
+        elif base_cmd == 'fdisk':
+            if '-l' not in command:
+                raise SecurityError(
+                    "fdisk is only allowed with -l (list) option"
+                )
+
+        # Ensure mdadm is read-only
+        elif base_cmd == 'mdadm':
+            cmd_str = ' '.join(command)
+            read_ops = ['--detail', '--examine', '--query', '-D', '-E', '-Q']
+            if not any(op in cmd_str for op in read_ops):
+                raise SecurityError(
+                    "mdadm is only allowed for detail/examine/query operations"
+                )
+
+        # Ensure dnf/yum is read-only
+        elif base_cmd in ['dnf', 'yum']:
+            if len(command) < 2:
+                return
+            subcommand = command[1]
+            read_only_ops = ['list', 'info', 'search', 'check', 'check-update',
+                            'provides', 'whatprovides', 'repolist', 'repoinfo',
+                            'module', 'history', 'deplist']
+            if subcommand not in read_only_ops:
+                raise SecurityError(
+                    f"dnf/yum subcommand '{subcommand}' is not allowed. "
+                    f"Only read-only operations permitted."
+                )
+
+        # Ensure rpm is read-only
+        elif base_cmd == 'rpm':
+            cmd_str = ' '.join(command)
+            # Allow query operations only
+            if '-q' not in cmd_str and '--query' not in cmd_str:
+                raise SecurityError(
+                    "rpm is only allowed for query operations (-q)"
+                )
+            # Block install/erase operations
+            if any(op in cmd_str for op in ['-i', '-U', '-e', '--install', '--upgrade', '--erase']):
+                raise SecurityError(
+                    "rpm install/upgrade/erase operations are not allowed"
+                )
+
+        # Ensure timedatectl is read-only
+        elif base_cmd == 'timedatectl':
+            if len(command) < 2:
+                return  # Just 'timedatectl' is safe (shows status)
+            subcommand = command[1]
+            if subcommand not in ['status', 'show', 'list-timezones', 'timesync-status']:
+                raise SecurityError(
+                    f"timedatectl subcommand '{subcommand}' is not allowed. "
+                    f"Only read-only operations permitted."
+                )
+
+        # Ensure chronyc is read-only
+        elif base_cmd == 'chronyc':
+            if len(command) < 2:
+                return
+            subcommand = command[1]
+            read_only_ops = ['sources', 'sourcestats', 'tracking', 'ntpdata',
+                            'activity', 'serverstats', 'clients']
+            if subcommand not in read_only_ops:
+                raise SecurityError(
+                    f"chronyc subcommand '{subcommand}' is not allowed. "
+                    f"Only read-only operations permitted."
+                )
+
+        # Ensure stratis is read-only
+        elif base_cmd == 'stratis':
+            if len(command) < 2:
+                return
+            # Block create/destroy operations
+            cmd_str = ' '.join(command)
+            if any(op in cmd_str for op in ['create', 'destroy', 'add-data', 'add-cache']):
+                raise SecurityError(
+                    "stratis create/destroy operations are not allowed. "
+                    "Only list operations permitted."
+                )
+
+        # Ensure bash is only used for script checking
+        elif base_cmd == 'bash':
+            if '-n' not in command:
+                raise SecurityError(
+                    "bash is only allowed with -n (syntax check) option"
+                )
+
     def can_execute(self, command):
         """
         Check if a command can be executed without actually running it.
