@@ -1,5 +1,10 @@
 """
-Network configuration tasks for RHCSA exam.
+Network configuration tasks for RHCSA EX200 v10 exam.
+
+Covers: static IP, DHCP, hostname, DNS, static routes, /etc/hosts,
+connection creation, troubleshooting, bonding, IPv6, connectivity
+verification, connection restart, network info display, search domains,
+and full network setup.
 """
 
 import random
@@ -7,6 +12,7 @@ import logging
 from tasks.base import BaseTask
 from tasks.registry import TaskRegistry
 from core.validator import ValidationCheck, ValidationResult
+from validators.safe_executor import execute_safe
 from validators.system_validators import (
     get_ip_address, get_interface_state, validate_interface_ip,
     get_default_gateway, get_dns_servers, validate_dns_server,
@@ -17,6 +23,10 @@ from validators.file_validators import validate_file_contains
 
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Helper utilities
+# ---------------------------------------------------------------------------
 
 def _get_practice_interface():
     """Get an interface suitable for practice (prefers non-primary)."""
@@ -30,7 +40,7 @@ def _get_practice_interface():
             return iface
     except Exception:
         pass
-    return 'eth0'  # Fallback
+    return 'eth0'
 
 
 def _get_primary_interface():
@@ -42,7 +52,7 @@ def _get_primary_interface():
             return iface
     except Exception:
         pass
-    return 'eth0'  # Fallback
+    return 'eth0'
 
 
 def _get_connection_name(interface):
@@ -54,857 +64,642 @@ def _get_connection_name(interface):
             return conn
     except Exception:
         pass
-    return interface  # Fallback to interface name
+    return interface
 
+
+def _random_subnet():
+    """Return a random third-octet value for 192.168.x.0/24 ranges."""
+    return random.randint(1, 254)
+
+
+def _random_host():
+    """Return a random host portion (10-250) for IP addresses."""
+    return random.randint(10, 250)
+
+
+def _random_interface():
+    """Return a random realistic interface name."""
+    return random.choice(['eth0', 'ens192', 'ens160', 'ens33', 'ens224'])
+
+
+def _random_hostname():
+    """Return a random realistic FQDN."""
+    names = [
+        'server1.example.com', 'server2.example.com',
+        'node1.lab.example.com', 'node2.lab.example.com',
+        'rhel9.lab.local', 'workstation.test.net',
+        'app01.prod.example.com', 'db01.corp.example.com',
+        'web01.example.com', 'mail.example.com',
+    ]
+    return random.choice(names)
+
+
+def _random_dns_pair():
+    """Return a random pair of DNS servers."""
+    pairs = [
+        ['8.8.8.8', '8.8.4.4'],
+        ['1.1.1.1', '1.0.0.1'],
+        ['9.9.9.9', '149.112.112.112'],
+        ['208.67.222.222', '208.67.220.220'],
+    ]
+    return random.choice(pairs)
+
+
+# ===================================================================
+# 1. ConfigureStaticIPTask  (exam / 15 pts) [PERSIST]
+# ===================================================================
 
 @TaskRegistry.register("networking")
 class ConfigureStaticIPTask(BaseTask):
-    """Configure static IP address using nmcli."""
+    """Configure a static IP address with prefix, gateway, and DNS via nmcli."""
 
     def __init__(self):
         super().__init__(
             id="net_static_ip_001",
             category="networking",
-            difficulty="medium",
-            points=12
+            difficulty="exam",
+            points=15
         )
+        self.requires_persistence = True
+        self.tags = ["nmcli", "static-ip", "ipv4", "persistence"]
+        self.exam_tips = [
+            "Always set ipv4.method to 'manual' when assigning a static IP.",
+            "Remember to bring the connection up after modification.",
+            "Use 'nmcli con show <name>' to verify persistent config.",
+        ]
         self.interface = None
         self.ip_address = None
-        self.netmask = None
+        self.prefix = None
+        self.gateway = None
+        self.dns = None
         self.connection_name = None
 
     def generate(self, **params):
-        """Generate static IP configuration task."""
+        subnet = _random_subnet()
         self.interface = params.get('interface') or _get_practice_interface()
-        self.ip_address = params.get('ip', f'192.168.{random.randint(1,254)}.{random.randint(10,250)}')
-        self.netmask = params.get('netmask', '24')
-        self.connection_name = params.get('connection', self.interface)
+        self.ip_address = params.get('ip', f'192.168.{subnet}.{_random_host()}')
+        self.prefix = params.get('prefix', '24')
+        self.gateway = params.get('gateway', f'192.168.{subnet}.1')
+        self.dns = params.get('dns', random.choice(['8.8.8.8', '1.1.1.1']))
+        self.connection_name = params.get('connection') or _get_connection_name(self.interface) or self.interface
 
         self.description = (
-            f"Configure static IP address:\n"
+            f"Configure a static IP address on connection '{self.connection_name}':\n"
             f"  - Interface: {self.interface}\n"
-            f"  - IP Address: {self.ip_address}/{self.netmask}\n"
-            f"  - Connection name: {self.connection_name}\n"
-            f"  - Use nmcli to configure\n"
-            f"  - Configuration must persist across reboots\n"
-            f"  - Activate the connection"
+            f"  - IP Address: {self.ip_address}/{self.prefix}\n"
+            f"  - Gateway: {self.gateway}\n"
+            f"  - DNS Server: {self.dns}\n"
+            f"  - IPv4 method must be 'manual'\n"
+            f"  - Activate the connection\n"
+            f"  - Configuration must persist across reboots"
         )
 
         self.hints = [
-            f"Use nmcli to modify connection: nmcli con mod {self.connection_name}",
-            f"Set IP: nmcli con mod {self.connection_name} ipv4.addresses {self.ip_address}/{self.netmask}",
-            f"Set method to manual: nmcli con mod {self.connection_name} ipv4.method manual",
-            f"Activate: nmcli con up {self.connection_name}",
-            f"Verify: ip addr show {self.interface} or nmcli con show {self.connection_name}",
-            f"Check persistent config: nmcli -f ipv4 con show {self.connection_name}"
+            f"nmcli con mod {self.connection_name} ipv4.addresses {self.ip_address}/{self.prefix}",
+            f"nmcli con mod {self.connection_name} ipv4.gateway {self.gateway}",
+            f"nmcli con mod {self.connection_name} ipv4.dns {self.dns}",
+            f"nmcli con mod {self.connection_name} ipv4.method manual",
+            f"nmcli con up {self.connection_name}",
+            f"Verify: nmcli -f ipv4 con show {self.connection_name}",
         ]
-
         return self
 
     def validate(self):
-        """Validate static IP configuration."""
         checks = []
-        total_points = 0
+        total = 0
 
-        # Check 1: Interface has correct IP (6 points)
+        # 1. IP address active on interface (5 pts)
         actual_ip = get_ip_address(self.interface)
         if actual_ip == self.ip_address:
-            checks.append(ValidationCheck(
-                name="ip_address_set",
-                passed=True,
-                points=6,
-                message=f"IP address {self.ip_address} correctly configured"
-            ))
-            total_points += 6
+            checks.append(ValidationCheck("ip_address_set", True, 5,
+                          f"IP {self.ip_address} configured on {self.interface}"))
+            total += 5
         else:
-            checks.append(ValidationCheck(
-                name="ip_address_set",
-                passed=False,
-                points=0,
-                max_points=6,
-                message=f"IP address is {actual_ip}, expected {self.ip_address}"
-            ))
+            checks.append(ValidationCheck("ip_address_set", False, 0,
+                          f"IP is {actual_ip}, expected {self.ip_address}", max_points=5))
 
-        # Check 2: Interface is UP (3 points)
+        # 2. Gateway reachable in routing table (3 pts)
+        gw = get_default_gateway()
+        if gw == self.gateway:
+            checks.append(ValidationCheck("gateway_set", True, 3,
+                          f"Gateway {self.gateway} is active"))
+            total += 3
+        else:
+            checks.append(ValidationCheck("gateway_set", False, 0,
+                          f"Gateway is {gw}, expected {self.gateway}", max_points=3))
+
+        # 3. DNS configured (2 pts)
+        dns_list = get_dns_servers()
+        if self.dns in dns_list:
+            checks.append(ValidationCheck("dns_set", True, 2,
+                          f"DNS {self.dns} configured"))
+            total += 2
+        else:
+            checks.append(ValidationCheck("dns_set", False, 0,
+                          f"DNS {self.dns} not in resolv.conf (found {dns_list})", max_points=2))
+
+        # 4. Persistent config via nmcli (3 pts)
+        conn = get_nmcli_connection_info(self.connection_name)
+        if conn and conn.get('ipv4.method') == 'manual':
+            checks.append(ValidationCheck("method_manual", True, 3,
+                          "ipv4.method is 'manual' (persistent)"))
+            total += 3
+        else:
+            method = conn.get('ipv4.method', 'unknown') if conn else 'connection not found'
+            checks.append(ValidationCheck("method_manual", False, 0,
+                          f"ipv4.method is '{method}', expected 'manual'", max_points=3))
+
+        # 5. Interface UP (2 pts)
         state = get_interface_state(self.interface)
         if state == 'UP':
-            checks.append(ValidationCheck(
-                name="interface_up",
-                passed=True,
-                points=3,
-                message=f"Interface {self.interface} is UP"
-            ))
-            total_points += 3
+            checks.append(ValidationCheck("interface_up", True, 2,
+                          f"Interface {self.interface} is UP"))
+            total += 2
         else:
-            checks.append(ValidationCheck(
-                name="interface_up",
-                passed=False,
-                points=0,
-                max_points=3,
-                message=f"Interface {self.interface} is {state}"
-            ))
+            checks.append(ValidationCheck("interface_up", False, 0,
+                          f"Interface {self.interface} is {state}", max_points=2))
 
-        # Check 3: Connection configured persistently (3 points)
-        conn_info = get_nmcli_connection_info(self.connection_name)
-        if conn_info:
-            # Check if ipv4.method is manual
-            if conn_info.get('ipv4.method') == 'manual':
-                checks.append(ValidationCheck(
-                    name="persistent_config",
-                    passed=True,
-                    points=3,
-                    message=f"Connection configured with manual IPv4"
-                ))
-                total_points += 3
-            else:
-                checks.append(ValidationCheck(
-                    name="persistent_config",
-                    passed=True,
-                    points=2,
-                    message=f"Connection exists but IPv4 method is {conn_info.get('ipv4.method')} (partial credit)"
-                ))
-                total_points += 2
-        else:
-            checks.append(ValidationCheck(
-                name="persistent_config",
-                passed=False,
-                points=0,
-                max_points=3,
-                message=f"Connection {self.connection_name} not found"
-            ))
+        passed = total >= (self.points * 0.7)
+        return ValidationResult(self.id, passed, total, self.points, checks)
 
-        passed = total_points >= (self.points * 0.7)
-        return ValidationResult(self.id, passed, total_points, self.points, checks)
 
+# ===================================================================
+# 2. ConfigureDHCPTask  (medium / 8 pts) [PERSIST]
+# ===================================================================
 
 @TaskRegistry.register("networking")
-class ConfigureDefaultGatewayTask(BaseTask):
-    """Configure default gateway."""
+class ConfigureDHCPTask(BaseTask):
+    """Configure a connection to obtain an IP address via DHCP."""
 
     def __init__(self):
         super().__init__(
-            id="net_gateway_001",
+            id="net_dhcp_001",
             category="networking",
-            difficulty="easy",
+            difficulty="medium",
             points=8
         )
-        self.gateway = None
+        self.requires_persistence = True
+        self.tags = ["nmcli", "dhcp", "ipv4", "persistence"]
+        self.exam_tips = [
+            "Set ipv4.method to 'auto' for DHCP.",
+            "Clear any static addresses with ipv4.addresses ''.",
+        ]
         self.connection_name = None
+        self.interface = None
 
     def generate(self, **params):
-        """Generate gateway configuration task."""
-        self.gateway = params.get('gateway', f'192.168.{random.randint(1,254)}.1')
-        iface = _get_practice_interface()
-        self.connection_name = params.get('connection') or _get_connection_name(iface) or iface
+        self.interface = params.get('interface') or _get_practice_interface()
+        self.connection_name = params.get('connection') or _get_connection_name(self.interface) or self.interface
 
         self.description = (
-            f"Configure default gateway:\n"
-            f"  - Gateway IP: {self.gateway}\n"
-            f"  - Connection: {self.connection_name}\n"
-            f"  - Use nmcli to configure\n"
-            f"  - Configuration must be persistent"
+            f"Configure connection '{self.connection_name}' to use DHCP:\n"
+            f"  - Interface: {self.interface}\n"
+            f"  - Set IPv4 method to automatic (DHCP)\n"
+            f"  - Remove any static IP addresses\n"
+            f"  - Activate the connection\n"
+            f"  - Configuration must persist across reboots"
         )
 
         self.hints = [
-            f"Set gateway: nmcli con mod {self.connection_name} ipv4.gateway {self.gateway}",
-            f"Activate connection: nmcli con up {self.connection_name}",
-            "Verify: ip route show default",
-            f"Or verify: nmcli -f ipv4 con show {self.connection_name}"
+            f"nmcli con mod {self.connection_name} ipv4.method auto",
+            f"nmcli con mod {self.connection_name} ipv4.addresses ''",
+            f"nmcli con mod {self.connection_name} ipv4.gateway ''",
+            f"nmcli con up {self.connection_name}",
+            f"Verify: nmcli -f ipv4.method con show {self.connection_name}",
         ]
-
         return self
 
     def validate(self):
-        """Validate gateway configuration."""
         checks = []
-        total_points = 0
+        total = 0
 
-        # Check 1: Default gateway is set (5 points)
-        current_gateway = get_default_gateway()
-        if current_gateway == self.gateway:
-            checks.append(ValidationCheck(
-                name="gateway_set",
-                passed=True,
-                points=5,
-                message=f"Default gateway is {self.gateway}"
-            ))
-            total_points += 5
+        # 1. ipv4.method is auto (4 pts)
+        conn = get_nmcli_connection_info(self.connection_name)
+        if conn and conn.get('ipv4.method') == 'auto':
+            checks.append(ValidationCheck("method_auto", True, 4,
+                          "ipv4.method is 'auto' (DHCP)"))
+            total += 4
         else:
-            checks.append(ValidationCheck(
-                name="gateway_set",
-                passed=False,
-                points=0,
-                max_points=5,
-                message=f"Default gateway is {current_gateway}, expected {self.gateway}"
-            ))
+            method = conn.get('ipv4.method', 'unknown') if conn else 'connection not found'
+            checks.append(ValidationCheck("method_auto", False, 0,
+                          f"ipv4.method is '{method}', expected 'auto'", max_points=4))
 
-        # Check 2: Gateway configured persistently in connection (3 points)
-        conn_info = get_nmcli_connection_info(self.connection_name)
-        if conn_info and self.gateway in str(conn_info.get('ipv4.gateway', '')):
-            checks.append(ValidationCheck(
-                name="gateway_persistent",
-                passed=True,
-                points=3,
-                message=f"Gateway configured persistently"
-            ))
-            total_points += 3
+        # 2. Connection is active (2 pts)
+        state = get_interface_state(self.interface)
+        if state == 'UP':
+            checks.append(ValidationCheck("interface_up", True, 2,
+                          f"Interface {self.interface} is UP"))
+            total += 2
         else:
-            checks.append(ValidationCheck(
-                name="gateway_persistent",
-                passed=False,
-                points=0,
-                max_points=3,
-                message=f"Gateway not configured persistently in connection"
-            ))
+            checks.append(ValidationCheck("interface_up", False, 0,
+                          f"Interface {self.interface} is {state}", max_points=2))
 
-        passed = total_points >= (self.points * 0.7)
-        return ValidationResult(self.id, passed, total_points, self.points, checks)
-
-
-@TaskRegistry.register("networking")
-class ConfigureDNSTask(BaseTask):
-    """Configure DNS servers."""
-
-    def __init__(self):
-        super().__init__(
-            id="net_dns_001",
-            category="networking",
-            difficulty="easy",
-            points=8
-        )
-        self.dns_servers = None
-        self.connection_name = None
-
-    def generate(self, **params):
-        """Generate DNS configuration task."""
-        self.dns_servers = params.get('dns', ['8.8.8.8', '8.8.4.4'])
-        if isinstance(self.dns_servers, str):
-            self.dns_servers = [self.dns_servers]
-        iface = _get_practice_interface()
-        self.connection_name = params.get('connection') or _get_connection_name(iface) or iface
-
-        dns_list = ' '.join(self.dns_servers)
-
-        self.description = (
-            f"Configure DNS servers:\n"
-            f"  - DNS servers: {', '.join(self.dns_servers)}\n"
-            f"  - Connection: {self.connection_name}\n"
-            f"  - Use nmcli to configure\n"
-            f"  - Configuration must be persistent"
-        )
-
-        self.hints = [
-            f"Set DNS: nmcli con mod {self.connection_name} ipv4.dns \"{dns_list}\"",
-            f"Activate: nmcli con up {self.connection_name}",
-            "Verify: cat /etc/resolv.conf",
-            f"Or verify: nmcli -f ipv4 con show {self.connection_name}"
-        ]
-
-        return self
-
-    def validate(self):
-        """Validate DNS configuration."""
-        checks = []
-        total_points = 0
-
-        # Check 1: DNS servers are configured (5 points)
-        current_dns = get_dns_servers()
-        dns_configured = all(dns in current_dns for dns in self.dns_servers)
-
-        if dns_configured:
-            checks.append(ValidationCheck(
-                name="dns_configured",
-                passed=True,
-                points=5,
-                message=f"DNS servers correctly configured"
-            ))
-            total_points += 5
-        elif any(dns in current_dns for dns in self.dns_servers):
-            checks.append(ValidationCheck(
-                name="dns_configured",
-                passed=True,
-                points=3,
-                message=f"Some DNS servers configured (partial credit)"
-            ))
-            total_points += 3
+        # 3. No leftover static addresses (2 pts)
+        addrs = conn.get('ipv4.addresses', '') if conn else ''
+        if not addrs or addrs in ('--', ''):
+            checks.append(ValidationCheck("no_static_addr", True, 2,
+                          "No leftover static addresses"))
+            total += 2
         else:
-            checks.append(ValidationCheck(
-                name="dns_configured",
-                passed=False,
-                points=0,
-                max_points=5,
-                message=f"DNS servers not configured. Current: {current_dns}"
-            ))
+            checks.append(ValidationCheck("no_static_addr", False, 0,
+                          f"Static addresses still configured: {addrs}", max_points=2))
 
-        # Check 2: DNS configured persistently (3 points)
-        conn_info = get_nmcli_connection_info(self.connection_name)
-        if conn_info and any(dns in str(conn_info.get('ipv4.dns', '')) for dns in self.dns_servers):
-            checks.append(ValidationCheck(
-                name="dns_persistent",
-                passed=True,
-                points=3,
-                message=f"DNS configured persistently"
-            ))
-            total_points += 3
-        else:
-            checks.append(ValidationCheck(
-                name="dns_persistent",
-                passed=False,
-                points=0,
-                max_points=3,
-                message=f"DNS not configured persistently in connection"
-            ))
+        passed = total >= (self.points * 0.7)
+        return ValidationResult(self.id, passed, total, self.points, checks)
 
-        passed = total_points >= (self.points * 0.7)
-        return ValidationResult(self.id, passed, total_points, self.points, checks)
 
+# ===================================================================
+# 3. SetHostnameTask  (easy / 5 pts) [PERSIST]
+# ===================================================================
 
 @TaskRegistry.register("networking")
 class SetHostnameTask(BaseTask):
-    """Set system hostname."""
+    """Set the system hostname using hostnamectl."""
 
     def __init__(self):
         super().__init__(
             id="net_hostname_001",
             category="networking",
             difficulty="easy",
-            points=6
+            points=5
         )
+        self.requires_persistence = True
+        self.tags = ["hostname", "hostnamectl", "persistence"]
+        self.exam_tips = [
+            "'hostnamectl set-hostname' writes to /etc/hostname automatically.",
+            "Verify with both 'hostname' and 'hostnamectl status'.",
+        ]
         self.hostname = None
 
     def generate(self, **params):
-        """Generate hostname task."""
-        hostnames = ['server1.example.com', 'rhel9.lab.local', 'workstation.test.net']
-        self.hostname = params.get('hostname', random.choice(hostnames))
+        self.hostname = params.get('hostname', _random_hostname())
 
         self.description = (
-            f"Set system hostname:\n"
+            f"Set the system hostname:\n"
             f"  - Hostname: {self.hostname}\n"
             f"  - Use hostnamectl command\n"
-            f"  - Configuration must be persistent across reboots"
+            f"  - Must persist across reboots"
         )
 
         self.hints = [
-            f"Set hostname: hostnamectl set-hostname {self.hostname}",
+            f"hostnamectl set-hostname {self.hostname}",
             "Verify: hostnamectl status",
-            "Or verify: hostname",
-            "Check persistent config: cat /etc/hostname"
+            "Verify: hostname",
+            "Check persistent config: cat /etc/hostname",
         ]
-
         return self
 
     def validate(self):
-        """Validate hostname configuration."""
         checks = []
-        total_points = 0
+        total = 0
 
-        from validators.safe_executor import execute_safe
-
-        # Check 1: Current hostname (3 points)
+        # 1. Current hostname (3 pts)
         result = execute_safe(['hostname'])
-        current_hostname = result.stdout.strip() if result.success else None
-
-        if current_hostname == self.hostname:
-            checks.append(ValidationCheck(
-                name="current_hostname",
-                passed=True,
-                points=3,
-                message=f"Hostname is {self.hostname}"
-            ))
-            total_points += 3
+        current = result.stdout.strip() if result.success else None
+        if current == self.hostname:
+            checks.append(ValidationCheck("current_hostname", True, 3,
+                          f"Hostname is {self.hostname}"))
+            total += 3
         else:
-            checks.append(ValidationCheck(
-                name="current_hostname",
-                passed=False,
-                points=0,
-                max_points=3,
-                message=f"Hostname is {current_hostname}, expected {self.hostname}"
-            ))
+            checks.append(ValidationCheck("current_hostname", False, 0,
+                          f"Hostname is '{current}', expected '{self.hostname}'", max_points=3))
 
-        # Check 2: Persistent hostname in /etc/hostname (3 points)
+        # 2. Persistent in /etc/hostname (2 pts)
         if validate_file_contains('/etc/hostname', self.hostname):
-            checks.append(ValidationCheck(
-                name="persistent_hostname",
-                passed=True,
-                points=3,
-                message=f"Hostname configured persistently"
-            ))
-            total_points += 3
+            checks.append(ValidationCheck("persistent_hostname", True, 2,
+                          "Hostname persisted in /etc/hostname"))
+            total += 2
         else:
-            checks.append(ValidationCheck(
-                name="persistent_hostname",
-                passed=False,
-                points=0,
-                max_points=3,
-                message=f"Hostname not in /etc/hostname"
-            ))
+            checks.append(ValidationCheck("persistent_hostname", False, 0,
+                          "Hostname not found in /etc/hostname", max_points=2))
 
-        passed = total_points >= (self.points * 0.8)
-        return ValidationResult(self.id, passed, total_points, self.points, checks)
+        passed = total >= (self.points * 0.8)
+        return ValidationResult(self.id, passed, total, self.points, checks)
 
+
+# ===================================================================
+# 4. ConfigureDNSTask  (exam / 12 pts) [PERSIST]
+# ===================================================================
 
 @TaskRegistry.register("networking")
-class ConfigureNetworkFullTask(BaseTask):
-    """Complete network configuration (compound task)."""
+class ConfigureDNSTask(BaseTask):
+    """Configure DNS servers via nmcli."""
 
     def __init__(self):
         super().__init__(
-            id="net_full_config_001",
-            category="networking",
-            difficulty="exam",
-            points=15
-        )
-        self.interface = None
-        self.ip_address = None
-        self.netmask = None
-        self.gateway = None
-        self.dns = None
-        self.connection_name = None
-
-    def generate(self, **params):
-        """Generate complete network configuration task."""
-        self.interface = params.get('interface') or _get_practice_interface()
-        self.ip_address = params.get('ip', f'192.168.{random.randint(1,254)}.{random.randint(10,250)}')
-        self.netmask = params.get('netmask', '24')
-        self.gateway = params.get('gateway', f'192.168.{self.ip_address.split(".")[2]}.1')
-        self.dns = params.get('dns', ['8.8.8.8', '8.8.4.4'])
-        if isinstance(self.dns, str):
-            self.dns = [self.dns]
-        self.connection_name = params.get('connection') or _get_connection_name(self.interface) or self.interface
-
-        self.description = (
-            f"Configure complete network settings:\n"
-            f"  - Interface: {self.interface}\n"
-            f"  - IP Address: {self.ip_address}/{self.netmask}\n"
-            f"  - Gateway: {self.gateway}\n"
-            f"  - DNS Servers: {', '.join(self.dns)}\n"
-            f"  - Connection: {self.connection_name}\n"
-            f"  - All configuration must persist across reboots\n"
-            f"  - Use nmcli for configuration"
-        )
-
-        dns_list = ' '.join(self.dns)
-
-        self.hints = [
-            f"Set static IP: nmcli con mod {self.connection_name} ipv4.addresses {self.ip_address}/{self.netmask}",
-            f"Set method: nmcli con mod {self.connection_name} ipv4.method manual",
-            f"Set gateway: nmcli con mod {self.connection_name} ipv4.gateway {self.gateway}",
-            f"Set DNS: nmcli con mod {self.connection_name} ipv4.dns \"{dns_list}\"",
-            f"Activate: nmcli con up {self.connection_name}",
-            "Verify: ip addr show; ip route; cat /etc/resolv.conf"
-        ]
-
-        return self
-
-    def validate(self):
-        """Validate complete network configuration."""
-        checks = []
-        total_points = 0
-
-        # Check 1: IP address (5 points)
-        actual_ip = get_ip_address(self.interface)
-        if actual_ip == self.ip_address:
-            checks.append(ValidationCheck(
-                name="ip_configured",
-                passed=True,
-                points=5,
-                message=f"IP address correctly configured"
-            ))
-            total_points += 5
-        else:
-            checks.append(ValidationCheck(
-                name="ip_configured",
-                passed=False,
-                points=0,
-                max_points=5,
-                message=f"IP is {actual_ip}, expected {self.ip_address}"
-            ))
-
-        # Check 2: Gateway (4 points)
-        current_gateway = get_default_gateway()
-        if current_gateway == self.gateway:
-            checks.append(ValidationCheck(
-                name="gateway_configured",
-                passed=True,
-                points=4,
-                message=f"Gateway correctly configured"
-            ))
-            total_points += 4
-        else:
-            checks.append(ValidationCheck(
-                name="gateway_configured",
-                passed=False,
-                points=0,
-                max_points=4,
-                message=f"Gateway is {current_gateway}, expected {self.gateway}"
-            ))
-
-        # Check 3: DNS (3 points)
-        current_dns = get_dns_servers()
-        dns_ok = all(dns in current_dns for dns in self.dns)
-        if dns_ok:
-            checks.append(ValidationCheck(
-                name="dns_configured",
-                passed=True,
-                points=3,
-                message=f"DNS servers correctly configured"
-            ))
-            total_points += 3
-        else:
-            checks.append(ValidationCheck(
-                name="dns_configured",
-                passed=False,
-                points=0,
-                max_points=3,
-                message=f"DNS not fully configured"
-            ))
-
-        # Check 4: Interface UP (3 points)
-        state = get_interface_state(self.interface)
-        if state == 'UP':
-            checks.append(ValidationCheck(
-                name="interface_up",
-                passed=True,
-                points=3,
-                message=f"Interface is UP"
-            ))
-            total_points += 3
-        else:
-            checks.append(ValidationCheck(
-                name="interface_up",
-                passed=False,
-                points=0,
-                max_points=3,
-                message=f"Interface is {state}"
-            ))
-
-        passed = total_points >= (self.points * 0.7)
-        return ValidationResult(self.id, passed, total_points, self.points, checks)
-
-
-@TaskRegistry.register("networking")
-class ConfigureFirewallServiceTask(BaseTask):
-    """Allow a service through the firewall."""
-
-    def __init__(self):
-        super().__init__(
-            id="net_firewall_service_001",
-            category="networking",
-            difficulty="medium",
-            points=8
-        )
-        self.service = None
-        self.zone = None
-
-    def generate(self, **params):
-        services = ['http', 'https', 'ssh', 'nfs', 'samba', 'ftp']
-        self.service = params.get('service', random.choice(services))
-        self.zone = params.get('zone', 'public')
-
-        self.description = (
-            f"Configure firewall to allow a service:\n"
-            f"  - Service: {self.service}\n"
-            f"  - Zone: {self.zone}\n"
-            f"  - Make the change permanent\n"
-            f"  - Ensure firewalld is running"
-        )
-
-        self.hints = [
-            "Ensure firewalld is running: systemctl status firewalld",
-            f"Add service: firewall-cmd --zone={self.zone} --add-service={self.service} --permanent",
-            "Reload firewall: firewall-cmd --reload",
-            f"Verify: firewall-cmd --zone={self.zone} --list-services",
-            "Without --permanent, changes are lost on reload/reboot"
-        ]
-
-        return self
-
-    def validate(self):
-        checks = []
-        total_points = 0
-        from validators.safe_executor import execute_safe
-
-        # Check 1: Firewalld is running (3 points)
-        result = execute_safe(['systemctl', 'is-active', 'firewalld'])
-        if result.success and result.stdout.strip() == 'active':
-            checks.append(ValidationCheck(
-                name="firewalld_running",
-                passed=True,
-                points=3,
-                message=f"firewalld is running"
-            ))
-            total_points += 3
-        else:
-            checks.append(ValidationCheck(
-                name="firewalld_running",
-                passed=False,
-                points=0,
-                max_points=3,
-                message=f"firewalld is not running"
-            ))
-
-        # Check 2: Service is allowed (5 points)
-        # Check runtime config
-        result = execute_safe(['firewall-cmd', f'--zone={self.zone}', '--list-services'])
-        runtime_has_service = result.success and self.service in result.stdout
-
-        # Also check permanent config
-        result_perm = execute_safe(['firewall-cmd', f'--zone={self.zone}', '--list-services', '--permanent'])
-        permanent_has_service = result_perm.success and self.service in result_perm.stdout
-
-        if runtime_has_service:
-            checks.append(ValidationCheck(
-                name="service_allowed",
-                passed=True,
-                points=5,
-                message=f"Service '{self.service}' is allowed in zone {self.zone}"
-            ))
-            total_points += 5
-        elif permanent_has_service:
-            # Service is in permanent config but not runtime - user forgot to reload
-            checks.append(ValidationCheck(
-                name="service_allowed",
-                passed=False,
-                points=2,  # Partial credit
-                max_points=5,
-                message=f"Service '{self.service}' is in permanent config but not active. Run: firewall-cmd --reload"
-            ))
-            total_points += 2
-        else:
-            # Check if maybe wrong zone
-            result_default = execute_safe(['firewall-cmd', '--list-services'])
-            if result_default.success and self.service in result_default.stdout:
-                checks.append(ValidationCheck(
-                    name="service_allowed",
-                    passed=False,
-                    points=1,
-                    max_points=5,
-                    message=f"Service '{self.service}' found in default zone, but task requires zone '{self.zone}'"
-                ))
-                total_points += 1
-            else:
-                checks.append(ValidationCheck(
-                    name="service_allowed",
-                    passed=False,
-                    points=0,
-                    max_points=5,
-                    message=f"Service '{self.service}' is not allowed in zone {self.zone}"
-                ))
-
-        passed = total_points >= (self.points * 0.7)
-        return ValidationResult(self.id, passed, total_points, self.points, checks)
-
-
-@TaskRegistry.register("networking")
-class ConfigureFirewallPortTask(BaseTask):
-    """Allow a specific port through the firewall."""
-
-    def __init__(self):
-        super().__init__(
-            id="net_firewall_port_001",
-            category="networking",
-            difficulty="medium",
-            points=8
-        )
-        self.port = None
-        self.protocol = None
-        self.zone = None
-
-    def generate(self, **params):
-        ports = [8080, 8443, 3000, 5000, 9090]
-        self.port = params.get('port', random.choice(ports))
-        self.protocol = params.get('protocol', 'tcp')
-        self.zone = params.get('zone', 'public')
-
-        self.description = (
-            f"Configure firewall to allow a port:\n"
-            f"  - Port: {self.port}/{self.protocol}\n"
-            f"  - Zone: {self.zone}\n"
-            f"  - Make the change permanent\n"
-            f"  - Reload firewall to apply"
-        )
-
-        self.hints = [
-            f"Add port: firewall-cmd --zone={self.zone} --add-port={self.port}/{self.protocol} --permanent",
-            "Reload: firewall-cmd --reload",
-            f"Verify: firewall-cmd --zone={self.zone} --list-ports",
-            "Port format: <port>/<protocol> (e.g., 8080/tcp)",
-            "Check current zone: firewall-cmd --get-active-zones"
-        ]
-
-        return self
-
-    def validate(self):
-        checks = []
-        total_points = 0
-        from validators.safe_executor import execute_safe
-
-        # Check 1: Firewalld is running (3 points)
-        result = execute_safe(['systemctl', 'is-active', 'firewalld'])
-        if result.success and result.stdout.strip() == 'active':
-            checks.append(ValidationCheck(
-                name="firewalld_running",
-                passed=True,
-                points=3,
-                message=f"firewalld is running"
-            ))
-            total_points += 3
-        else:
-            checks.append(ValidationCheck(
-                name="firewalld_running",
-                passed=False,
-                points=0,
-                max_points=3,
-                message=f"firewalld is not running"
-            ))
-
-        # Check 2: Port is allowed (5 points)
-        port_str = f'{self.port}/{self.protocol}'
-
-        # Check runtime config
-        result = execute_safe(['firewall-cmd', f'--zone={self.zone}', '--list-ports'])
-        runtime_has_port = result.success and port_str in result.stdout
-
-        # Check permanent config
-        result_perm = execute_safe(['firewall-cmd', f'--zone={self.zone}', '--list-ports', '--permanent'])
-        permanent_has_port = result_perm.success and port_str in result_perm.stdout
-
-        if runtime_has_port:
-            checks.append(ValidationCheck(
-                name="port_allowed",
-                passed=True,
-                points=5,
-                message=f"Port {port_str} is allowed"
-            ))
-            total_points += 5
-        elif permanent_has_port:
-            checks.append(ValidationCheck(
-                name="port_allowed",
-                passed=False,
-                points=2,
-                max_points=5,
-                message=f"Port {port_str} is in permanent config but not active. Run: firewall-cmd --reload"
-            ))
-            total_points += 2
-        else:
-            checks.append(ValidationCheck(
-                name="port_allowed",
-                passed=False,
-                points=0,
-                max_points=5,
-                message=f"Port {port_str} is not allowed in zone {self.zone}"
-            ))
-
-        passed = total_points >= (self.points * 0.7)
-        return ValidationResult(self.id, passed, total_points, self.points, checks)
-
-
-@TaskRegistry.register("networking")
-class ConfigureFirewallRichRuleTask(BaseTask):
-    """Configure a rich rule in firewalld."""
-
-    def __init__(self):
-        super().__init__(
-            id="net_firewall_rich_001",
+            id="net_dns_001",
             category="networking",
             difficulty="exam",
             points=12
         )
-        self.source_ip = None
-        self.port = None
-        self.action = None
+        self.requires_persistence = True
+        self.tags = ["nmcli", "dns", "resolv.conf", "persistence"]
+        self.exam_tips = [
+            "Never edit /etc/resolv.conf directly on NetworkManager systems.",
+            "Use nmcli con mod <name> ipv4.dns to set DNS servers.",
+            "Multiple DNS: space-separated in quotes or use +ipv4.dns.",
+        ]
+        self.dns_servers = None
+        self.connection_name = None
 
     def generate(self, **params):
-        self.source_ip = params.get('source', f'192.168.{random.randint(1,254)}.0/24')
-        self.port = params.get('port', random.choice([22, 80, 443, 8080]))
-        self.action = params.get('action', 'accept')
+        self.dns_servers = params.get('dns', _random_dns_pair())
+        if isinstance(self.dns_servers, str):
+            self.dns_servers = [self.dns_servers]
+        iface = _get_practice_interface()
+        self.connection_name = params.get('connection') or _get_connection_name(iface) or iface
+        dns_str = ' '.join(self.dns_servers)
 
         self.description = (
-            f"Configure a firewall rich rule:\n"
-            f"  - Allow traffic from: {self.source_ip}\n"
-            f"  - To port: {self.port}/tcp\n"
-            f"  - Action: {self.action}\n"
-            f"  - Make the rule permanent\n"
-            f"  - Reload firewall to apply"
+            f"Configure DNS servers for connection '{self.connection_name}':\n"
+            f"  - Primary DNS: {self.dns_servers[0]}\n"
+            f"  - Secondary DNS: {self.dns_servers[1] if len(self.dns_servers) > 1 else 'N/A'}\n"
+            f"  - Use nmcli to configure (do NOT edit resolv.conf directly)\n"
+            f"  - Activate the connection\n"
+            f"  - Configuration must persist across reboots"
         )
 
         self.hints = [
-            f"Rich rule format: rule family='ipv4' source address='{self.source_ip}' port port={self.port} protocol=tcp accept",
-            f"Add rule: firewall-cmd --add-rich-rule='rule family=\"ipv4\" source address=\"{self.source_ip}\" port port=\"{self.port}\" protocol=\"tcp\" accept' --permanent",
-            "Reload: firewall-cmd --reload",
-            "List rich rules: firewall-cmd --list-rich-rules",
-            "Rich rules allow more complex firewall configurations"
+            f"nmcli con mod {self.connection_name} ipv4.dns \"{dns_str}\"",
+            f"nmcli con up {self.connection_name}",
+            "Verify: cat /etc/resolv.conf",
+            f"Verify: nmcli -f ipv4.dns con show {self.connection_name}",
         ]
-
         return self
 
     def validate(self):
         checks = []
-        total_points = 0
-        from validators.safe_executor import execute_safe
+        total = 0
 
-        # Check 1: Firewalld is running (4 points)
-        result = execute_safe(['systemctl', 'is-active', 'firewalld'])
-        if result.success and result.stdout.strip() == 'active':
-            checks.append(ValidationCheck(
-                name="firewalld_running",
-                passed=True,
-                points=4,
-                message=f"firewalld is running"
-            ))
-            total_points += 4
+        # 1. DNS in resolv.conf (5 pts)
+        current_dns = get_dns_servers()
+        all_found = all(d in current_dns for d in self.dns_servers)
+        some_found = any(d in current_dns for d in self.dns_servers)
+
+        if all_found:
+            checks.append(ValidationCheck("dns_active", True, 5,
+                          f"All DNS servers configured in resolv.conf"))
+            total += 5
+        elif some_found:
+            checks.append(ValidationCheck("dns_active", True, 3,
+                          "Some DNS servers configured (partial credit)"))
+            total += 3
         else:
-            checks.append(ValidationCheck(
-                name="firewalld_running",
-                passed=False,
-                points=0,
-                max_points=4,
-                message=f"firewalld is not running"
-            ))
+            checks.append(ValidationCheck("dns_active", False, 0,
+                          f"DNS servers not in resolv.conf. Current: {current_dns}", max_points=5))
 
-        # Check 2: Rich rule exists (8 points)
-        result = execute_safe(['firewall-cmd', '--list-rich-rules'])
-        if result.success and self.source_ip in result.stdout and str(self.port) in result.stdout:
-            checks.append(ValidationCheck(
-                name="rich_rule_exists",
-                passed=True,
-                points=8,
-                message=f"Rich rule configured correctly"
-            ))
-            total_points += 8
+        # 2. Persistent in connection profile (4 pts)
+        conn = get_nmcli_connection_info(self.connection_name)
+        conn_dns = str(conn.get('ipv4.dns', '')) if conn else ''
+        persistent_ok = all(d in conn_dns for d in self.dns_servers)
+        if persistent_ok:
+            checks.append(ValidationCheck("dns_persistent", True, 4,
+                          "DNS servers configured persistently in connection profile"))
+            total += 4
+        elif any(d in conn_dns for d in self.dns_servers):
+            checks.append(ValidationCheck("dns_persistent", True, 2,
+                          "Some DNS servers persistent (partial credit)"))
+            total += 2
         else:
-            checks.append(ValidationCheck(
-                name="rich_rule_exists",
-                passed=False,
-                points=0,
-                max_points=8,
-                message=f"Rich rule not found or incomplete"
-            ))
+            checks.append(ValidationCheck("dns_persistent", False, 0,
+                          "DNS not configured in connection profile", max_points=4))
 
-        passed = total_points >= (self.points * 0.7)
-        return ValidationResult(self.id, passed, total_points, self.points, checks)
+        # 3. Connection is active (3 pts)
+        result = execute_safe(['nmcli', '-t', '-f', 'GENERAL.STATE', 'con', 'show', self.connection_name])
+        if result.success and 'activated' in result.stdout.lower():
+            checks.append(ValidationCheck("connection_active", True, 3,
+                          f"Connection '{self.connection_name}' is active"))
+            total += 3
+        else:
+            checks.append(ValidationCheck("connection_active", False, 0,
+                          f"Connection '{self.connection_name}' is not activated", max_points=3))
 
+        passed = total >= (self.points * 0.7)
+        return ValidationResult(self.id, passed, total, self.points, checks)
+
+
+# ===================================================================
+# 5. AddStaticRouteTask  (hard / 15 pts) [PERSIST]
+# ===================================================================
 
 @TaskRegistry.register("networking")
-class CreateConnectionTask(BaseTask):
-    """Create a new network connection from scratch."""
+class AddStaticRouteTask(BaseTask):
+    """Add a persistent static route via nmcli."""
+
+    def __init__(self):
+        super().__init__(
+            id="net_static_route_001",
+            category="networking",
+            difficulty="hard",
+            points=15
+        )
+        self.requires_persistence = True
+        self.tags = ["nmcli", "routing", "static-route", "persistence"]
+        self.exam_tips = [
+            "Use nmcli con mod <name> +ipv4.routes '<dest>/<prefix> <next-hop>'.",
+            "Bring the connection up after adding the route.",
+            "Verify with 'ip route' to see the active routing table.",
+        ]
+        self.dest_network = None
+        self.dest_prefix = None
+        self.next_hop = None
+        self.connection_name = None
+
+    def generate(self, **params):
+        dest_subnet = random.randint(1, 254)
+        hop_subnet = _random_subnet()
+        self.dest_network = params.get('dest', f'10.{dest_subnet}.0.0')
+        self.dest_prefix = params.get('prefix', '16')
+        self.next_hop = params.get('next_hop', f'192.168.{hop_subnet}.1')
+        iface = _get_practice_interface()
+        self.connection_name = params.get('connection') or _get_connection_name(iface) or iface
+
+        self.description = (
+            f"Add a persistent static route:\n"
+            f"  - Destination network: {self.dest_network}/{self.dest_prefix}\n"
+            f"  - Next-hop (gateway): {self.next_hop}\n"
+            f"  - Connection: {self.connection_name}\n"
+            f"  - Route must be active and persist across reboots"
+        )
+
+        self.hints = [
+            f"nmcli con mod {self.connection_name} +ipv4.routes \"{self.dest_network}/{self.dest_prefix} {self.next_hop}\"",
+            f"nmcli con up {self.connection_name}",
+            "Verify active route: ip route",
+            f"Verify persistent: nmcli -f ipv4.routes con show {self.connection_name}",
+        ]
+        return self
+
+    def validate(self):
+        checks = []
+        total = 0
+
+        # 1. Route active in routing table (7 pts)
+        result = execute_safe(['ip', 'route'])
+        route_active = False
+        if result.success:
+            for line in result.stdout.splitlines():
+                if self.dest_network in line and self.next_hop in line:
+                    route_active = True
+                    break
+        if route_active:
+            checks.append(ValidationCheck("route_active", True, 7,
+                          f"Route to {self.dest_network}/{self.dest_prefix} via {self.next_hop} is active"))
+            total += 7
+        else:
+            checks.append(ValidationCheck("route_active", False, 0,
+                          f"Route to {self.dest_network}/{self.dest_prefix} via {self.next_hop} not found in routing table",
+                          max_points=7))
+
+        # 2. Route persistent in connection profile (5 pts)
+        conn = get_nmcli_connection_info(self.connection_name)
+        routes_str = str(conn.get('ipv4.routes', '')) if conn else ''
+        if self.dest_network in routes_str and self.next_hop in routes_str:
+            checks.append(ValidationCheck("route_persistent", True, 5,
+                          "Route configured persistently in connection profile"))
+            total += 5
+        else:
+            checks.append(ValidationCheck("route_persistent", False, 0,
+                          "Route not found in connection profile ipv4.routes", max_points=5))
+
+        # 3. Connection active (3 pts)
+        result = execute_safe(['nmcli', '-t', '-f', 'GENERAL.STATE', 'con', 'show', self.connection_name])
+        if result.success and 'activated' in result.stdout.lower():
+            checks.append(ValidationCheck("connection_active", True, 3,
+                          f"Connection '{self.connection_name}' is active"))
+            total += 3
+        else:
+            checks.append(ValidationCheck("connection_active", False, 0,
+                          f"Connection '{self.connection_name}' not activated", max_points=3))
+
+        passed = total >= (self.points * 0.7)
+        return ValidationResult(self.id, passed, total, self.points, checks)
+
+
+# ===================================================================
+# 6. ConfigureHostsFileTask  (easy / 6 pts) [PERSIST]
+# ===================================================================
+
+@TaskRegistry.register("networking")
+class ConfigureHostsFileTask(BaseTask):
+    """Add an entry to /etc/hosts."""
+
+    def __init__(self):
+        super().__init__(
+            id="net_hosts_file_001",
+            category="networking",
+            difficulty="easy",
+            points=6
+        )
+        self.requires_persistence = True
+        self.tags = ["hosts", "name-resolution", "persistence"]
+        self.exam_tips = [
+            "/etc/hosts format: <IP>  <FQDN>  <short-name>",
+            "Changes to /etc/hosts take effect immediately.",
+        ]
+        self.ip_address = None
+        self.fqdn = None
+        self.short_name = None
+
+    def generate(self, **params):
+        subnet = _random_subnet()
+        host = _random_host()
+        self.ip_address = params.get('ip', f'192.168.{subnet}.{host}')
+        names = [
+            ('appserver.example.com', 'appserver'),
+            ('dbserver.example.com', 'dbserver'),
+            ('webserver.lab.local', 'webserver'),
+            ('fileserver.corp.net', 'fileserver'),
+            ('monitor.example.com', 'monitor'),
+        ]
+        chosen = random.choice(names)
+        self.fqdn = params.get('fqdn', chosen[0])
+        self.short_name = params.get('short_name', chosen[1])
+
+        self.description = (
+            f"Add an entry to /etc/hosts:\n"
+            f"  - IP Address: {self.ip_address}\n"
+            f"  - FQDN: {self.fqdn}\n"
+            f"  - Short name: {self.short_name}\n"
+            f"  - The entry must resolve correctly with 'getent hosts'"
+        )
+
+        self.hints = [
+            f"echo '{self.ip_address}  {self.fqdn}  {self.short_name}' >> /etc/hosts",
+            "Verify: getent hosts " + self.fqdn,
+            "Verify: cat /etc/hosts",
+            "Format: IP  FQDN  alias",
+        ]
+        return self
+
+    def validate(self):
+        checks = []
+        total = 0
+
+        # 1. FQDN present in /etc/hosts (3 pts)
+        if validate_file_contains('/etc/hosts', self.fqdn):
+            checks.append(ValidationCheck("fqdn_in_hosts", True, 3,
+                          f"{self.fqdn} found in /etc/hosts"))
+            total += 3
+        else:
+            checks.append(ValidationCheck("fqdn_in_hosts", False, 0,
+                          f"{self.fqdn} not found in /etc/hosts", max_points=3))
+
+        # 2. Correct IP maps to FQDN (2 pts)
+        result = execute_safe(['getent', 'hosts', self.fqdn])
+        if result.success and self.ip_address in result.stdout:
+            checks.append(ValidationCheck("ip_resolves", True, 2,
+                          f"{self.fqdn} resolves to {self.ip_address}"))
+            total += 2
+        else:
+            checks.append(ValidationCheck("ip_resolves", False, 0,
+                          f"{self.fqdn} does not resolve to {self.ip_address}", max_points=2))
+
+        # 3. Short name present (1 pt)
+        if validate_file_contains('/etc/hosts', self.short_name):
+            checks.append(ValidationCheck("short_name_in_hosts", True, 1,
+                          f"Short name '{self.short_name}' present in /etc/hosts"))
+            total += 1
+        else:
+            checks.append(ValidationCheck("short_name_in_hosts", False, 0,
+                          f"Short name '{self.short_name}' not in /etc/hosts", max_points=1))
+
+        passed = total >= (self.points * 0.7)
+        return ValidationResult(self.id, passed, total, self.points, checks)
+
+
+# ===================================================================
+# 7. CreateNewConnectionTask  (exam / 14 pts) [PERSIST]
+# ===================================================================
+
+@TaskRegistry.register("networking")
+class CreateNewConnectionTask(BaseTask):
+    """Create a brand-new NetworkManager connection with nmcli con add."""
 
     def __init__(self):
         super().__init__(
             id="net_create_conn_001",
             category="networking",
-            difficulty="medium",
-            points=10
+            difficulty="exam",
+            points=14
         )
+        self.requires_persistence = True
+        self.tags = ["nmcli", "connection", "con-add", "persistence"]
+        self.exam_tips = [
+            "Use 'nmcli con add' to create, 'nmcli con mod' to modify.",
+            "Specify type, con-name, ifname, and IP settings.",
+            "'nmcli con add' creates persistent config automatically.",
+        ]
         self.connection_name = None
         self.interface = None
         self.ip_address = None
-        self.netmask = None
+        self.prefix = None
+        self.gateway = None
 
     def generate(self, **params):
-        """Generate create connection task."""
-        self.connection_name = params.get('connection', 'lab-connection')
-        # Prefer secondary interface for new connections to avoid SSH disruption
+        conn_names = ['lab-conn', 'static-prod', 'office-net', 'data-link', 'mgmt-conn']
+        subnet = _random_subnet()
+        self.connection_name = params.get('connection', random.choice(conn_names))
         try:
             from device.network_manager import get_secondary_interfaces
             secondary = get_secondary_interfaces()
@@ -912,697 +707,936 @@ class CreateConnectionTask(BaseTask):
         except Exception:
             default_iface = _get_practice_interface()
         self.interface = params.get('interface') or default_iface
-        self.ip_address = params.get('ip', f'10.0.{random.randint(1,254)}.{random.randint(10,250)}')
-        self.netmask = params.get('netmask', '24')
+        self.ip_address = params.get('ip', f'10.0.{subnet}.{_random_host()}')
+        self.prefix = params.get('prefix', '24')
+        self.gateway = params.get('gateway', f'10.0.{subnet}.1')
 
         self.description = (
-            f"Create a NEW network connection:\n"
+            f"Create a NEW network connection from scratch:\n"
             f"  - Connection name: {self.connection_name}\n"
+            f"  - Type: ethernet\n"
             f"  - Interface: {self.interface}\n"
-            f"  - IP Address: {self.ip_address}/{self.netmask}\n"
-            f"  - Method: Static (manual)\n"
-            f"  - The connection should be created, not just modified"
+            f"  - IP Address: {self.ip_address}/{self.prefix}\n"
+            f"  - Gateway: {self.gateway}\n"
+            f"  - IPv4 method: manual\n"
+            f"  - The connection must be created (not just modified)"
         )
 
         self.hints = [
-            f"Create connection: nmcli con add type ethernet con-name {self.connection_name} ifname {self.interface}",
-            f"Set IP: nmcli con mod {self.connection_name} ipv4.addresses {self.ip_address}/{self.netmask}",
-            f"Set method: nmcli con mod {self.connection_name} ipv4.method manual",
-            f"Activate: nmcli con up {self.connection_name}",
-            "Key difference: 'con add' creates new, 'con mod' modifies existing"
+            f"nmcli con add type ethernet con-name {self.connection_name} ifname {self.interface} "
+            f"ipv4.addresses {self.ip_address}/{self.prefix} ipv4.gateway {self.gateway} ipv4.method manual",
+            f"nmcli con up {self.connection_name}",
+            f"Verify: nmcli con show {self.connection_name}",
+            "Key: 'con add' creates new, 'con mod' modifies existing.",
         ]
-
         return self
 
     def validate(self):
-        """Validate connection creation."""
         checks = []
-        total_points = 0
+        total = 0
 
-        # Check 1: Connection exists (4 points)
-        conn_info = get_nmcli_connection_info(self.connection_name)
-        if conn_info:
-            checks.append(ValidationCheck(
-                name="connection_exists",
-                passed=True,
-                points=4,
-                message=f"Connection '{self.connection_name}' exists"
-            ))
-            total_points += 4
-
-            # Check 2: Correct interface (2 points)
-            if conn_info.get('connection.interface-name') == self.interface:
-                checks.append(ValidationCheck(
-                    name="correct_interface",
-                    passed=True,
-                    points=2,
-                    message=f"Connection bound to {self.interface}"
-                ))
-                total_points += 2
-            else:
-                checks.append(ValidationCheck(
-                    name="correct_interface",
-                    passed=False,
-                    points=0,
-                    max_points=2,
-                    message=f"Interface mismatch"
-                ))
-
-            # Check 3: IP configured (4 points)
-            if self.ip_address in str(conn_info.get('ipv4.addresses', '')):
-                checks.append(ValidationCheck(
-                    name="ip_configured",
-                    passed=True,
-                    points=4,
-                    message=f"IP {self.ip_address} configured"
-                ))
-                total_points += 4
-            else:
-                checks.append(ValidationCheck(
-                    name="ip_configured",
-                    passed=False,
-                    points=0,
-                    max_points=4,
-                    message=f"IP not configured correctly"
-                ))
+        # 1. Connection exists (4 pts)
+        conn = get_nmcli_connection_info(self.connection_name)
+        if conn:
+            checks.append(ValidationCheck("connection_exists", True, 4,
+                          f"Connection '{self.connection_name}' exists"))
+            total += 4
         else:
-            checks.append(ValidationCheck(
-                name="connection_exists",
-                passed=False,
-                points=0,
-                max_points=4,
-                message=f"Connection '{self.connection_name}' not found"
-            ))
+            checks.append(ValidationCheck("connection_exists", False, 0,
+                          f"Connection '{self.connection_name}' not found", max_points=4))
+            return ValidationResult(self.id, False, 0, self.points, checks)
 
-        passed = total_points >= (self.points * 0.7)
-        return ValidationResult(self.id, passed, total_points, self.points, checks)
+        # 2. Correct interface (2 pts)
+        if conn.get('connection.interface-name') == self.interface:
+            checks.append(ValidationCheck("correct_interface", True, 2,
+                          f"Bound to interface {self.interface}"))
+            total += 2
+        else:
+            checks.append(ValidationCheck("correct_interface", False, 0,
+                          f"Interface mismatch: {conn.get('connection.interface-name')}", max_points=2))
 
+        # 3. IP configured (3 pts)
+        if self.ip_address in str(conn.get('ipv4.addresses', '')):
+            checks.append(ValidationCheck("ip_configured", True, 3,
+                          f"IP {self.ip_address}/{self.prefix} configured"))
+            total += 3
+        else:
+            checks.append(ValidationCheck("ip_configured", False, 0,
+                          "IP address not configured correctly", max_points=3))
+
+        # 4. Gateway configured (2 pts)
+        if self.gateway in str(conn.get('ipv4.gateway', '')):
+            checks.append(ValidationCheck("gateway_configured", True, 2,
+                          f"Gateway {self.gateway} configured"))
+            total += 2
+        else:
+            checks.append(ValidationCheck("gateway_configured", False, 0,
+                          "Gateway not configured", max_points=2))
+
+        # 5. Method is manual (3 pts)
+        if conn.get('ipv4.method') == 'manual':
+            checks.append(ValidationCheck("method_manual", True, 3,
+                          "ipv4.method is 'manual'"))
+            total += 3
+        else:
+            checks.append(ValidationCheck("method_manual", False, 0,
+                          f"ipv4.method is '{conn.get('ipv4.method')}'", max_points=3))
+
+        passed = total >= (self.points * 0.7)
+        return ValidationResult(self.id, passed, total, self.points, checks)
+
+
+# ===================================================================
+# 8. TroubleshootNetworkTask  (hard / 18 pts)
+# ===================================================================
 
 @TaskRegistry.register("networking")
-class ConfigureFirewallZoneTask(BaseTask):
-    """Configure firewall zone settings."""
-
-    def __init__(self):
-        super().__init__(
-            id="net_firewall_zone_001",
-            category="networking",
-            difficulty="medium",
-            points=10
-        )
-        self.zone = None
-        self.interface = None
-        self.set_default = False
-
-    def generate(self, **params):
-        """Generate firewall zone task."""
-        zones = ['trusted', 'home', 'internal', 'work', 'dmz', 'external', 'block']
-        self.zone = params.get('zone', random.choice(zones))
-        self.interface = params.get('interface') or _get_practice_interface()
-        self.set_default = params.get('set_default', random.choice([True, False]))
-
-        if self.set_default:
-            self.description = (
-                f"Configure firewall default zone:\n"
-                f"  - Set default zone to: {self.zone}\n"
-                f"  - Make the change permanent\n"
-                f"  - Ensure firewalld is running"
-            )
-            self.hints = [
-                f"Set default zone: firewall-cmd --set-default-zone={self.zone}",
-                "Verify: firewall-cmd --get-default-zone",
-                "This change is automatically permanent",
-                "List all zones: firewall-cmd --get-zones"
-            ]
-        else:
-            self.description = (
-                f"Configure firewall zone for interface:\n"
-                f"  - Interface: {self.interface}\n"
-                f"  - Zone: {self.zone}\n"
-                f"  - Make the change permanent"
-            )
-            self.hints = [
-                f"Add interface to zone: firewall-cmd --zone={self.zone} --change-interface={self.interface} --permanent",
-                "Reload: firewall-cmd --reload",
-                f"Verify: firewall-cmd --get-zone-of-interface={self.interface}",
-                "Or verify: firewall-cmd --get-active-zones"
-            ]
-
-        return self
-
-    def validate(self):
-        """Validate firewall zone configuration."""
-        checks = []
-        total_points = 0
-        from validators.safe_executor import execute_safe
-
-        # Check 1: Firewalld running (3 points)
-        result = execute_safe(['systemctl', 'is-active', 'firewalld'])
-        if result.success and result.stdout.strip() == 'active':
-            checks.append(ValidationCheck(
-                name="firewalld_running",
-                passed=True,
-                points=3,
-                message="firewalld is running"
-            ))
-            total_points += 3
-        else:
-            checks.append(ValidationCheck(
-                name="firewalld_running",
-                passed=False,
-                points=0,
-                max_points=3,
-                message="firewalld is not running"
-            ))
-            passed = False
-            return ValidationResult(self.id, passed, total_points, self.points, checks)
-
-        if self.set_default:
-            # Check 2: Default zone set (7 points)
-            result = execute_safe(['firewall-cmd', '--get-default-zone'])
-            if result.success and result.stdout.strip() == self.zone:
-                checks.append(ValidationCheck(
-                    name="default_zone",
-                    passed=True,
-                    points=7,
-                    message=f"Default zone is {self.zone}"
-                ))
-                total_points += 7
-            else:
-                checks.append(ValidationCheck(
-                    name="default_zone",
-                    passed=False,
-                    points=0,
-                    max_points=7,
-                    message=f"Default zone is {result.stdout.strip()}, expected {self.zone}"
-                ))
-        else:
-            # Check 2: Interface in correct zone (7 points)
-            result = execute_safe(['firewall-cmd', f'--get-zone-of-interface={self.interface}'])
-            if result.success and result.stdout.strip() == self.zone:
-                checks.append(ValidationCheck(
-                    name="interface_zone",
-                    passed=True,
-                    points=7,
-                    message=f"Interface {self.interface} is in zone {self.zone}"
-                ))
-                total_points += 7
-            else:
-                checks.append(ValidationCheck(
-                    name="interface_zone",
-                    passed=False,
-                    points=0,
-                    max_points=7,
-                    message=f"Interface not in expected zone"
-                ))
-
-        passed = total_points >= (self.points * 0.7)
-        return ValidationResult(self.id, passed, total_points, self.points, checks)
-
-
-@TaskRegistry.register("networking")
-class NetworkTroubleshootingTask(BaseTask):
-    """Troubleshoot network connectivity issues."""
+class TroubleshootNetworkTask(BaseTask):
+    """Diagnose and fix a network connectivity issue."""
 
     def __init__(self):
         super().__init__(
             id="net_troubleshoot_001",
             category="networking",
-            difficulty="exam",
-            points=15
+            difficulty="hard",
+            points=18
         )
+        self.requires_persistence = False
+        self.tags = ["troubleshooting", "nmcli", "ip", "diagnostics"]
+        self.exam_tips = [
+            "Start with 'nmcli device status' and 'nmcli con show'.",
+            "Check 'ip addr', 'ip route', 'cat /etc/resolv.conf'.",
+            "The connection may need to be created, modified, or activated.",
+        ]
         self.connection_name = None
         self.expected_ip = None
         self.expected_gateway = None
+        self.expected_dns = None
+        self.interface = None
 
     def generate(self, **params):
-        """Generate troubleshooting task."""
-        iface = _get_practice_interface()
-        self.connection_name = params.get('connection') or _get_connection_name(iface) or iface
-        self.expected_ip = params.get('ip', f'192.168.100.{random.randint(10,250)}')
-        self.expected_gateway = params.get('gateway', '192.168.100.1')
+        subnet = random.randint(1, 254)
+        self.interface = params.get('interface') or _get_practice_interface()
+        self.connection_name = params.get('connection') or _get_connection_name(self.interface) or self.interface
+        self.expected_ip = params.get('ip', f'192.168.{subnet}.{_random_host()}')
+        self.expected_gateway = params.get('gateway', f'192.168.{subnet}.1')
+        self.expected_dns = params.get('dns', '8.8.8.8')
 
         self.description = (
             f"Troubleshoot and fix network connectivity:\n"
             f"  - Connection: {self.connection_name}\n"
+            f"  - Interface: {self.interface}\n"
             f"  - Required IP: {self.expected_ip}/24\n"
             f"  - Required Gateway: {self.expected_gateway}\n"
-            f"  - Ensure the connection is active and working\n"
+            f"  - Required DNS: {self.expected_dns}\n"
+            f"  - Ensure the connection is active and fully functional\n"
             f"  - Configuration must be persistent\n\n"
-            f"  Hint: The connection may need to be created, modified, or activated"
+            f"  Diagnose the issue: the connection may be missing, down,\n"
+            f"  misconfigured, or using DHCP instead of static."
         )
 
         self.hints = [
-            "First diagnose: nmcli con show, nmcli device status",
-            "Check current IP: ip addr show",
-            "Check route: ip route show",
-            f"If connection missing: nmcli con add type ethernet con-name {self.connection_name} ifname {self.connection_name}",
-            f"Set IP: nmcli con mod {self.connection_name} ipv4.addresses {self.expected_ip}/24 ipv4.gateway {self.expected_gateway} ipv4.method manual",
+            "Diagnose: nmcli con show; nmcli device status; ip addr; ip route",
+            f"If missing: nmcli con add type ethernet con-name {self.connection_name} ifname {self.interface}",
+            f"Set config: nmcli con mod {self.connection_name} ipv4.addresses {self.expected_ip}/24 "
+            f"ipv4.gateway {self.expected_gateway} ipv4.dns {self.expected_dns} ipv4.method manual",
             f"Activate: nmcli con up {self.connection_name}",
-            "Verify: ping {gateway} (if reachable)"
+            "Verify: ip addr; ip route; cat /etc/resolv.conf",
         ]
-
         return self
 
     def validate(self):
-        """Validate network troubleshooting."""
         checks = []
-        total_points = 0
+        total = 0
 
-        # Check 1: Connection exists (3 points)
-        conn_info = get_nmcli_connection_info(self.connection_name)
-        if conn_info:
-            checks.append(ValidationCheck(
-                name="connection_exists",
-                passed=True,
-                points=3,
-                message=f"Connection '{self.connection_name}' exists"
-            ))
-            total_points += 3
+        # 1. Connection exists (3 pts)
+        conn = get_nmcli_connection_info(self.connection_name)
+        if conn:
+            checks.append(ValidationCheck("connection_exists", True, 3,
+                          f"Connection '{self.connection_name}' exists"))
+            total += 3
         else:
-            checks.append(ValidationCheck(
-                name="connection_exists",
-                passed=False,
-                points=0,
-                max_points=3,
-                message=f"Connection '{self.connection_name}' not found"
-            ))
+            checks.append(ValidationCheck("connection_exists", False, 0,
+                          f"Connection '{self.connection_name}' not found", max_points=3))
 
-        # Check 2: IP address configured (5 points)
-        actual_ip = get_ip_address(self.connection_name)
-        ip_in_config = conn_info and self.expected_ip in str(conn_info.get('ipv4.addresses', ''))
-
+        # 2. IP active (5 pts)
+        actual_ip = get_ip_address(self.interface)
+        ip_in_config = conn and self.expected_ip in str(conn.get('ipv4.addresses', ''))
         if actual_ip == self.expected_ip:
-            checks.append(ValidationCheck(
-                name="ip_active",
-                passed=True,
-                points=5,
-                message=f"IP {self.expected_ip} is active"
-            ))
-            total_points += 5
+            checks.append(ValidationCheck("ip_active", True, 5,
+                          f"IP {self.expected_ip} is active on {self.interface}"))
+            total += 5
         elif ip_in_config:
-            checks.append(ValidationCheck(
-                name="ip_active",
-                passed=True,
-                points=3,
-                message=f"IP configured but connection may not be active (partial)"
-            ))
-            total_points += 3
+            checks.append(ValidationCheck("ip_active", True, 3,
+                          "IP configured but connection may not be active (partial)"))
+            total += 3
         else:
-            checks.append(ValidationCheck(
-                name="ip_active",
-                passed=False,
-                points=0,
-                max_points=5,
-                message=f"IP is {actual_ip}, expected {self.expected_ip}"
-            ))
+            checks.append(ValidationCheck("ip_active", False, 0,
+                          f"IP is {actual_ip}, expected {self.expected_ip}", max_points=5))
 
-        # Check 3: Gateway configured (4 points)
-        current_gw = get_default_gateway()
-        gw_in_config = conn_info and self.expected_gateway in str(conn_info.get('ipv4.gateway', ''))
-
-        if current_gw == self.expected_gateway:
-            checks.append(ValidationCheck(
-                name="gateway_active",
-                passed=True,
-                points=4,
-                message=f"Gateway {self.expected_gateway} is active"
-            ))
-            total_points += 4
+        # 3. Gateway active (4 pts)
+        gw = get_default_gateway()
+        gw_in_config = conn and self.expected_gateway in str(conn.get('ipv4.gateway', ''))
+        if gw == self.expected_gateway:
+            checks.append(ValidationCheck("gateway_active", True, 4,
+                          f"Gateway {self.expected_gateway} is active"))
+            total += 4
         elif gw_in_config:
-            checks.append(ValidationCheck(
-                name="gateway_active",
-                passed=True,
-                points=2,
-                message=f"Gateway configured but may not be active (partial)"
-            ))
-            total_points += 2
+            checks.append(ValidationCheck("gateway_active", True, 2,
+                          "Gateway configured but may not be active (partial)"))
+            total += 2
         else:
-            checks.append(ValidationCheck(
-                name="gateway_active",
-                passed=False,
-                points=0,
-                max_points=4,
-                message=f"Gateway is {current_gw}, expected {self.expected_gateway}"
-            ))
+            checks.append(ValidationCheck("gateway_active", False, 0,
+                          f"Gateway is {gw}, expected {self.expected_gateway}", max_points=4))
 
-        # Check 4: Interface is UP (3 points)
-        state = get_interface_state(self.connection_name)
+        # 4. DNS configured (3 pts)
+        dns_list = get_dns_servers()
+        if self.expected_dns in dns_list:
+            checks.append(ValidationCheck("dns_configured", True, 3,
+                          f"DNS {self.expected_dns} is configured"))
+            total += 3
+        else:
+            checks.append(ValidationCheck("dns_configured", False, 0,
+                          f"DNS {self.expected_dns} not found (current: {dns_list})", max_points=3))
+
+        # 5. Interface UP (3 pts)
+        state = get_interface_state(self.interface)
         if state == 'UP':
-            checks.append(ValidationCheck(
-                name="interface_up",
-                passed=True,
-                points=3,
-                message="Interface is UP"
-            ))
-            total_points += 3
+            checks.append(ValidationCheck("interface_up", True, 3,
+                          f"Interface {self.interface} is UP"))
+            total += 3
         else:
-            checks.append(ValidationCheck(
-                name="interface_up",
-                passed=False,
-                points=0,
-                max_points=3,
-                message=f"Interface is {state}, expected UP"
-            ))
+            checks.append(ValidationCheck("interface_up", False, 0,
+                          f"Interface {self.interface} is {state}", max_points=3))
 
-        passed = total_points >= (self.points * 0.7)
-        return ValidationResult(self.id, passed, total_points, self.points, checks)
+        passed = total >= (self.points * 0.7)
+        return ValidationResult(self.id, passed, total, self.points, checks)
 
+
+# ===================================================================
+# 9. ConfigureBondingTask  (hard / 18 pts)
+# ===================================================================
 
 @TaskRegistry.register("networking")
-class ConfigureNetworkTeamTask(BaseTask):
-    """Configure network teaming for link aggregation."""
+class ConfigureBondingTask(BaseTask):
+    """Configure a network bond interface."""
 
     def __init__(self):
         super().__init__(
-            id="net_team_001",
+            id="net_bonding_001",
             category="networking",
-            difficulty="exam",
+            difficulty="hard",
             points=18
         )
-        self.team_name = None
-        self.team_ip = None
-        self.runner = None
-        self.port_interfaces = None
+        self.requires_persistence = False
+        self.tags = ["nmcli", "bonding", "link-aggregation", "advanced"]
+        self.exam_tips = [
+            "Create the bond master first, then add slave connections.",
+            "Bond modes: active-backup, balance-rr, balance-xor, 802.3ad.",
+            "Verify with 'cat /proc/net/bonding/<bond>' or 'nmcli con show'.",
+        ]
+        self.bond_name = None
+        self.bond_ip = None
+        self.bond_mode = None
+        self.slave_interfaces = None
 
     def generate(self, **params):
-        """Generate network teaming task."""
-        self.team_name = params.get('team_name', 'team0')
-        self.team_ip = params.get('ip', f'10.10.10.{random.randint(10,250)}')
-        runners = ['activebackup', 'roundrobin', 'loadbalance']
-        self.runner = params.get('runner', random.choice(runners))
+        self.bond_name = params.get('bond_name', 'bond0')
+        subnet = _random_subnet()
+        self.bond_ip = params.get('ip', f'10.10.{subnet}.{_random_host()}')
+        modes = ['active-backup', 'balance-rr']
+        self.bond_mode = params.get('mode', random.choice(modes))
 
-        # Get secondary interfaces for teaming (need at least 2)
         try:
             from device.network_manager import get_secondary_interfaces, get_available_interfaces
-            all_ifaces = get_available_interfaces()
             secondary = get_secondary_interfaces()
             if len(secondary) >= 2:
-                default_ports = secondary[:2]
-            elif len(all_ifaces) >= 2:
-                # Use any 2 interfaces (warn user about primary)
-                default_ports = all_ifaces[:2]
+                default_slaves = secondary[:2]
             else:
-                # Not enough interfaces - use placeholder names
-                default_ports = ['eth1', 'eth2']
+                all_ifaces = get_available_interfaces()
+                default_slaves = all_ifaces[:2] if len(all_ifaces) >= 2 else ['eth1', 'eth2']
         except Exception:
-            default_ports = ['eth1', 'eth2']
+            default_slaves = ['eth1', 'eth2']
 
-        self.port_interfaces = params.get('ports') or default_ports
-        self._insufficient_interfaces = default_ports == ['eth1', 'eth2']
+        self.slave_interfaces = params.get('slaves') or default_slaves
+        self._placeholder_slaves = (default_slaves == ['eth1', 'eth2'])
 
-        runner_desc = {
-            'activebackup': 'Active-Backup (failover)',
-            'roundrobin': 'Round-Robin (load balance)',
-            'loadbalance': 'Load Balance'
-        }
-
-        # Check if we have enough interfaces
-        iface_warning = ""
-        if self._insufficient_interfaces:
-            iface_warning = (
-                f"\n\n  NOTE: Your VM needs 2+ network adapters for teaming!\n"
-                f"  Add adapters in VirtualBox: Settings -> Network -> Adapter 2, 3\n"
-                f"  Then run: nmcli device status"
+        iface_note = ""
+        if self._placeholder_slaves:
+            iface_note = (
+                "\n\n  NOTE: This task requires 2+ network adapters.\n"
+                "  Add adapters in your VM settings if needed.\n"
+                "  Check available interfaces: nmcli device status"
             )
 
+        mode_desc = {
+            'active-backup': 'Active-Backup (failover)',
+            'balance-rr': 'Round-Robin (load balancing)',
+        }
+
         self.description = (
-            f"Configure network teaming:\n"
-            f"  - Team interface: {self.team_name}\n"
-            f"  - Team IP: {self.team_ip}/24\n"
-            f"  - Runner (mode): {self.runner} - {runner_desc.get(self.runner, '')}\n"
-            f"  - Port interfaces: {', '.join(self.port_interfaces)}\n"
-            f"  - Configuration must be persistent"
-            f"{iface_warning}"
+            f"Configure network bonding:\n"
+            f"  - Bond interface: {self.bond_name}\n"
+            f"  - Bond IP: {self.bond_ip}/24\n"
+            f"  - Bond mode: {self.bond_mode} - {mode_desc.get(self.bond_mode, self.bond_mode)}\n"
+            f"  - Slave interfaces: {', '.join(self.slave_interfaces)}\n"
+            f"  - IPv4 method: manual"
+            f"{iface_note}"
         )
 
         self.hints = [
-            f"Create team: nmcli con add type team con-name {self.team_name} ifname {self.team_name} team.runner {self.runner}",
-            f"Add port: nmcli con add type team-slave con-name {self.team_name}-port1 ifname {self.port_interfaces[0]} master {self.team_name}",
-            f"Add port: nmcli con add type team-slave con-name {self.team_name}-port2 ifname {self.port_interfaces[1]} master {self.team_name}",
-            f"Set IP: nmcli con mod {self.team_name} ipv4.addresses {self.team_ip}/24 ipv4.method manual",
-            f"Activate: nmcli con up {self.team_name}",
-            f"Verify: teamdctl {self.team_name} state",
-            "Team runners: activebackup, roundrobin, loadbalance, broadcast, lacp"
+            f"nmcli con add type bond con-name {self.bond_name} ifname {self.bond_name} bond.options \"mode={self.bond_mode}\"",
+            f"nmcli con mod {self.bond_name} ipv4.addresses {self.bond_ip}/24 ipv4.method manual",
+            f"nmcli con add type ethernet con-name {self.bond_name}-slave1 ifname {self.slave_interfaces[0]} master {self.bond_name}",
+            f"nmcli con add type ethernet con-name {self.bond_name}-slave2 ifname {self.slave_interfaces[1]} master {self.bond_name}",
+            f"nmcli con up {self.bond_name}",
+            f"Verify: cat /proc/net/bonding/{self.bond_name}",
         ]
-
         return self
 
     def validate(self):
-        """Validate network teaming configuration."""
         checks = []
-        total_points = 0
-        from validators.safe_executor import execute_safe
+        total = 0
 
-        # Check 1: Team connection exists (4 points)
-        conn_info = get_nmcli_connection_info(self.team_name)
-        if conn_info:
-            checks.append(ValidationCheck(
-                name="team_exists",
-                passed=True,
-                points=4,
-                message=f"Team connection '{self.team_name}' exists"
-            ))
-            total_points += 4
+        # 1. Bond connection exists (4 pts)
+        conn = get_nmcli_connection_info(self.bond_name)
+        if conn:
+            checks.append(ValidationCheck("bond_exists", True, 4,
+                          f"Bond connection '{self.bond_name}' exists"))
+            total += 4
         else:
-            checks.append(ValidationCheck(
-                name="team_exists",
-                passed=False,
-                points=0,
-                max_points=4,
-                message=f"Team connection '{self.team_name}' not found"
-            ))
-            passed = False
-            return ValidationResult(self.id, passed, total_points, self.points, checks)
+            checks.append(ValidationCheck("bond_exists", False, 0,
+                          f"Bond connection '{self.bond_name}' not found", max_points=4))
+            return ValidationResult(self.id, False, 0, self.points, checks)
 
-        # Check 2: Team interface exists (3 points)
-        result = execute_safe(['ip', 'link', 'show', self.team_name])
-        if result.success and self.team_name in result.stdout:
-            checks.append(ValidationCheck(
-                name="team_interface",
-                passed=True,
-                points=3,
-                message=f"Team interface {self.team_name} exists"
-            ))
-            total_points += 3
+        # 2. Bond interface exists at kernel level (3 pts)
+        result = execute_safe(['ip', 'link', 'show', self.bond_name])
+        if result.success and self.bond_name in result.stdout:
+            checks.append(ValidationCheck("bond_interface", True, 3,
+                          f"Bond interface {self.bond_name} exists"))
+            total += 3
         else:
-            checks.append(ValidationCheck(
-                name="team_interface",
-                passed=False,
-                points=0,
-                max_points=3,
-                message=f"Team interface not found"
-            ))
+            checks.append(ValidationCheck("bond_interface", False, 0,
+                          f"Bond interface {self.bond_name} not found", max_points=3))
 
-        # Check 3: IP configured (4 points)
-        if self.team_ip in str(conn_info.get('ipv4.addresses', '')):
-            checks.append(ValidationCheck(
-                name="team_ip",
-                passed=True,
-                points=4,
-                message=f"Team IP {self.team_ip} configured"
-            ))
-            total_points += 4
+        # 3. IP configured (4 pts)
+        actual_ip = get_ip_address(self.bond_name)
+        if actual_ip == self.bond_ip:
+            checks.append(ValidationCheck("bond_ip", True, 4,
+                          f"Bond IP {self.bond_ip} is active"))
+            total += 4
+        elif self.bond_ip in str(conn.get('ipv4.addresses', '')):
+            checks.append(ValidationCheck("bond_ip", True, 2,
+                          "Bond IP configured but may not be active (partial)"))
+            total += 2
         else:
-            actual_ip = get_ip_address(self.team_name)
-            if actual_ip == self.team_ip:
-                checks.append(ValidationCheck(
-                    name="team_ip",
-                    passed=True,
-                    points=4,
-                    message=f"Team IP {self.team_ip} active"
-                ))
-                total_points += 4
-            else:
-                checks.append(ValidationCheck(
-                    name="team_ip",
-                    passed=False,
-                    points=0,
-                    max_points=4,
-                    message=f"Team IP not configured correctly"
-                ))
+            checks.append(ValidationCheck("bond_ip", False, 0,
+                          f"Bond IP not configured (actual: {actual_ip})", max_points=4))
 
-        # Check 4: Runner mode (3 points)
-        result = execute_safe(['nmcli', '-g', 'team.runner', 'con', 'show', self.team_name])
-        if result.success and self.runner in result.stdout:
-            checks.append(ValidationCheck(
-                name="team_runner",
-                passed=True,
-                points=3,
-                message=f"Team runner is {self.runner}"
-            ))
-            total_points += 3
+        # 4. Bond mode correct (3 pts)
+        result = execute_safe(['nmcli', '-g', 'bond.options', 'con', 'show', self.bond_name])
+        if result.success and self.bond_mode in result.stdout:
+            checks.append(ValidationCheck("bond_mode", True, 3,
+                          f"Bond mode is {self.bond_mode}"))
+            total += 3
         else:
-            checks.append(ValidationCheck(
-                name="team_runner",
-                passed=False,
-                points=0,
-                max_points=3,
-                message=f"Team runner not set to {self.runner}"
-            ))
+            checks.append(ValidationCheck("bond_mode", False, 0,
+                          f"Bond mode not set to {self.bond_mode}", max_points=3))
 
-        # Check 5: At least one port configured (4 points)
-        # Method 1: Use teamdctl to check team state (most reliable)
-        ports_found = []
-        team_state = execute_safe(['teamdctl', self.team_name, 'state'])
-        if team_state.success:
-            # teamdctl output shows ports - parse for interface names
-            for port in self.port_interfaces:
-                if port in team_state.stdout:
-                    ports_found.append(port)
-            # Also check for generic port detection in output
-            if not ports_found and 'link watches:' in team_state.stdout.lower():
-                # If we see link watches, there's at least one port
-                ports_found.append('detected')
+        # 5. At least one slave configured (4 pts)
+        slaves_found = []
+        result = execute_safe(['nmcli', '-t', '-f', 'NAME,TYPE', 'con', 'show'])
+        if result.success:
+            for line in result.stdout.splitlines():
+                parts = line.strip().split(':')
+                if len(parts) >= 2:
+                    cname = parts[0]
+                    # Check if this is a bond-slave belonging to our bond
+                    slave_info = execute_safe(['nmcli', '-g', 'connection.master', 'con', 'show', cname])
+                    if slave_info.success and (self.bond_name in slave_info.stdout.strip()):
+                        slaves_found.append(cname)
 
-        # Method 2: Check all connections for slave-type = team
-        if not ports_found:
-            result = execute_safe(['nmcli', '-t', '-f', 'NAME', 'con', 'show'])
-            if result.success:
-                for line in result.stdout.splitlines():
-                    conn_name = line.strip()
-                    if not conn_name:
-                        continue
-                    # Check if this connection is a team slave
-                    slave_type = execute_safe(['nmcli', '-g', 'connection.slave-type', 'con', 'show', conn_name])
-                    if slave_type.success and slave_type.stdout.strip() == 'team':
-                        # Verify it belongs to our team
-                        master = execute_safe(['nmcli', '-g', 'connection.master', 'con', 'show', conn_name])
-                        if master.success:
-                            master_val = master.stdout.strip()
-                            # Master can be team name, interface name, or UUID
-                            if master_val == self.team_name or self.team_name in master_val:
-                                ports_found.append(conn_name)
+        # Fallback: check /proc/net/bonding
+        if not slaves_found:
+            proc_result = execute_safe(['cat', f'/proc/net/bonding/{self.bond_name}'])
+            if proc_result.success:
+                for iface in self.slave_interfaces:
+                    if iface in proc_result.stdout:
+                        slaves_found.append(iface)
 
-        # Method 3: Check for connections with team name prefix (common naming pattern)
-        if not ports_found:
-            result = execute_safe(['nmcli', '-t', '-f', 'NAME', 'con', 'show'])
-            if result.success:
-                for line in result.stdout.splitlines():
-                    conn_name = line.strip()
-                    # Look for port naming patterns like "team0-port1", "team0-slave1", etc.
-                    if conn_name.startswith(f'{self.team_name}-') or conn_name.startswith(f'{self.team_name}_'):
-                        if 'port' in conn_name.lower() or 'slave' in conn_name.lower():
-                            ports_found.append(conn_name)
-
-        port_found = len(ports_found) > 0
-
-        if port_found:
-            checks.append(ValidationCheck(
-                name="team_ports",
-                passed=True,
-                points=4,
-                message=f"Team ports configured: {', '.join(ports_found[:2])}"
-            ))
-            total_points += 4
+        if len(slaves_found) >= 2:
+            checks.append(ValidationCheck("bond_slaves", True, 4,
+                          f"Bond slaves configured: {', '.join(slaves_found[:2])}"))
+            total += 4
+        elif len(slaves_found) == 1:
+            checks.append(ValidationCheck("bond_slaves", True, 2,
+                          f"Only one slave found: {slaves_found[0]} (partial)"))
+            total += 2
         else:
-            # Provide helpful debug info
-            debug_info = ""
-            if team_state.success:
-                debug_info = " (teamdctl worked but no ports detected)"
-            else:
-                debug_info = " (teamdctl failed - team may not be active)"
-            checks.append(ValidationCheck(
-                name="team_ports",
-                passed=False,
-                points=0,
-                max_points=4,
-                message=f"No team slave ports found for {self.team_name}{debug_info}. "
-                        f"Create with: nmcli con add type team-slave con-name {self.team_name}-port1 ifname <interface> master {self.team_name}"
-            ))
+            checks.append(ValidationCheck("bond_slaves", False, 0,
+                          f"No bond slave connections found for {self.bond_name}", max_points=4))
 
-        passed = total_points >= (self.points * 0.7)
-        return ValidationResult(self.id, passed, total_points, self.points, checks)
+        passed = total >= (self.points * 0.7)
+        return ValidationResult(self.id, passed, total, self.points, checks)
 
+
+# ===================================================================
+# 10. VerifyNetworkConnectivityTask  (easy / 5 pts)
+# ===================================================================
 
 @TaskRegistry.register("networking")
-class SwitchToStaticIPTask(BaseTask):
-    """Switch connection from DHCP to static IP."""
+class VerifyNetworkConnectivityTask(BaseTask):
+    """Verify network connectivity using ping and basic commands."""
 
     def __init__(self):
         super().__init__(
-            id="net_dhcp_static_001",
+            id="net_verify_conn_001",
             category="networking",
             difficulty="easy",
-            points=8
+            points=5
         )
-        self.connection_name = None
-        self.ip_address = None
+        self.requires_persistence = False
+        self.tags = ["ping", "connectivity", "diagnostics"]
+        self.exam_tips = [
+            "Use 'ping -c 1 <host>' for a quick connectivity test.",
+            "Check gateway reachability first, then DNS resolution.",
+        ]
+        self.target_ip = None
+        self.interface = None
 
     def generate(self, **params):
-        """Generate DHCP to static task."""
-        iface = _get_practice_interface()
-        self.connection_name = params.get('connection') or _get_connection_name(iface) or iface
-        self.ip_address = params.get('ip', f'172.16.{random.randint(1,254)}.{random.randint(10,250)}')
+        self.interface = params.get('interface') or _get_practice_interface()
+        # Use the current gateway as target for a realistic test
+        self.target_ip = params.get('target', '127.0.0.1')
 
         self.description = (
-            f"Switch connection from DHCP to static IP:\n"
-            f"  - Connection: {self.connection_name}\n"
-            f"  - Static IP: {self.ip_address}/24\n"
-            f"  - Change IPv4 method from 'auto' to 'manual'\n"
-            f"  - Activate the change"
+            f"Verify network connectivity:\n"
+            f"  - Confirm interface {self.interface} is UP\n"
+            f"  - Confirm an IP address is assigned to {self.interface}\n"
+            f"  - Successfully ping {self.target_ip}"
         )
 
         self.hints = [
-            "Current method: nmcli -f ipv4.method con show {connection}",
-            f"Set IP: nmcli con mod {self.connection_name} ipv4.addresses {self.ip_address}/24",
-            f"Change method: nmcli con mod {self.connection_name} ipv4.method manual",
-            f"Activate: nmcli con up {self.connection_name}",
-            "DHCP = auto, Static = manual"
+            f"ip link show {self.interface}",
+            f"ip addr show {self.interface}",
+            f"ping -c 2 {self.target_ip}",
+            "nmcli device status",
         ]
-
         return self
 
     def validate(self):
-        """Validate DHCP to static switch."""
         checks = []
-        total_points = 0
+        total = 0
 
-        # Check 1: Method is manual (4 points)
-        conn_info = get_nmcli_connection_info(self.connection_name)
-        if conn_info and conn_info.get('ipv4.method') == 'manual':
-            checks.append(ValidationCheck(
-                name="method_manual",
-                passed=True,
-                points=4,
-                message="IPv4 method is 'manual' (static)"
-            ))
-            total_points += 4
+        # 1. Interface UP (2 pts)
+        state = get_interface_state(self.interface)
+        if state == 'UP':
+            checks.append(ValidationCheck("interface_up", True, 2,
+                          f"Interface {self.interface} is UP"))
+            total += 2
         else:
-            method = conn_info.get('ipv4.method', 'unknown') if conn_info else 'unknown'
-            checks.append(ValidationCheck(
-                name="method_manual",
-                passed=False,
-                points=0,
-                max_points=4,
-                message=f"IPv4 method is '{method}', expected 'manual'"
-            ))
+            checks.append(ValidationCheck("interface_up", False, 0,
+                          f"Interface {self.interface} is {state}", max_points=2))
 
-        # Check 2: IP configured (4 points)
-        actual_ip = get_ip_address(self.connection_name)
+        # 2. IP assigned (2 pts)
+        ip = get_ip_address(self.interface)
+        if ip:
+            checks.append(ValidationCheck("ip_assigned", True, 2,
+                          f"IP {ip} assigned to {self.interface}"))
+            total += 2
+        else:
+            checks.append(ValidationCheck("ip_assigned", False, 0,
+                          f"No IP address on {self.interface}", max_points=2))
+
+        # 3. Ping target (1 pt)
+        result = execute_safe(['ping', '-c', '1', '-W', '2', self.target_ip])
+        if result.success:
+            checks.append(ValidationCheck("ping_success", True, 1,
+                          f"Ping to {self.target_ip} successful"))
+            total += 1
+        else:
+            checks.append(ValidationCheck("ping_success", False, 0,
+                          f"Ping to {self.target_ip} failed", max_points=1))
+
+        passed = total >= (self.points * 0.6)
+        return ValidationResult(self.id, passed, total, self.points, checks)
+
+
+# ===================================================================
+# 11. ConfigureIPv6Task  (medium / 10 pts)
+# ===================================================================
+
+@TaskRegistry.register("networking")
+class ConfigureIPv6Task(BaseTask):
+    """Configure an IPv6 address on a connection."""
+
+    def __init__(self):
+        super().__init__(
+            id="net_ipv6_001",
+            category="networking",
+            difficulty="medium",
+            points=10
+        )
+        self.requires_persistence = False
+        self.tags = ["nmcli", "ipv6", "dual-stack"]
+        self.exam_tips = [
+            "Use ipv6.addresses and ipv6.method manual for static IPv6.",
+            "Verify with 'ip -6 addr show <iface>'.",
+            "IPv6 prefix length is typically /64.",
+        ]
+        self.ipv6_address = None
+        self.prefix = None
+        self.connection_name = None
+        self.interface = None
+
+    def generate(self, **params):
+        self.interface = params.get('interface') or _get_practice_interface()
+        self.connection_name = params.get('connection') or _get_connection_name(self.interface) or self.interface
+        hex_block = format(random.randint(1, 65534), 'x')
+        host_block = format(random.randint(1, 65534), 'x')
+        self.ipv6_address = params.get('ipv6', f'fd00::{hex_block}:{host_block}')
+        self.prefix = params.get('prefix', '64')
+
+        self.description = (
+            f"Configure an IPv6 address:\n"
+            f"  - Connection: {self.connection_name}\n"
+            f"  - Interface: {self.interface}\n"
+            f"  - IPv6 Address: {self.ipv6_address}/{self.prefix}\n"
+            f"  - IPv6 method: manual\n"
+            f"  - Activate the connection"
+        )
+
+        self.hints = [
+            f"nmcli con mod {self.connection_name} ipv6.addresses {self.ipv6_address}/{self.prefix}",
+            f"nmcli con mod {self.connection_name} ipv6.method manual",
+            f"nmcli con up {self.connection_name}",
+            f"Verify: ip -6 addr show {self.interface}",
+            f"Verify: nmcli -f ipv6 con show {self.connection_name}",
+        ]
+        return self
+
+    def validate(self):
+        checks = []
+        total = 0
+
+        # 1. IPv6 address present on interface (4 pts)
+        result = execute_safe(['ip', '-6', 'addr', 'show', self.interface])
+        ipv6_active = result.success and self.ipv6_address in result.stdout
+        if ipv6_active:
+            checks.append(ValidationCheck("ipv6_active", True, 4,
+                          f"IPv6 {self.ipv6_address} active on {self.interface}"))
+            total += 4
+        else:
+            checks.append(ValidationCheck("ipv6_active", False, 0,
+                          f"IPv6 {self.ipv6_address} not found on {self.interface}", max_points=4))
+
+        # 2. IPv6 method manual in connection profile (3 pts)
+        conn = get_nmcli_connection_info(self.connection_name)
+        if conn and conn.get('ipv6.method') == 'manual':
+            checks.append(ValidationCheck("ipv6_method", True, 3,
+                          "ipv6.method is 'manual'"))
+            total += 3
+        else:
+            method = conn.get('ipv6.method', 'unknown') if conn else 'unknown'
+            checks.append(ValidationCheck("ipv6_method", False, 0,
+                          f"ipv6.method is '{method}', expected 'manual'", max_points=3))
+
+        # 3. IPv6 address in connection profile (3 pts)
+        ipv6_addrs = str(conn.get('ipv6.addresses', '')) if conn else ''
+        if self.ipv6_address in ipv6_addrs:
+            checks.append(ValidationCheck("ipv6_persistent", True, 3,
+                          "IPv6 address in connection profile"))
+            total += 3
+        else:
+            checks.append(ValidationCheck("ipv6_persistent", False, 0,
+                          "IPv6 address not in connection profile", max_points=3))
+
+        passed = total >= (self.points * 0.7)
+        return ValidationResult(self.id, passed, total, self.points, checks)
+
+
+# ===================================================================
+# 12. RestartNetworkConnectionTask  (easy / 5 pts)
+# ===================================================================
+
+@TaskRegistry.register("networking")
+class RestartNetworkConnectionTask(BaseTask):
+    """Restart (deactivate then activate) a network connection."""
+
+    def __init__(self):
+        super().__init__(
+            id="net_restart_conn_001",
+            category="networking",
+            difficulty="easy",
+            points=5
+        )
+        self.requires_persistence = False
+        self.tags = ["nmcli", "connection", "restart"]
+        self.exam_tips = [
+            "Use 'nmcli con down <name>' then 'nmcli con up <name>'.",
+            "Alternatively: 'nmcli con up <name>' re-applies config.",
+        ]
+        self.connection_name = None
+        self.interface = None
+
+    def generate(self, **params):
+        self.interface = params.get('interface') or _get_practice_interface()
+        self.connection_name = params.get('connection') or _get_connection_name(self.interface) or self.interface
+
+        self.description = (
+            f"Restart the network connection '{self.connection_name}':\n"
+            f"  - Deactivate the connection\n"
+            f"  - Re-activate the connection\n"
+            f"  - Verify the connection is UP and has an IP address"
+        )
+
+        self.hints = [
+            f"nmcli con down {self.connection_name}",
+            f"nmcli con up {self.connection_name}",
+            f"Verify: nmcli con show --active",
+            f"Verify: ip addr show {self.interface}",
+        ]
+        return self
+
+    def validate(self):
+        checks = []
+        total = 0
+
+        # 1. Connection is active (3 pts)
+        result = execute_safe(['nmcli', '-t', '-f', 'GENERAL.STATE', 'con', 'show', self.connection_name])
+        if result.success and 'activated' in result.stdout.lower():
+            checks.append(ValidationCheck("connection_active", True, 3,
+                          f"Connection '{self.connection_name}' is activated"))
+            total += 3
+        else:
+            checks.append(ValidationCheck("connection_active", False, 0,
+                          f"Connection '{self.connection_name}' is not active", max_points=3))
+
+        # 2. Interface has IP (2 pts)
+        ip = get_ip_address(self.interface)
+        if ip:
+            checks.append(ValidationCheck("has_ip", True, 2,
+                          f"Interface {self.interface} has IP {ip}"))
+            total += 2
+        else:
+            checks.append(ValidationCheck("has_ip", False, 0,
+                          f"No IP on {self.interface}", max_points=2))
+
+        passed = total >= (self.points * 0.6)
+        return ValidationResult(self.id, passed, total, self.points, checks)
+
+
+# ===================================================================
+# 13. DisplayNetworkInfoTask  (easy / 5 pts)
+# ===================================================================
+
+@TaskRegistry.register("networking")
+class DisplayNetworkInfoTask(BaseTask):
+    """Display and verify current network information."""
+
+    def __init__(self):
+        super().__init__(
+            id="net_display_info_001",
+            category="networking",
+            difficulty="easy",
+            points=5
+        )
+        self.requires_persistence = False
+        self.tags = ["ip", "nmcli", "ss", "diagnostics"]
+        self.exam_tips = [
+            "'ip addr' shows addresses, 'ip route' shows routes.",
+            "'ss -tulnp' shows listening sockets.",
+            "'nmcli device status' gives a quick device overview.",
+        ]
+        self.interface = None
+
+    def generate(self, **params):
+        self.interface = params.get('interface') or _get_primary_interface()
+
+        self.description = (
+            f"Verify the following network information for interface {self.interface}:\n"
+            f"  - The interface must be in the UP state\n"
+            f"  - The interface must have an IPv4 address assigned\n"
+            f"  - A default gateway must be present in the routing table\n"
+            f"  (Use ip, nmcli, or ss commands to verify)"
+        )
+
+        self.hints = [
+            f"ip addr show {self.interface}",
+            "ip route show default",
+            "nmcli device status",
+            "ss -tulnp",
+        ]
+        return self
+
+    def validate(self):
+        checks = []
+        total = 0
+
+        # 1. Interface UP (2 pts)
+        state = get_interface_state(self.interface)
+        if state == 'UP':
+            checks.append(ValidationCheck("interface_up", True, 2,
+                          f"Interface {self.interface} is UP"))
+            total += 2
+        else:
+            checks.append(ValidationCheck("interface_up", False, 0,
+                          f"Interface {self.interface} is {state}", max_points=2))
+
+        # 2. Has IP (2 pts)
+        ip = get_ip_address(self.interface)
+        if ip:
+            checks.append(ValidationCheck("has_ip", True, 2,
+                          f"IPv4 address: {ip}"))
+            total += 2
+        else:
+            checks.append(ValidationCheck("has_ip", False, 0,
+                          f"No IPv4 on {self.interface}", max_points=2))
+
+        # 3. Default gateway exists (1 pt)
+        gw = get_default_gateway()
+        if gw:
+            checks.append(ValidationCheck("has_gateway", True, 1,
+                          f"Default gateway: {gw}"))
+            total += 1
+        else:
+            checks.append(ValidationCheck("has_gateway", False, 0,
+                          "No default gateway found", max_points=1))
+
+        passed = total >= (self.points * 0.6)
+        return ValidationResult(self.id, passed, total, self.points, checks)
+
+
+# ===================================================================
+# 14. ConfigureSearchDomainTask  (medium / 8 pts) [PERSIST]
+# ===================================================================
+
+@TaskRegistry.register("networking")
+class ConfigureSearchDomainTask(BaseTask):
+    """Configure a DNS search domain via nmcli."""
+
+    def __init__(self):
+        super().__init__(
+            id="net_search_domain_001",
+            category="networking",
+            difficulty="medium",
+            points=8
+        )
+        self.requires_persistence = True
+        self.tags = ["nmcli", "dns", "search-domain", "persistence"]
+        self.exam_tips = [
+            "Use ipv4.dns-search (not /etc/resolv.conf) to set search domains.",
+            "Verify with 'cat /etc/resolv.conf' (look for 'search' line).",
+        ]
+        self.search_domain = None
+        self.connection_name = None
+
+    def generate(self, **params):
+        domains = ['example.com', 'lab.local', 'corp.example.com',
+                    'test.internal', 'dev.example.net']
+        self.search_domain = params.get('domain', random.choice(domains))
+        iface = _get_practice_interface()
+        self.connection_name = params.get('connection') or _get_connection_name(iface) or iface
+
+        self.description = (
+            f"Configure a DNS search domain:\n"
+            f"  - Connection: {self.connection_name}\n"
+            f"  - Search domain: {self.search_domain}\n"
+            f"  - Use nmcli (do NOT edit resolv.conf directly)\n"
+            f"  - Activate the connection\n"
+            f"  - Must persist across reboots"
+        )
+
+        self.hints = [
+            f"nmcli con mod {self.connection_name} ipv4.dns-search {self.search_domain}",
+            f"nmcli con up {self.connection_name}",
+            "Verify: cat /etc/resolv.conf  (look for 'search' line)",
+            f"Verify: nmcli -f ipv4.dns-search con show {self.connection_name}",
+        ]
+        return self
+
+    def validate(self):
+        checks = []
+        total = 0
+
+        # 1. Search domain in resolv.conf (3 pts)
+        result = execute_safe(['cat', '/etc/resolv.conf'])
+        resolv_ok = False
+        if result.success:
+            for line in result.stdout.splitlines():
+                if line.strip().startswith('search') and self.search_domain in line:
+                    resolv_ok = True
+                    break
+        if resolv_ok:
+            checks.append(ValidationCheck("search_active", True, 3,
+                          f"Search domain '{self.search_domain}' in resolv.conf"))
+            total += 3
+        else:
+            checks.append(ValidationCheck("search_active", False, 0,
+                          f"Search domain '{self.search_domain}' not in resolv.conf", max_points=3))
+
+        # 2. Persistent in connection profile (3 pts)
+        conn = get_nmcli_connection_info(self.connection_name)
+        dns_search = str(conn.get('ipv4.dns-search', '')) if conn else ''
+        if self.search_domain in dns_search:
+            checks.append(ValidationCheck("search_persistent", True, 3,
+                          "Search domain configured persistently"))
+            total += 3
+        else:
+            checks.append(ValidationCheck("search_persistent", False, 0,
+                          "Search domain not in connection profile", max_points=3))
+
+        # 3. Connection active (2 pts)
+        result = execute_safe(['nmcli', '-t', '-f', 'GENERAL.STATE', 'con', 'show', self.connection_name])
+        if result.success and 'activated' in result.stdout.lower():
+            checks.append(ValidationCheck("connection_active", True, 2,
+                          f"Connection '{self.connection_name}' is active"))
+            total += 2
+        else:
+            checks.append(ValidationCheck("connection_active", False, 0,
+                          f"Connection not active", max_points=2))
+
+        passed = total >= (self.points * 0.7)
+        return ValidationResult(self.id, passed, total, self.points, checks)
+
+
+# ===================================================================
+# 15. FullNetworkSetupTask  (exam / 20 pts) [PERSIST]
+# ===================================================================
+
+@TaskRegistry.register("networking")
+class FullNetworkSetupTask(BaseTask):
+    """Complete network configuration: static IP + DNS + hostname + gateway."""
+
+    def __init__(self):
+        super().__init__(
+            id="net_full_setup_001",
+            category="networking",
+            difficulty="exam",
+            points=20
+        )
+        self.requires_persistence = True
+        self.tags = ["nmcli", "hostnamectl", "full-setup", "persistence", "compound"]
+        self.exam_tips = [
+            "This is a compound task - tackle each piece: hostname, IP, gateway, DNS.",
+            "Set hostname with hostnamectl, everything else with nmcli.",
+            "Always bring the connection up after all modifications.",
+            "Verify every component independently before moving on.",
+        ]
+        self.hostname = None
+        self.interface = None
+        self.connection_name = None
+        self.ip_address = None
+        self.prefix = None
+        self.gateway = None
+        self.dns_servers = None
+
+    def generate(self, **params):
+        subnet = _random_subnet()
+        self.hostname = params.get('hostname', _random_hostname())
+        self.interface = params.get('interface') or _get_practice_interface()
+        self.connection_name = params.get('connection') or _get_connection_name(self.interface) or self.interface
+        self.ip_address = params.get('ip', f'192.168.{subnet}.{_random_host()}')
+        self.prefix = params.get('prefix', '24')
+        self.gateway = params.get('gateway', f'192.168.{subnet}.1')
+        self.dns_servers = params.get('dns', _random_dns_pair())
+        if isinstance(self.dns_servers, str):
+            self.dns_servers = [self.dns_servers]
+        dns_str = ' '.join(self.dns_servers)
+
+        self.description = (
+            f"Perform a COMPLETE network configuration:\n"
+            f"  1. Set hostname to: {self.hostname}\n"
+            f"  2. Configure connection '{self.connection_name}' on {self.interface}:\n"
+            f"     - IP Address: {self.ip_address}/{self.prefix}\n"
+            f"     - Gateway: {self.gateway}\n"
+            f"     - DNS Servers: {', '.join(self.dns_servers)}\n"
+            f"     - IPv4 method: manual\n"
+            f"  3. Activate the connection\n"
+            f"  ALL settings must persist across reboots."
+        )
+
+        self.hints = [
+            f"hostnamectl set-hostname {self.hostname}",
+            f"nmcli con mod {self.connection_name} ipv4.addresses {self.ip_address}/{self.prefix}",
+            f"nmcli con mod {self.connection_name} ipv4.gateway {self.gateway}",
+            f"nmcli con mod {self.connection_name} ipv4.dns \"{dns_str}\"",
+            f"nmcli con mod {self.connection_name} ipv4.method manual",
+            f"nmcli con up {self.connection_name}",
+            "Verify: hostnamectl; ip addr; ip route; cat /etc/resolv.conf",
+        ]
+        return self
+
+    def validate(self):
+        checks = []
+        total = 0
+
+        # 1. Hostname (4 pts)
+        result = execute_safe(['hostname'])
+        current_hostname = result.stdout.strip() if result.success else None
+        if current_hostname == self.hostname:
+            checks.append(ValidationCheck("hostname_set", True, 4,
+                          f"Hostname is {self.hostname}"))
+            total += 4
+        else:
+            checks.append(ValidationCheck("hostname_set", False, 0,
+                          f"Hostname is '{current_hostname}', expected '{self.hostname}'", max_points=4))
+
+        # 2. IP address (5 pts)
+        actual_ip = get_ip_address(self.interface)
         if actual_ip == self.ip_address:
-            checks.append(ValidationCheck(
-                name="ip_set",
-                passed=True,
-                points=4,
-                message=f"Static IP {self.ip_address} is active"
-            ))
-            total_points += 4
-        elif conn_info and self.ip_address in str(conn_info.get('ipv4.addresses', '')):
-            checks.append(ValidationCheck(
-                name="ip_set",
-                passed=True,
-                points=3,
-                message=f"IP configured, connection may need activation (partial)"
-            ))
-            total_points += 3
+            checks.append(ValidationCheck("ip_configured", True, 5,
+                          f"IP {self.ip_address} configured on {self.interface}"))
+            total += 5
         else:
-            checks.append(ValidationCheck(
-                name="ip_set",
-                passed=False,
-                points=0,
-                max_points=4,
-                message=f"IP is {actual_ip}, expected {self.ip_address}"
-            ))
+            checks.append(ValidationCheck("ip_configured", False, 0,
+                          f"IP is {actual_ip}, expected {self.ip_address}", max_points=5))
 
-        passed = total_points >= (self.points * 0.7)
-        return ValidationResult(self.id, passed, total_points, self.points, checks)
+        # 3. Gateway (3 pts)
+        gw = get_default_gateway()
+        if gw == self.gateway:
+            checks.append(ValidationCheck("gateway_configured", True, 3,
+                          f"Gateway {self.gateway} is active"))
+            total += 3
+        else:
+            checks.append(ValidationCheck("gateway_configured", False, 0,
+                          f"Gateway is {gw}, expected {self.gateway}", max_points=3))
+
+        # 4. DNS servers (3 pts)
+        current_dns = get_dns_servers()
+        all_dns = all(d in current_dns for d in self.dns_servers)
+        if all_dns:
+            checks.append(ValidationCheck("dns_configured", True, 3,
+                          "All DNS servers configured"))
+            total += 3
+        elif any(d in current_dns for d in self.dns_servers):
+            checks.append(ValidationCheck("dns_configured", True, 1,
+                          "Some DNS servers configured (partial)"))
+            total += 1
+        else:
+            checks.append(ValidationCheck("dns_configured", False, 0,
+                          f"DNS not configured (current: {current_dns})", max_points=3))
+
+        # 5. Persistent config - method is manual (3 pts)
+        conn = get_nmcli_connection_info(self.connection_name)
+        if conn and conn.get('ipv4.method') == 'manual':
+            checks.append(ValidationCheck("method_manual", True, 3,
+                          "ipv4.method is 'manual' (persistent)"))
+            total += 3
+        else:
+            method = conn.get('ipv4.method', 'unknown') if conn else 'connection not found'
+            checks.append(ValidationCheck("method_manual", False, 0,
+                          f"ipv4.method is '{method}'", max_points=3))
+
+        # 6. Interface UP (2 pts)
+        state = get_interface_state(self.interface)
+        if state == 'UP':
+            checks.append(ValidationCheck("interface_up", True, 2,
+                          f"Interface {self.interface} is UP"))
+            total += 2
+        else:
+            checks.append(ValidationCheck("interface_up", False, 0,
+                          f"Interface is {state}", max_points=2))
+
+        passed = total >= (self.points * 0.7)
+        return ValidationResult(self.id, passed, total, self.points, checks)

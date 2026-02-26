@@ -1,11 +1,13 @@
 """
-Base task class for all RHCSA exam tasks.
+Base task class for all RHCSA EX200 v10 exam tasks.
 """
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Optional
 import logging
+
+from config import settings
 
 
 logger = logging.getLogger(__name__)
@@ -20,15 +22,6 @@ class BaseTask(ABC):
     """
 
     def __init__(self, id, category, difficulty, points):
-        """
-        Initialize base task.
-
-        Args:
-            id (str): Unique task ID
-            category (str): Task category
-            difficulty (str): Difficulty level ('easy', 'exam', 'hard')
-            points (int): Maximum points for this task
-        """
         self.id = id
         self.category = category
         self.difficulty = difficulty
@@ -37,135 +30,82 @@ class BaseTask(ABC):
         self.hints = []
         self.params = {}
 
+        # v4.0.0 additions
+        self.exam_domain = settings.CATEGORY_TO_DOMAIN.get(category, 0)
+        self.requires_persistence = False
+        self.persistence_checks = []
+        self.exam_tips = []
+        self.prerequisites = []
+        self.tags = []
+
     @abstractmethod
     def generate(self, **params):
-        """
-        Generate task with randomized parameters.
-
-        This method should:
-        1. Accept optional parameters
-        2. Generate random values for task (usernames, sizes, etc.)
-        3. Set self.description with the task description
-        4. Set self.hints with helpful hints
-        5. Return self for method chaining
-
-        Args:
-            **params: Optional parameters to customize generation
-
-        Returns:
-            BaseTask: self for method chaining
-        """
+        """Generate task with randomized parameters. Returns self."""
         pass
 
     @abstractmethod
     def validate(self):
-        """
-        Validate task completion by checking system state.
-
-        This method should:
-        1. Use validators to check if task was completed correctly
-        2. Create ValidationCheck objects for each check
-        3. Calculate points earned
-        4. Return ValidationResult
-
-        Returns:
-            ValidationResult: Result of validation
-        """
+        """Validate task completion. Returns ValidationResult."""
         pass
 
-    def get_description(self):
+    def validate_persistence(self):
         """
-        Get task description.
+        Validate that task results survive a reboot.
+        Called by the reboot engine for tasks with requires_persistence=True.
+        Default: falls through to validate().
+        """
+        return self.validate()
 
-        Returns:
-            str: Task description
-        """
+    def get_description(self):
         return self.description
 
     def get_hints(self):
-        """
-        Get list of hints for the task.
-
-        Returns:
-            list: List of hint strings
-        """
         return self.hints
 
     def get_category_display_name(self):
-        """
-        Get formatted category name.
-
-        Returns:
-            str: Formatted category name
-        """
         from utils.formatters import format_category_name
         return format_category_name(self.category)
 
     def get_difficulty_display(self):
-        """
-        Get formatted difficulty level.
-
-        Returns:
-            str: Formatted difficulty
-        """
         from utils.formatters import format_difficulty
         return format_difficulty(self.difficulty)
 
-    def to_dict(self):
-        """
-        Convert task to dictionary.
+    def get_domain_display(self):
+        return settings.EXAM_DOMAINS.get(self.exam_domain, "Unknown")
 
-        Returns:
-            dict: Task data
-        """
+    def to_dict(self):
         return {
             'id': self.id,
             'category': self.category,
             'difficulty': self.difficulty,
             'points': self.points,
             'description': self.description,
-            'hints': self.hints
+            'hints': self.hints,
+            'exam_domain': self.exam_domain,
+            'requires_persistence': self.requires_persistence,
+            'tags': self.tags,
+            'exam_tips': self.exam_tips,
         }
 
     def __repr__(self):
-        """String representation of task."""
-        return f"<Task {self.id}: {self.category} ({self.difficulty}, {self.points}pts)>"
+        return f"<Task {self.id}: {self.category} ({self.difficulty}, {self.points}pts, D{self.exam_domain})>"
 
 
 class SimpleTask(BaseTask):
-    """
-    Simple task implementation for quick task creation.
-
-    This class provides a non-abstract implementation that can be used
-    for simple tasks without creating a new class.
-    """
+    """Non-abstract implementation for quick task creation."""
 
     def __init__(self, id, category, difficulty, points, description="", validation_func=None):
-        """
-        Initialize simple task.
-
-        Args:
-            id (str): Task ID
-            category (str): Category
-            difficulty (str): Difficulty
-            points (int): Points
-            description (str): Task description
-            validation_func (callable): Function that returns ValidationResult
-        """
         super().__init__(id, category, difficulty, points)
         self.description = description
         self._validation_func = validation_func
 
     def generate(self, **params):
-        """Generate task (already configured)."""
         return self
 
     def validate(self):
-        """Validate using provided function."""
         if self._validation_func:
             return self._validation_func()
 
-        # Default: return failed result
         from core.validator import ValidationResult
         return ValidationResult(
             task_id=self.id,

@@ -1,7 +1,7 @@
 """
-Main menu system for RHCSA Simulator v2.0.0
+Main menu system for RHCSA Simulator v4.0.0
 
-Streamlined interface with quick-access modes.
+Streamlined 9-option interface with ResultsDB dashboard.
 """
 
 import sys
@@ -13,27 +13,11 @@ class MenuSystem:
     """
     Main menu system for the application.
 
-    v2.0.0 Features:
-    - Simplified 9-option menu (down from 15)
-    - Quick-access keys for common actions
-    - Auto-cleanup status display
+    v4.0.0 Features:
+    - 9-option menu aligned with EX200 v10 domains
+    - SM-2 adaptive mode integration
+    - ResultsDB-powered dashboard
     """
-
-    def __init__(self):
-        """Initialize menu system."""
-        self._device_info = None
-
-    def _get_device_info(self):
-        """Get practice device info for display."""
-        if self._device_info is None:
-            try:
-                from device import get_device_manager
-                dm = get_device_manager()
-                device = dm.get_practice_device()
-                self._device_info = device if device else "No practice device"
-            except Exception:
-                self._device_info = "Unknown"
-        return self._device_info
 
     def display_main_menu(self):
         """Display main menu and get selection."""
@@ -43,76 +27,50 @@ class MenuSystem:
 
             # Quick Start section
             print(fmt.bold("QUICK START"))
-            fmt.print_menu_option('Q', "Quick Practice", "5 random tasks with auto-cleanup")
-            fmt.print_menu_option('E', "Mock Exam", "Full 15-task timed exam")
+            fmt.print_menu_option('Q', "Quick Practice", "5 random tasks")
+            fmt.print_menu_option('E', "Mock Exam", f"{settings.DEFAULT_EXAM_TASKS} tasks, {settings.DEFAULT_EXAM_DURATION} min, reboot sim")
             print()
 
-            # Learning section
-            print(fmt.bold("LEARN"))
-            fmt.print_menu_option(1, "Guided Practice", "Practice with hints & feedback")
-            fmt.print_menu_option(2, "Learn Mode", "Study concepts with examples")
-            fmt.print_menu_option(3, "Command Recall", "Build muscle memory")
-            print()
-
-            # Practice section
-            print(fmt.bold("PRACTICE"))
-            fmt.print_menu_option(4, "Category Practice", "Practice specific topics")
-            fmt.print_menu_option(5, "Scenario Mode", "Multi-step challenges")
-            fmt.print_menu_option(6, "Troubleshooting", "Fix broken systems")
+            # Learn & Practice section
+            print(fmt.bold("LEARN & PRACTICE"))
+            fmt.print_menu_option(1, "Learn Mode", "Domain-based study with SM-2 indicators")
+            fmt.print_menu_option(2, "Practice Mode", "Category-focused with retry & hints")
+            fmt.print_menu_option(3, "Adaptive Mode", "SM-2 driven weak-area practice")
             print()
 
             # Progress section
             print(fmt.bold("PROGRESS"))
-            fmt.print_menu_option(7, "Dashboard", "View stats & history")
-            fmt.print_menu_option(8, "Export Report", "Generate progress report")
+            fmt.print_menu_option(4, "Dashboard", "Stats, history & weak areas")
+            fmt.print_menu_option(5, "Export Report", "Generate progress report")
             print()
 
             # Footer
-            print(fmt.dim("─" * 50))
-            device = self._get_device_info()
-            if device and device != "No practice device":
-                print(fmt.dim(f"  Practice Device: {device} (auto-cleanup enabled)"))
-            print(fmt.dim(f"  [S] Setup  [?] Help  [0] Exit"))
+            print(fmt.dim("-" * 50))
+            print(fmt.dim("  [S] Setup  [?] Help  [0] Exit"))
             print()
 
             choice = input("Select option: ").strip().lower()
 
-            # Quick access keys
             if choice == 'q':
                 return 'quick_practice'
             elif choice == 'e':
                 return 'exam'
-
-            # Learning options
             elif choice == '1':
-                return 'guided_practice'
-            elif choice == '2':
                 return 'learn'
-            elif choice == '3':
-                return 'command_recall'
-
-            # Practice options
-            elif choice == '4':
+            elif choice == '2':
                 return 'practice'
-            elif choice == '5':
-                return 'scenario'
-            elif choice == '6':
-                return 'troubleshoot'
-
-            # Progress options
-            elif choice == '7':
+            elif choice == '3':
+                return 'adaptive'
+            elif choice == '4':
                 return 'dashboard'
-            elif choice == '8':
+            elif choice == '5':
                 return 'export'
-
-            # Utility options
             elif choice == 's':
                 return 'setup'
-            elif choice == '?' or choice == 'h':
+            elif choice in ('?', 'h'):
                 return 'help'
             elif choice == '0':
                 return 'exit'
-
             else:
                 print(fmt.error("Invalid selection."))
                 input("Press Enter to continue...")
@@ -122,132 +80,135 @@ class MenuSystem:
         fmt.print_header(f"{settings.APP_NAME} v{settings.VERSION}")
 
     def show_dashboard(self):
-        """Show unified progress dashboard."""
-        from core.results import get_results_manager
-        from core.bookmarks import get_weak_area_analyzer, get_bookmark_manager
+        """Show unified progress dashboard using ResultsDB."""
+        from core.results_db import get_results_db
+
+        db = get_results_db()
 
         fmt.clear_screen()
         fmt.print_header("PROGRESS DASHBOARD")
 
-        results_mgr = get_results_manager()
-        analyzer = get_weak_area_analyzer()
-        bookmarks = get_bookmark_manager()
-
         # Overall Stats
-        report = analyzer.get_summary_report()
+        exam_count = db.get_exam_count()
+        practice_count = db.get_practice_count()
+        all_stats = db.get_all_category_stats()
+
+        total_attempts = sum(s['attempts'] for s in all_stats) if all_stats else 0
+        total_passes = sum(s['passes'] for s in all_stats) if all_stats else 0
+        overall_rate = (total_passes / total_attempts * 100) if total_attempts > 0 else 0
+
         print(fmt.bold("Overall Performance"))
-        print(f"  Total Attempts: {report['total_attempts']}")
-        print(f"  Success Rate: {report['overall_success_rate']*100:.1f}%")
-        print(f"  Categories Practiced: {report['categories_practiced']}")
+        print(f"  Exams Taken: {exam_count}")
+        print(f"  Practice Attempts: {practice_count}")
+        print(f"  Categories Practiced: {len(all_stats)}")
+        print(f"  Overall Success Rate: {overall_rate:.0f}%")
         print()
 
         # Recent Exams
-        recent = results_mgr.get_recent_results(5)
+        recent = db.get_recent_exams(5)
         if recent:
             print(fmt.bold("Recent Exams"))
             for r in recent:
-                status = fmt.success("PASS") if r.passed else fmt.error("FAIL")
-                print(f"  {r.end_time[:10]} - {r.percentage:.0f}% {status}")
+                date = r['start_time'][:10] if r['start_time'] else "Unknown"
+                pct = r['percentage']
+                status = fmt.success("PASS") if r['passed'] else fmt.error("FAIL")
+                reboot = ""
+                if r['reboot_passed'] is not None:
+                    reboot = fmt.success(" [Reboot OK]") if r['reboot_passed'] else fmt.error(" [Boot FAIL]")
+                print(f"  {date} - {pct:.0f}% {status}{reboot}")
             print()
 
         # Weak Areas
-        if report['weak_categories']:
-            print(fmt.bold("Areas to Improve"))
-            for cat in report['weak_categories'][:3]:
-                print(f"  - {fmt.format_category_name(cat['category'])}: {cat['score_rate']*100:.0f}%")
+        weak = db.get_weak_categories(0.7)
+        if weak:
+            print(fmt.bold("Weak Areas (below 70%)"))
+            for w in weak[:5]:
+                cat_name = fmt.format_category_name(w['category'])
+                rate = w['success_rate'] * 100
+                attempts = w['attempts']
+                print(f"  - {cat_name}: {rate:.0f}% ({attempts} attempts)")
             print()
 
-        # Bookmarks
-        bm_list = bookmarks.get_all()
-        if bm_list:
-            print(fmt.bold(f"Bookmarked Tasks ({len(bm_list)})"))
-            for bm in bm_list[:3]:
-                print(f"  - {bm.task_id}")
+        # Due for Review
+        due = db.get_due_categories()
+        if due:
+            print(fmt.bold(f"Due for Review ({len(due)} categories)"))
+            for d in due[:5]:
+                cat_name = fmt.format_category_name(d['category'])
+                print(f"  - {cat_name}")
             print()
 
-        print(fmt.dim("Options: [W] Weak areas  [B] Bookmarks  [Enter] Return"))
-        choice = input().strip().lower()
+        # Persistence Failures
+        pf = db.get_persistence_failure_tasks()
+        if pf:
+            print(fmt.bold("Frequent Persistence Failures"))
+            for p in pf[:3]:
+                print(f"  - {p['task_id']} ({p['category']}) - {p['failures']} failures")
+            print()
 
-        if choice == 'w':
-            self.show_weak_areas()
-        elif choice == 'b':
-            self.show_bookmarks()
+        if not recent and not all_stats:
+            print(fmt.info("No data yet. Start practicing to see your progress!"))
+            print()
+
+        print(fmt.dim("Press Enter to return..."))
+        input()
 
     def show_help(self):
         """Display help information."""
         fmt.clear_screen()
         fmt.print_header("HELP")
 
-        help_text = """
-RHCSA Simulator v2.0.0 - Quick Guide
+        help_text = f"""
+{settings.APP_NAME} v{settings.VERSION} - Quick Guide
 
 QUICK START
-  Q - Quick Practice: 5 random tasks with auto-cleanup between each.
+  Q - Quick Practice: 5 random tasks with validation.
       Perfect for daily practice sessions.
 
-  E - Mock Exam: Full 15-task exam simulation with timer.
-      Tests all RHCSA objectives.
+  E - Mock Exam: {settings.DEFAULT_EXAM_TASKS}-task exam with {settings.DEFAULT_EXAM_DURATION}-min timer.
+      Domain-balanced, includes reboot simulation.
 
-LEARNING MODES
-  1. Guided Practice - Practice with 3-level progressive hints
-  2. Learn Mode - Study concepts with explanations & examples
-  3. Command Recall - Type commands to build muscle memory
-
-PRACTICE MODES
-  4. Category Practice - Focus on specific topics (LVM, users, etc.)
-  5. Scenario Mode - Multi-step real-world challenges
-  6. Troubleshooting - Diagnose and fix broken systems
+LEARN & PRACTICE
+  1. Learn Mode - Study EX200 v10 domains with explanations,
+     commands, exam tips. SM-2 indicators show weak areas.
+  2. Practice Mode - Pick a category, choose difficulty,
+     get instant feedback with retry & solution hints.
+  3. Adaptive Mode - SM-2 selects your weakest/due categories.
+     Difficulty adjusts to your performance. Best for review.
 
 PROGRESS
-  7. Dashboard - View your stats, history, and weak areas
-  8. Export Report - Generate PDF/HTML progress report
+  4. Dashboard - View exam history, success rates, weak areas,
+     spaced repetition due dates, persistence failures.
+  5. Export Report - Generate a progress report.
 
-AUTO-CLEANUP (NEW in v2.0.0!)
-  Resources are automatically cleaned up between tasks.
-  No more manual disk wiping! The simulator handles:
-  - Unmounting filesystems
-  - Deactivating swap
-  - Removing LVM structures (LVs, VGs, PVs)
-  - Wiping device signatures
-  - Cleaning /etc/fstab entries
-
-SETUP
-  Press 'S' to configure practice devices and options.
+EXAM DOMAINS (EX200 v10)
+  1. Software Management    2. System Setup & Boot
+  3. Users & Permissions    4. Storage & Filesystems
+  5. Network & DNS          6. Systemd & Services
+  7. SELinux & Firewall     8. Automation & Scripting
+  9. Container Management
 
 TIPS
   - Run as root (sudo) for full functionality
-  - Practice daily for best results
-  - Use bookmarks to save difficult tasks
+  - Practice daily for best results - SM-2 will schedule reviews
+  - Adaptive mode is the most effective for exam prep
+  - Persistence tasks require config that survives reboot
 
-For detailed RHCSA exam info: https://www.redhat.com/rhcsa
+For RHCSA exam info: https://www.redhat.com/rhcsa
         """
 
         print(help_text)
-        input("\nPress Enter to return to menu...")
+        input("Press Enter to return to menu...")
 
     def show_setup(self):
         """Show setup and configuration options."""
-        from device import get_device_manager, get_network_manager
-
         fmt.clear_screen()
         fmt.print_header("SETUP")
 
-        dm = get_device_manager()
-        nm = get_network_manager()
-        device = dm.get_practice_device()
-
-        print(fmt.bold("Current Configuration"))
-        print(f"  Practice Device: {device or 'Not detected'}")
-        print(f"  Auto-Cleanup: {'Enabled' if dm._cleanup_enabled else 'Disabled'}")
-        print(f"  Primary Network: {nm.get_primary_interface() or 'Unknown'} ({nm.get_primary_ip() or 'No IP'})")
-        print()
-
         print(fmt.bold("Options"))
-        print("  1. Setup Practice Disks")
-        print("  2. Toggle Auto-Cleanup")
-        print("  3. View Task Statistics")
-        print("  4. Refresh Device Detection")
-        print("  5. Network Backup/Restore")
+        print("  1. Setup Practice Disks (loop devices for LVM)")
+        print("  2. View Task Statistics")
+        print("  3. Network Backup/Restore")
         print("  0. Return to Menu")
         print()
 
@@ -256,22 +217,8 @@ For detailed RHCSA exam info: https://www.redhat.com/rhcsa
         if choice == '1':
             self.setup_practice_disks()
         elif choice == '2':
-            if dm._cleanup_enabled:
-                dm.disable_cleanup()
-                print(fmt.warning("Auto-cleanup disabled"))
-            else:
-                dm.enable_cleanup()
-                print(fmt.success("Auto-cleanup enabled"))
-            input("Press Enter to continue...")
-        elif choice == '3':
             self.show_stats()
-        elif choice == '4':
-            dm._practice_device = None
-            dm._detect_practice_device()
-            new_device = dm.get_practice_device()
-            print(fmt.info(f"Practice device: {new_device or 'None detected'}"))
-            input("Press Enter to continue...")
-        elif choice == '5':
+        elif choice == '3':
             self.network_management()
 
     def show_stats(self):
@@ -281,147 +228,76 @@ For detailed RHCSA exam info: https://www.redhat.com/rhcsa
         fmt.clear_screen()
         fmt.print_header("TASK STATISTICS")
 
-        # Initialize registry
         TaskRegistry.initialize()
-
-        # Print statistics
         TaskRegistry.print_statistics()
-
-        print()
-        input("Press Enter to return...")
-
-    def show_weak_areas(self):
-        """Show weak areas analysis and recommendations."""
-        from core.bookmarks import get_weak_area_analyzer
-
-        fmt.clear_screen()
-        fmt.print_header("WEAK AREA ANALYSIS")
-
-        analyzer = get_weak_area_analyzer()
-        report = analyzer.get_summary_report()
-
-        # Overall stats
-        print(fmt.bold("Overall Performance:"))
-        print(f"  Total Attempts: {report['total_attempts']}")
-        print(f"  Success Rate: {report['overall_success_rate']*100:.1f}%")
-        print(f"  Score Rate: {report['overall_score_rate']*100:.1f}%")
-        print(f"  Categories Practiced: {report['categories_practiced']}")
-        print()
-
-        # Weak areas
-        if report['weak_categories']:
-            fmt.print_weak_area_summary(report['weak_categories'])
-        else:
-            print(fmt.success("No significant weak areas detected!"))
-            print("Keep practicing to gather more data.")
-
-        print()
-
-        # Recommendations
-        if report['recommendations']:
-            print(fmt.bold("Recommendations:"))
-            for rec in report['recommendations']:
-                fmt.print_recommendation_card(rec)
-
-        print()
-        input("Press Enter to return...")
-
-    def show_bookmarks(self):
-        """Show and manage bookmarks."""
-        from core.bookmarks import get_bookmark_manager
-
-        fmt.clear_screen()
-        fmt.print_header("BOOKMARKS")
-
-        manager = get_bookmark_manager()
-        bookmarks = manager.get_all()
-
-        if not bookmarks:
-            print("No bookmarks saved yet.")
-            print()
-            print("You can bookmark tasks during practice sessions")
-            print("to revisit them later.")
-        else:
-            print(fmt.bold(f"Saved Bookmarks ({len(bookmarks)}):"))
-            print()
-
-            for i, bm in enumerate(bookmarks, 1):
-                print(f"  {fmt.bold(str(i) + '.')} {bm.task_id}")
-                print(f"      Category: {fmt.format_category_name(bm.category)}")
-                print(f"      Difficulty: {fmt.format_difficulty(bm.difficulty)}")
-                if bm.note:
-                    print(f"      Note: {fmt.dim(bm.note)}")
-                print()
-
-            # Options
-            print()
-            print("Options:")
-            print("  C - Clear all bookmarks")
-            print("  R - Return to menu")
-            print()
-
-            choice = input("Select option: ").strip().lower()
-            if choice == 'c':
-                from utils.helpers import confirm_action
-                if confirm_action("Clear all bookmarks?", default=False):
-                    manager.clear()
-                    print(fmt.success("Bookmarks cleared."))
 
         print()
         input("Press Enter to return...")
 
     def export_report(self):
         """Export progress report."""
-        from core.export import get_report_generator
-        from core.bookmarks import get_weak_area_analyzer
-        from core.mistakes_tracker import get_mistakes_tracker
+        from core.results_db import get_results_db
 
         fmt.clear_screen()
         fmt.print_header("EXPORT REPORT")
 
-        print("Generate a progress report in various formats.")
-        print()
-        print("Available formats:")
-        print("  1. Text file (.txt)")
-        print("  2. HTML file (.html)")
-        print("  3. PDF file (.pdf) - requires reportlab")
-        print("  0. Cancel")
+        db = get_results_db()
+
+        # Generate a text report from ResultsDB
+        print("Generating progress report...")
         print()
 
-        choice = input("Select format [1-3]: ").strip()
+        exam_count = db.get_exam_count()
+        practice_count = db.get_practice_count()
+        recent = db.get_recent_exams(10)
+        all_stats = db.get_all_category_stats()
+        weak = db.get_weak_categories(0.7)
 
-        if choice == '0':
-            return
+        # Build report
+        lines = []
+        lines.append(f"{settings.APP_NAME} v{settings.VERSION} - Progress Report")
+        lines.append("=" * 60)
+        lines.append("")
+        lines.append(f"Exams Taken: {exam_count}")
+        lines.append(f"Practice Attempts: {practice_count}")
+        lines.append(f"Categories Practiced: {len(all_stats)}")
+        lines.append("")
 
-        format_map = {'1': 'text', '2': 'html', '3': 'pdf'}
-        if choice not in format_map:
-            print(fmt.error("Invalid selection"))
-            input("Press Enter to continue...")
-            return
+        if recent:
+            lines.append("Recent Exams:")
+            for r in recent:
+                date = r['start_time'][:10] if r['start_time'] else "Unknown"
+                status = "PASS" if r['passed'] else "FAIL"
+                lines.append(f"  {date} - {r['percentage']:.0f}% {status}")
+            lines.append("")
 
-        fmt_choice = format_map[choice]
+        if all_stats:
+            lines.append("Category Performance:")
+            for s in all_stats:
+                rate = s['success_rate'] * 100
+                lines.append(f"  {s['category']}: {rate:.0f}% ({s['attempts']} attempts)")
+            lines.append("")
 
-        print()
-        print("Generating report...")
+        if weak:
+            lines.append("Weak Areas:")
+            for w in weak:
+                rate = w['success_rate'] * 100
+                lines.append(f"  {w['category']}: {rate:.0f}%")
+            lines.append("")
 
+        report_text = "\n".join(lines)
+
+        # Save to file
+        report_path = settings.DATA_DIR / "progress_report.txt"
         try:
-            generator = get_report_generator()
-            analyzer = get_weak_area_analyzer()
-            tracker = get_mistakes_tracker()
-
-            perf_data = analyzer.get_summary_report()
-            mistakes_data = {'patterns': tracker.get_mistake_patterns()}
-
-            filepath = generator.generate_progress_report(
-                perf_data, mistakes_data, format=fmt_choice
-            )
-
-            print()
-            print(fmt.success(f"Report generated successfully!"))
-            print(f"  Location: {filepath}")
+            with open(report_path, 'w') as f:
+                f.write(report_text)
+            print(fmt.success(f"Report saved to: {report_path}"))
         except Exception as e:
+            print(fmt.error(f"Error saving report: {e}"))
             print()
-            print(fmt.error(f"Error generating report: {e}"))
+            print("Report content:")
+            print(report_text)
 
         print()
         input("Press Enter to return...")
@@ -442,18 +318,21 @@ For detailed RHCSA exam info: https://www.redhat.com/rhcsa
 
         # Show current status
         print(fmt.bold("Current Status:"))
-        real_devices = get_available_block_devices()
-        loop_devices = get_loop_devices()
+        try:
+            real_devices = get_available_block_devices()
+            loop_devices = get_loop_devices()
 
-        if real_devices:
-            print(f"  Real disks available: {', '.join(real_devices)}")
-        else:
-            print(f"  Real disks available: None")
+            if real_devices:
+                print(f"  Real disks available: {', '.join(real_devices)}")
+            else:
+                print("  Real disks available: None")
 
-        if loop_devices:
-            print(f"  Practice disks (loop): {', '.join(loop_devices)}")
-        else:
-            print(f"  Practice disks (loop): None")
+            if loop_devices:
+                print(f"  Practice disks (loop): {', '.join(loop_devices)}")
+            else:
+                print("  Practice disks (loop): None")
+        except Exception:
+            print("  (Could not detect devices - are you running as root?)")
 
         print()
         print(fmt.bold("Options:"))
@@ -471,10 +350,6 @@ For detailed RHCSA exam info: https://www.redhat.com/rhcsa
             devices = create_practice_devices(count=2, size_mb=500)
             if devices:
                 print(fmt.success(f"Created devices: {', '.join(devices)}"))
-                print()
-                print("You can now use these for LVM practice:")
-                for dev in devices:
-                    print(f"  - {dev}")
             else:
                 print(fmt.error("Failed to create practice disks"))
 
@@ -508,7 +383,13 @@ For detailed RHCSA exam info: https://www.redhat.com/rhcsa
 
     def network_management(self):
         """Network backup and restore management."""
-        from device import get_network_manager
+        try:
+            from device import get_network_manager
+        except ImportError:
+            print(fmt.warning("Network management module not available."))
+            input("Press Enter to return...")
+            return
+
         from utils.helpers import confirm_action
 
         nm = get_network_manager()
@@ -518,23 +399,27 @@ For detailed RHCSA exam info: https://www.redhat.com/rhcsa
 
         # Show current state
         print(fmt.bold("Current Network State:"))
-        print(f"  Primary Interface: {nm.get_primary_interface() or 'Unknown'}")
-        print(f"  Primary IP: {nm.get_primary_ip() or 'Unknown'}")
+        try:
+            print(f"  Primary Interface: {nm.get_primary_interface() or 'Unknown'}")
+            print(f"  Primary IP: {nm.get_primary_ip() or 'Unknown'}")
+        except Exception:
+            print("  (Could not detect network state)")
         print()
 
-        # Show warning
         print(fmt.warning("WARNING: Network practice can disconnect SSH!"))
         print(fmt.dim("Always backup before practicing networking tasks."))
         print()
 
         # List existing backups
-        backups = nm.list_backups()
+        try:
+            backups = nm.list_backups()
+        except Exception:
+            backups = []
+
         if backups:
             print(fmt.bold(f"Available Backups ({len(backups)}):"))
             for i, b in enumerate(backups[:5], 1):
                 print(f"  {i}. {b['timestamp'][:19]} - {b['hostname']} ({b['primary_ip']})")
-            if len(backups) > 5:
-                print(fmt.dim(f"     ... and {len(backups) - 5} more"))
         else:
             print(fmt.dim("No backups found."))
         print()
@@ -553,10 +438,9 @@ For detailed RHCSA exam info: https://www.redhat.com/rhcsa
             print()
             print("Backing up network state...")
             filepath = nm.backup_state("manual")
-            print(fmt.success(f"Backup saved!"))
+            print(fmt.success("Backup saved!"))
             print(f"  Location: {filepath}")
             print()
-            # Also show recovery commands
             nm.print_recovery_commands()
 
         elif choice == '2':
@@ -595,13 +479,10 @@ For detailed RHCSA exam info: https://www.redhat.com/rhcsa
                                 print(fmt.error(result['error']))
                             else:
                                 print(fmt.success("Cleanup complete!"))
-                                if result['connections_removed']:
+                                if result.get('connections_removed'):
                                     print(f"  Removed connections: {', '.join(result['connections_removed'])}")
-                                if result['hostname_restored']:
-                                    print(f"  Hostname restored")
-                                fw = result.get('firewall_cleaned', {})
-                                if any(fw.values()):
-                                    print(f"  Firewall rules cleaned")
+                                if result.get('hostname_restored'):
+                                    print("  Hostname restored")
                     else:
                         print(fmt.error("Invalid selection"))
                 except ValueError:

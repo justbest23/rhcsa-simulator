@@ -1,5 +1,5 @@
 """
-Container management tasks for RHCSA exam (Podman).
+Container management tasks for RHCSA EX200 v10 exam (Podman).
 """
 
 import random
@@ -12,7 +12,7 @@ from validators.system_validators import (
     validate_image_exists
 )
 from validators.safe_executor import execute_safe
-from validators.file_validators import validate_file_contains
+from validators.file_validators import validate_file_exists, validate_file_contains
 
 
 logger = logging.getLogger(__name__)
@@ -29,6 +29,12 @@ class PullContainerImageTask(BaseTask):
             difficulty="easy",
             points=6
         )
+        self.tags = ['v10-new']
+        self.exam_tips = [
+            "Use 'podman pull' to download images",
+            "Fully qualified names: registry/namespace/image:tag",
+            "List local images: podman images",
+        ]
         self.image_name = None
 
     def generate(self, **params):
@@ -107,6 +113,13 @@ class RunContainerTask(BaseTask):
             difficulty="medium",
             points=10
         )
+        self.tags = ['v10-new']
+        self.exam_tips = [
+            "podman run -d runs detached (background)",
+            "--name assigns a name to the container",
+            "-p maps host:container ports",
+            "podman ps shows running containers",
+        ]
         self.container_name = None
         self.image_name = None
         self.port_mapping = None
@@ -194,6 +207,15 @@ class PersistentContainerTask(BaseTask):
             difficulty="exam",
             points=15
         )
+        self.requires_persistence = True
+        self.tags = ['v10-new', 'exam-seen']
+        self.exam_tips = [
+            "podman generate systemd --new --name <container> creates unit file",
+            "Place unit file in ~/.config/systemd/user/ for rootless",
+            "Or /etc/systemd/system/ for root containers",
+            "Enable with systemctl [--user] enable <service>",
+            "loginctl enable-linger <user> for rootless containers at boot",
+        ]
         self.container_name = None
         self.image_name = None
         self.service_name = None
@@ -268,7 +290,6 @@ class PersistentContainerTask(BaseTask):
             ))
 
         # Check 3: Systemd service exists and is enabled (5 points)
-        # Check both user and system services
         import os
         user_service_path = os.path.expanduser(f'~/.config/systemd/user/{self.service_name}')
         system_service_path = f'/etc/systemd/system/{self.service_name}'
@@ -318,6 +339,13 @@ class ContainerVolumeTask(BaseTask):
             difficulty="medium",
             points=12
         )
+        self.tags = ['v10-new']
+        self.exam_tips = [
+            "-v host_path:container_path mounts a volume",
+            "Create host directory first with mkdir -p",
+            ":Z or :z for SELinux relabeling",
+            ":ro for read-only mount",
+        ]
         self.container_name = None
         self.image_name = None
         self.host_path = None
@@ -427,6 +455,12 @@ class StopRemoveContainerTask(BaseTask):
             difficulty="easy",
             points=6
         )
+        self.tags = ['v10-new']
+        self.exam_tips = [
+            "podman stop <name> stops a running container",
+            "podman rm <name> removes a stopped container",
+            "podman rm -f <name> force removes (stop + remove)",
+        ]
         self.container_name = None
 
     def generate(self, **params):
@@ -486,6 +520,12 @@ class ContainerEnvVarsTask(BaseTask):
             difficulty="medium",
             points=10
         )
+        self.tags = ['v10-new']
+        self.exam_tips = [
+            "Use -e KEY=VALUE to set environment variables",
+            "Multiple -e flags for multiple variables",
+            "Verify with: podman exec <name> env",
+        ]
         self.container_name = None
         self.image_name = None
         self.env_vars = None
@@ -586,6 +626,12 @@ class InspectContainerTask(BaseTask):
             difficulty="medium",
             points=8
         )
+        self.tags = ['v10-new']
+        self.exam_tips = [
+            "podman inspect --format uses Go templates",
+            "Common: {{.NetworkSettings.IPAddress}}",
+            "Use jq for JSON parsing: podman inspect <name> | jq .",
+        ]
         self.container_name = None
         self.output_file = None
 

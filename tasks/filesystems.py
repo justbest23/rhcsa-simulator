@@ -30,6 +30,12 @@ class CreateFilesystemTask(BaseTask):
             difficulty="easy",
             points=6
         )
+        self.tags = ['v10-new', 'filesystem', 'mkfs']
+        self.exam_tips = [
+            "Use 'lsblk -f' or 'blkid' to verify filesystem type after creation",
+            "XFS is the default filesystem in RHEL 9 - know both mkfs.xfs and mkfs.ext4",
+            "Always verify the device path before formatting to avoid data loss",
+        ]
         self.device = None
         self.fstype = None
 
@@ -103,6 +109,13 @@ class MountFilesystemTask(BaseTask):
             difficulty="easy",
             points=8
         )
+        self.tags = ['v10-new', 'filesystem', 'mount']
+        self.exam_tips = [
+            "Create mount point with 'mkdir -p' before mounting",
+            "Use 'mount | grep <mount_point>' or 'df -h' to verify the mount",
+            "Temporary mounts with just 'mount' command won't survive reboot",
+            "Use 'lsblk' to see all block devices and their mount points",
+        ]
         self.device = None
         self.mount_point = None
 
@@ -190,6 +203,15 @@ class PersistentMountTask(BaseTask):
             difficulty="medium",
             points=12
         )
+        self.tags = ['v10-new', 'filesystem', 'fstab', 'persistence']
+        self.exam_tips = [
+            "ALWAYS use UUID in /etc/fstab, not device names (get with 'blkid')",
+            "Test fstab syntax with 'findmnt --verify' before rebooting",
+            "Use 'mount -a' to test mounting all fstab entries without rebooting",
+            "Format: UUID=<uuid> <mount_point> <fstype> <options> <dump> <pass>",
+            "Typical options: 'defaults' or 'defaults,noatime' for performance",
+        ]
+        self.requires_persistence = True
         self.device = None
         self.mount_point = None
         self.fstype = None
@@ -330,6 +352,15 @@ class ConfigureSwapTask(BaseTask):
             difficulty="medium",
             points=10
         )
+        self.tags = ['v10-new', 'swap', 'fstab', 'persistence']
+        self.exam_tips = [
+            "Format swap with 'mkswap <device>', activate with 'swapon <device>'",
+            "Use UUID in /etc/fstab: UUID=<uuid> none swap defaults 0 0",
+            "Verify active swap with 'swapon --show' or 'free -m'",
+            "Get UUID with 'blkid <device>' before adding to fstab",
+            "Swap must survive reboot - test with 'swapon -a' after editing fstab",
+        ]
+        self.requires_persistence = True
         self.device = None
         self.size_mb = None
 
@@ -433,6 +464,14 @@ class ExtendFilesystemTask(BaseTask):
             difficulty="exam",
             points=10
         )
+        self.tags = ['v10-new', 'filesystem', 'resize', 'xfs', 'ext4']
+        self.exam_tips = [
+            "For XFS: use 'xfs_growfs <mount_point>' (requires mounted filesystem)",
+            "For ext4: use 'resize2fs <device>' (can be done online for growth)",
+            "XFS can only grow, never shrink - plan accordingly",
+            "Always extend the underlying LV/partition before resizing filesystem",
+            "Verify new size with 'df -h' after resizing",
+        ]
         self.device = None
         self.fstype = None
         self.expected_size_mb = None
@@ -560,6 +599,15 @@ class CreateSwapFileTask(BaseTask):
             difficulty="exam",
             points=12
         )
+        self.tags = ['v10-new', 'swap', 'swapfile', 'fstab', 'persistence']
+        self.exam_tips = [
+            "Create file: 'dd if=/dev/zero of=/swapfile bs=1M count=<size>' or 'fallocate -l <size>M /swapfile'",
+            "CRITICAL: Set permissions to 600 with 'chmod 600 /swapfile' for security",
+            "Format with 'mkswap /swapfile', activate with 'swapon /swapfile'",
+            "Add to /etc/fstab: /swapfile none swap defaults 0 0 (no UUID for files)",
+            "Verify with 'swapon --show' - should show the file path and size",
+        ]
+        self.requires_persistence = True
         self.swap_file = None
         self.size_mb = None
 
@@ -684,6 +732,13 @@ class UnmountFilesystemTask(BaseTask):
             difficulty="easy",
             points=6
         )
+        self.tags = ['v10-new', 'filesystem', 'unmount']
+        self.exam_tips = [
+            "Check for processes using the filesystem with 'lsof <mount_point>' or 'fuser -m <mount_point>'",
+            "Use 'umount <mount_point>' to unmount (note: umount, not unmount)",
+            "If filesystem is busy, use 'umount -l' for lazy unmount as last resort",
+            "Verify unmount success with 'mount | grep <mount_point>' (should return nothing)",
+        ]
         self.mount_point = None
 
     def generate(self, **params):

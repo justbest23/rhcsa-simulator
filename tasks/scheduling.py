@@ -1,14 +1,16 @@
 """
-Task scheduling tasks for RHCSA exam (cron, at, systemd timers).
+Task scheduling tasks for RHCSA EX200 v10 exam (cron, at).
+Systemd timers are in systemd_timers.py.
 """
 
 import random
+import os
 import logging
 from tasks.base import BaseTask
 from tasks.registry import TaskRegistry
 from core.validator import ValidationCheck, ValidationResult
-from validators.system_validators import get_user_crontab, validate_cron_entry
 from validators.safe_executor import execute_safe
+from validators.file_validators import validate_file_contains
 
 
 logger = logging.getLogger(__name__)
@@ -22,9 +24,16 @@ class CreateCronJobTask(BaseTask):
         super().__init__(
             id="sched_cron_001",
             category="scheduling",
-            difficulty="medium",
+            difficulty="exam",
             points=10
         )
+        self.requires_persistence = True
+        self.tags = ['exam-seen']
+        self.exam_tips = [
+            "Cron format: minute hour day-of-month month day-of-week command",
+            "Use crontab -e to edit, crontab -l to verify",
+            "Common: */5 = every 5, 0 2 = at 2:00 AM",
+        ]
         self.username = None
         self.command = None
         self.schedule = None
@@ -82,14 +91,14 @@ class CreateCronJobTask(BaseTask):
         total_points = 0
 
         # Check if crontab entry exists
-        entries = get_user_crontab(self.username)
-
-        if entries is not None:
-            # Look for the command in crontab
+        result = execute_safe(['crontab', '-l', '-u', self.username])
+        if result.success and result.stdout.strip():
             found = False
-            for entry in entries:
+            for entry in result.stdout.split('\n'):
+                entry = entry.strip()
+                if not entry or entry.startswith('#'):
+                    continue
                 if self.command in entry:
-                    # Also check if schedule matches
                     if self.schedule in entry:
                         found = True
                         checks.append(ValidationCheck(
@@ -101,12 +110,11 @@ class CreateCronJobTask(BaseTask):
                         total_points += 10
                         break
                     else:
-                        # Command found but schedule might be different
                         checks.append(ValidationCheck(
                             name="cron_entry_partial",
                             passed=True,
                             points=5,
-                            message=f"Command found in crontab but schedule may differ (partial credit)"
+                            message=f"Command found but schedule may differ (partial credit)"
                         ))
                         total_points += 5
                         found = True
@@ -144,6 +152,13 @@ class CreateSystemCronTask(BaseTask):
             difficulty="medium",
             points=12
         )
+        self.requires_persistence = True
+        self.tags = ['v10-new']
+        self.exam_tips = [
+            "System cron files go in /etc/cron.d/",
+            "System cron format includes the user field: min hour day month weekday user command",
+            "Files must be owned by root and have 644 permissions",
+        ]
         self.job_name = None
         self.command = None
         self.schedule = None
@@ -182,7 +197,6 @@ class CreateSystemCronTask(BaseTask):
         total_points = 0
 
         import os
-        from validators.file_validators import validate_file_contains
 
         cron_file = f'/etc/cron.d/{self.job_name}'
 
@@ -273,6 +287,13 @@ class CreateAtJobTask(BaseTask):
             difficulty="easy",
             points=8
         )
+        self.tags = ['v10-new']
+        self.exam_tips = [
+            "Use 'at' for one-time scheduled tasks",
+            "Ensure atd service is running: systemctl start atd",
+            "View pending jobs: atq",
+            "Remove a job: atrm <job_number>",
+        ]
         self.time_spec = None
         self.command = None
 
@@ -360,151 +381,6 @@ class CreateAtJobTask(BaseTask):
 
 
 @TaskRegistry.register("scheduling")
-class CreateSystemdTimerTask(BaseTask):
-    """Create a systemd timer unit."""
-
-    def __init__(self):
-        super().__init__(
-            id="sched_timer_001",
-            category="scheduling",
-            difficulty="exam",
-            points=15
-        )
-        self.timer_name = None
-        self.service_name = None
-        self.on_calendar = None
-        self.command = None
-
-    def generate(self, **params):
-        """Generate systemd timer task."""
-        self.timer_name = params.get('timer_name', f'custom-task{random.randint(1,99)}')
-        self.service_name = f'{self.timer_name}.service'
-        self.timer_name_full = f'{self.timer_name}.timer'
-
-        schedules = [
-            ('daily', 'daily at midnight'),
-            ('*-*-* 02:00:00', 'daily at 2:00 AM'),
-            ('Mon *-*-* 00:00:00', 'weekly on Monday'),
-        ]
-
-        self.on_calendar = params.get('schedule', random.choice(schedules)[0])
-        schedule_desc = params.get('schedule_desc', self.on_calendar)
-
-        self.command = params.get('command', '/usr/local/bin/backup.sh')
-
-        self.description = (
-            f"Create a systemd timer:\n"
-            f"  - Timer name: {self.timer_name_full}\n"
-            f"  - Service name: {self.service_name}\n"
-            f"  - Schedule: {schedule_desc}\n"
-            f"  - Command to run: {self.command}\n"
-            f"  - Create both .service and .timer files in /etc/systemd/system/\n"
-            f"  - Enable and start the timer"
-        )
-
-        self.hints = [
-            f"Create service: /etc/systemd/system/{self.service_name}",
-            f"Create timer: /etc/systemd/system/{self.timer_name_full}",
-            f"Service [Service] section: ExecStart={self.command}",
-            f"Timer [Timer] section: OnCalendar={self.on_calendar}",
-            "Reload systemd: systemctl daemon-reload",
-            f"Enable timer: systemctl enable {self.timer_name_full}",
-            f"Start timer: systemctl start {self.timer_name_full}",
-            f"Check status: systemctl list-timers"
-        ]
-
-        return self
-
-    def validate(self):
-        """Validate systemd timer configuration."""
-        checks = []
-        total_points = 0
-
-        import os
-        from validators.file_validators import validate_file_contains
-
-        service_path = f'/etc/systemd/system/{self.service_name}'
-        timer_path = f'/etc/systemd/system/{self.timer_name_full}'
-
-        # Check 1: Service file exists (4 points)
-        if os.path.exists(service_path):
-            checks.append(ValidationCheck(
-                name="service_file_exists",
-                passed=True,
-                points=4,
-                message=f"Service file exists"
-            ))
-            total_points += 4
-        else:
-            checks.append(ValidationCheck(
-                name="service_file_exists",
-                passed=False,
-                points=0,
-                max_points=4,
-                message=f"Service file {service_path} not found"
-            ))
-
-        # Check 2: Timer file exists (4 points)
-        if os.path.exists(timer_path):
-            checks.append(ValidationCheck(
-                name="timer_file_exists",
-                passed=True,
-                points=4,
-                message=f"Timer file exists"
-            ))
-            total_points += 4
-        else:
-            checks.append(ValidationCheck(
-                name="timer_file_exists",
-                passed=False,
-                points=0,
-                max_points=4,
-                message=f"Timer file {timer_path} not found"
-            ))
-
-        # Check 3: Timer is enabled (4 points)
-        result = execute_safe(['systemctl', 'is-enabled', self.timer_name_full])
-        if result.success and 'enabled' in result.stdout:
-            checks.append(ValidationCheck(
-                name="timer_enabled",
-                passed=True,
-                points=4,
-                message=f"Timer is enabled"
-            ))
-            total_points += 4
-        else:
-            checks.append(ValidationCheck(
-                name="timer_enabled",
-                passed=False,
-                points=0,
-                max_points=4,
-                message=f"Timer is not enabled"
-            ))
-
-        # Check 4: Timer is active (3 points)
-        result = execute_safe(['systemctl', 'is-active', self.timer_name_full])
-        if result.success and result.stdout.strip() == 'active':
-            checks.append(ValidationCheck(
-                name="timer_active",
-                passed=True,
-                points=3,
-                message=f"Timer is active"
-            ))
-            total_points += 3
-        else:
-            checks.append(ValidationCheck(
-                name="timer_active",
-                passed=False,
-                points=0,
-                max_points=3,
-                message=f"Timer is not active"
-            ))
-
-        passed = total_points >= (self.points * 0.7)
-        return ValidationResult(self.id, passed, total_points, self.points, checks)
-
-
-@TaskRegistry.register("scheduling")
 class ListCronJobsTask(BaseTask):
     """List and save cron jobs for a user."""
 
@@ -515,6 +391,11 @@ class ListCronJobsTask(BaseTask):
             difficulty="easy",
             points=6
         )
+        self.tags = ['v10-new']
+        self.exam_tips = [
+            "crontab -l lists user cron jobs",
+            "Also check /etc/cron.d/, /etc/cron.daily/, /etc/crontab",
+        ]
         self.username = None
         self.output_file = None
 
@@ -543,7 +424,7 @@ class ListCronJobsTask(BaseTask):
         total_points = 0
 
         # Check: Output file exists
-        if validate_file_exists(self.output_file):
+        if os.path.exists(self.output_file):
             checks.append(ValidationCheck(
                 name="output_exists",
                 passed=True,
@@ -565,68 +446,214 @@ class ListCronJobsTask(BaseTask):
 
 
 @TaskRegistry.register("scheduling")
-class RemoveCronJobTask(BaseTask):
-    """Remove a specific cron job or all cron jobs for a user."""
+class CronExpressionTask(BaseTask):
+    """Write correct cron expression from description."""
 
     def __init__(self):
         super().__init__(
-            id="sched_remove_cron_001",
+            id="sched_cron_expr_001",
             category="scheduling",
-            difficulty="medium",
-            points=8
+            difficulty="exam",
+            points=12
         )
+        self.requires_persistence = True
+        self.tags = ['exam-seen']
+        self.exam_tips = [
+            "Cron fields: minute(0-59) hour(0-23) day(1-31) month(1-12) weekday(0-7)",
+            "*/N means every N units, 1-5 means Monday through Friday",
+            "Practice converting descriptions to cron expressions",
+        ]
+        self.cron_expression = None
+        self.description_text = None
         self.username = None
-        self.remove_all = True
+        self.command = None
 
     def generate(self, **params):
-        self.username = params.get('user', f'cronuser{random.randint(1,99)}')
-        self.remove_all = params.get('remove_all', True)
-
-        if self.remove_all:
-            self.description = (
-                f"Remove all cron jobs for a user:\n"
-                f"  - User: {self.username}\n"
-                f"  - Remove the user's entire crontab\n"
-                f"  - Verify no cron jobs remain"
-            )
-        else:
-            self.description = (
-                f"Edit cron jobs for a user:\n"
-                f"  - User: {self.username}\n"
-                f"  - Edit and remove unwanted cron entries"
-            )
-
-        self.hints = [
-            f"Remove all: crontab -r -u {self.username}",
-            f"Or edit: crontab -e -u {self.username}",
-            f"Verify: crontab -l -u {self.username}",
-            "Should show 'no crontab' after removal"
+        expressions = [
+            ('*/5 * * * *', 'every 5 minutes', '/usr/local/bin/check_health.sh'),
+            ('0 2 * * *', 'every day at 2:00 AM', '/usr/local/bin/backup.sh'),
+            ('0 0 * * 0', 'every Sunday at midnight', '/usr/local/bin/weekly_report.sh'),
+            ('30 8 1 * *', 'at 8:30 AM on the 1st of every month', '/usr/local/bin/monthly_audit.sh'),
+            ('0 */4 * * *', 'every 4 hours', '/usr/local/bin/sync_data.sh'),
+            ('0 9 * * 1-5', 'at 9:00 AM on weekdays', '/usr/local/bin/workday_task.sh'),
         ]
+        self.cron_expression, self.description_text, self.command = random.choice(expressions)
+        self.username = params.get('user', 'root')
 
+        self.description = (
+            f"Create a cron job with the correct schedule:\n"
+            f"  - User: {self.username}\n"
+            f"  - Schedule: {self.description_text}\n"
+            f"  - Command: {self.command}\n"
+            f"  - Write the correct cron expression and add it to the user's crontab"
+        )
+        self.hints = [
+            "Cron format: minute hour day-of-month month day-of-week",
+            f"Expected: {self.cron_expression} {self.command}",
+            "*/N = every N units, 0 = at zero, 1-5 = Monday-Friday",
+            f"Edit: crontab -e -u {self.username}",
+        ]
         return self
 
     def validate(self):
         checks = []
         total_points = 0
-
-        # Check: User's crontab should be empty/removed
         result = execute_safe(['crontab', '-l', '-u', self.username])
-        if not result.success or 'no crontab' in result.stderr.lower():
-            checks.append(ValidationCheck(
-                name="crontab_removed",
-                passed=True,
-                points=8,
-                message=f"Crontab removed for {self.username}"
-            ))
-            total_points += 8
+        if result.success:
+            for line in result.stdout.split('\n'):
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if self.command in line:
+                    if self.cron_expression in line:
+                        checks.append(ValidationCheck("cron_exact", True, 12, "Correct cron expression"))
+                        total_points = 12
+                    else:
+                        checks.append(ValidationCheck("cron_partial", True, 6, "Command found but schedule differs"))
+                        total_points = 6
+                    break
+            else:
+                checks.append(ValidationCheck("cron_missing", False, 0, "Command not found in crontab", max_points=12))
         else:
-            checks.append(ValidationCheck(
-                name="crontab_removed",
-                passed=False,
-                points=0,
-                max_points=8,
-                message=f"Crontab still exists for {self.username}"
-            ))
+            checks.append(ValidationCheck("no_crontab", False, 0, f"No crontab for {self.username}", max_points=12))
+        return ValidationResult(self.id, total_points >= 8, total_points, self.points, checks)
 
-        passed = total_points >= (self.points * 0.8)
-        return ValidationResult(self.id, passed, total_points, self.points, checks)
+
+@TaskRegistry.register("scheduling")
+class DenyCronAccessTask(BaseTask):
+    """Restrict cron access for specific users."""
+
+    def __init__(self):
+        super().__init__(
+            id="sched_cron_deny_001",
+            category="scheduling",
+            difficulty="medium",
+            points=8
+        )
+        self.requires_persistence = True
+        self.tags = ['v10-new']
+        self.exam_tips = [
+            "/etc/cron.allow takes precedence over /etc/cron.deny",
+            "If cron.allow exists, only listed users can use cron",
+            "If only cron.deny exists, listed users are blocked",
+        ]
+        self.username = None
+        self.method = None
+
+    def generate(self, **params):
+        self.username = params.get('user', f'user{random.randint(1, 99)}')
+        self.method = params.get('method', random.choice(['deny', 'allow']))
+
+        if self.method == 'deny':
+            self.description = (
+                f"Deny cron access for user {self.username}:\n"
+                f"  - Add {self.username} to /etc/cron.deny\n"
+                f"  - Verify the user cannot create cron jobs"
+            )
+        else:
+            self.description = (
+                f"Allow only specific users to use cron:\n"
+                f"  - Create /etc/cron.allow with user {self.username}\n"
+                f"  - Only users in cron.allow can use crontab"
+            )
+        self.hints = [
+            f"Deny: echo '{self.username}' >> /etc/cron.deny",
+            "Allow: create /etc/cron.allow with allowed usernames",
+            "cron.allow takes precedence over cron.deny",
+        ]
+        return self
+
+    def validate(self):
+        checks = []
+        total_points = 0
+        if self.method == 'deny':
+            result = execute_safe(['grep', self.username, '/etc/cron.deny'])
+            if result.success:
+                checks.append(ValidationCheck("cron_deny", True, 8, f"{self.username} in /etc/cron.deny"))
+                total_points = 8
+            else:
+                checks.append(ValidationCheck("cron_deny", False, 0, f"{self.username} not in /etc/cron.deny", max_points=8))
+        else:
+            result = execute_safe(['grep', self.username, '/etc/cron.allow'])
+            if result.success:
+                checks.append(ValidationCheck("cron_allow", True, 8, f"{self.username} in /etc/cron.allow"))
+                total_points = 8
+            else:
+                checks.append(ValidationCheck("cron_allow", False, 0, f"/etc/cron.allow missing or user not listed", max_points=8))
+        return ValidationResult(self.id, total_points >= 6, total_points, self.points, checks)
+
+
+@TaskRegistry.register("scheduling")
+class ConfigureCronDirTask(BaseTask):
+    """Place a script in /etc/cron.daily or similar directory."""
+
+    def __init__(self):
+        super().__init__(
+            id="sched_cron_dir_001",
+            category="scheduling",
+            difficulty="medium",
+            points=8
+        )
+        self.requires_persistence = True
+        self.tags = ['v10-new']
+        self.exam_tips = [
+            "Scripts in /etc/cron.daily/ run once per day via anacron",
+            "Scripts must be executable (chmod +x) and have a shebang",
+            "No file extension needed - anacron uses run-parts",
+        ]
+        self.cron_dir = None
+        self.script_name = None
+
+    def generate(self, **params):
+        dirs = [
+            ('/etc/cron.daily', 'daily'),
+            ('/etc/cron.hourly', 'hourly'),
+            ('/etc/cron.weekly', 'weekly'),
+        ]
+        self.cron_dir, freq = random.choice(dirs)
+        self.script_name = params.get('script', random.choice([
+            'cleanup-logs', 'backup-config', 'check-disk', 'rotate-data'
+        ]))
+
+        self.description = (
+            f"Create a {freq} cron task:\n"
+            f"  - Place script '{self.script_name}' in {self.cron_dir}/\n"
+            f"  - Script should run a simple command (e.g., log rotation)\n"
+            f"  - Script must be executable and have #!/bin/bash shebang"
+        )
+        self.hints = [
+            f"Create: vi {self.cron_dir}/{self.script_name}",
+            "First line: #!/bin/bash",
+            f"Make executable: chmod +x {self.cron_dir}/{self.script_name}",
+            "Scripts in cron.daily run once per day via anacron",
+        ]
+        return self
+
+    def validate(self):
+        checks = []
+        total_points = 0
+        script_path = f'{self.cron_dir}/{self.script_name}'
+
+        result = execute_safe(['test', '-f', script_path])
+        if result.success:
+            checks.append(ValidationCheck("script_exists", True, 3, "Script exists"))
+            total_points += 3
+        else:
+            checks.append(ValidationCheck("script_exists", False, 0, f"{script_path} not found", max_points=3))
+            return ValidationResult(self.id, False, 0, self.points, checks)
+
+        result = execute_safe(['test', '-x', script_path])
+        if result.success:
+            checks.append(ValidationCheck("executable", True, 3, "Script is executable"))
+            total_points += 3
+        else:
+            checks.append(ValidationCheck("executable", False, 0, "Script not executable", max_points=3))
+
+        result = execute_safe(['head', '-1', script_path])
+        if result.success and '#!/bin/bash' in result.stdout:
+            checks.append(ValidationCheck("shebang", True, 2, "Has #!/bin/bash shebang"))
+            total_points += 2
+        else:
+            checks.append(ValidationCheck("shebang", False, 0, "Missing shebang", max_points=2))
+
+        return ValidationResult(self.id, total_points >= 5, total_points, self.points, checks)

@@ -28,6 +28,13 @@ class SetFilePermissionsTask(BaseTask):
             difficulty="easy",
             points=4
         )
+        self.tags = ['v10-new']
+        self.exam_tips = [
+            "Use chmod command with octal notation (e.g., chmod 644 file)",
+            "Verify permissions with 'ls -l' - shows rwxrwxrwx format",
+            "Remember: r=4, w=2, x=1, combine them for each user/group/other",
+            "Common patterns: 644 (rw-r--r--), 755 (rwxr-xr-x), 600 (rw-------)"
+        ]
         self.file_path = None
         self.permissions = None
 
@@ -109,6 +116,13 @@ class SetFileOwnershipTask(BaseTask):
             difficulty="easy",
             points=5
         )
+        self.tags = ['v10-new']
+        self.exam_tips = [
+            "Use chown for changing owner and group: chown user:group file",
+            "Change only owner: chown user file",
+            "Change only group: chown :group file or use chgrp group file",
+            "Use -R flag for recursive changes on directories"
+        ]
         self.file_path = None
         self.owner = None
         self.group = None
@@ -212,6 +226,14 @@ class SetACLTask(BaseTask):
             difficulty="exam",
             points=8
         )
+        self.tags = ['v10-new', 'acl']
+        self.exam_tips = [
+            "ACLs grant additional permissions beyond basic owner/group/other",
+            "Set ACL with setfacl -m u:username:rwx file",
+            "View ACLs with getfacl file",
+            "ls -l shows '+' after permissions when ACLs are set",
+            "Remove ACL with setfacl -x u:username file"
+        ]
         self.file_path = None
         self.acl_user = None
         self.acl_perms = None
@@ -295,6 +317,14 @@ class SetSpecialPermissionsTask(BaseTask):
             difficulty="exam",
             points=7
         )
+        self.tags = ['v10-new', 'special-permissions']
+        self.exam_tips = [
+            "SUID (4): Runs executable with owner's permissions (chmod 4755 or chmod u+s)",
+            "SGID (2): On files runs with group permissions, on dirs new files inherit group (chmod 2755 or chmod g+s)",
+            "Sticky bit (1): Only file owner can delete files in directory (chmod 1777 or chmod +t)",
+            "ls -l shows 's' for SUID/SGID, 't' for sticky bit",
+            "Common: /tmp has sticky bit (drwxrwxrwt)"
+        ]
         self.file_path = None
         self.special_bit = None
         self.permissions = None
@@ -385,6 +415,15 @@ class SharedDirectoryTask(BaseTask):
             difficulty="exam",
             points=12
         )
+        self.tags = ['v10-new', 'special-permissions', 'collaborative']
+        self.exam_tips = [
+            "Collaborative directories need SGID + sticky bit = 3770",
+            "SGID (2xxx) makes new files inherit the directory's group",
+            "Sticky bit (1xxx) prevents users from deleting others' files",
+            "Combined: chmod 3770 gives both SGID and sticky",
+            "Set group ownership with chown :groupname directory",
+            "Verify with ls -ld - should show drwxrws--T or similar"
+        ]
         self.dir_path = None
         self.group = None
 
@@ -543,6 +582,15 @@ class DefaultACLTask(BaseTask):
             difficulty="exam",
             points=10
         )
+        self.tags = ['v10-new', 'acl', 'inheritance']
+        self.exam_tips = [
+            "Default ACLs only work on directories, not files",
+            "Use -d flag with setfacl to set default ACL: setfacl -d -m u:user:rwx dir",
+            "Default ACLs are inherited by newly created files/subdirectories",
+            "Without -d flag, ACL only applies to the directory itself",
+            "Verify with getfacl dir - look for 'default:user:' entries",
+            "Regular ACL affects existing directory, default ACL affects future contents"
+        ]
         self.dir_path = None
         self.acl_user = None
         self.acl_perms = None
@@ -673,6 +721,15 @@ class RecursivePermissionsTask(BaseTask):
             difficulty="medium",
             points=8
         )
+        self.tags = ['v10-new', 'recursive']
+        self.exam_tips = [
+            "Use chown -R user:group dir for recursive ownership changes",
+            "chmod -R applies same permissions to all files and directories",
+            "Better: use find to distinguish files vs directories",
+            "Find directories: find /path -type d -exec chmod 755 {} \\;",
+            "Find files: find /path -type f -exec chmod 644 {} \\;",
+            "This prevents giving execute permission to regular files"
+        ]
         self.dir_path = None
         self.dir_perms = None
         self.file_perms = None
@@ -781,3 +838,71 @@ class RecursivePermissionsTask(BaseTask):
 
         passed = total_points >= (self.points * 0.7)
         return ValidationResult(self.id, passed, total_points, self.points, checks)
+
+
+@TaskRegistry.register("permissions")
+class UmaskConfigTask(BaseTask):
+    """Configure umask for default permissions."""
+
+    def __init__(self):
+        super().__init__(
+            id="perm_umask_001",
+            category="permissions",
+            difficulty="medium",
+            points=10
+        )
+        self.requires_persistence = True
+        self.tags = ['v10-new', 'umask', 'persistent']
+        self.exam_tips = [
+            "Umask sets default permissions for newly created files",
+            "Umask subtracts from 666 (files) and 777 (directories)",
+            "Common umasks: 0022 (755/644), 0027 (750/640), 0077 (700/600)",
+            "Set permanently in ~/.bashrc, ~/.bash_profile, or /etc/profile.d/",
+            "System-wide: create script in /etc/profile.d/ with umask command",
+            "Test by logging in as user and running 'umask' command"
+        ]
+        self.umask_value = None
+        self.target_user = None
+
+    def generate(self, **params):
+        umasks = ['0027', '0077', '0022', '0002']
+        self.umask_value = params.get('umask', random.choice(umasks))
+        self.target_user = params.get('user', random.choice(['root', 'testuser']))
+        self.description = (
+            f"Configure default umask:\n"
+            f"  - Set umask to {self.umask_value} for user {self.target_user}\n"
+            f"  - Make the change persistent (survives login/logout)\n"
+            f"  - New files should be created with the correct default permissions"
+        )
+        self.hints = [
+            f"Set in ~/.bashrc or ~/.bash_profile: umask {self.umask_value}",
+            f"System-wide: /etc/profile.d/custom-umask.sh",
+            f"Verify: umask (should show {self.umask_value})",
+        ]
+        return self
+
+    def validate(self):
+        from validators.safe_executor import execute_safe
+        checks = []
+        total_points = 0
+        profile_files = []
+        if self.target_user == 'root':
+            profile_files = ['/root/.bashrc', '/root/.bash_profile']
+        else:
+            profile_files = [f'/home/{self.target_user}/.bashrc', f'/home/{self.target_user}/.bash_profile']
+        found = False
+        for pf in profile_files:
+            result = execute_safe(['grep', f'umask {self.umask_value}', pf])
+            if result.success and result.stdout.strip():
+                found = True
+                break
+        if not found:
+            result = execute_safe(['grep', '-r', f'umask {self.umask_value}', '/etc/profile.d/'])
+            if result.success and result.stdout.strip():
+                found = True
+        if found:
+            checks.append(ValidationCheck("umask_persistent", True, 10, f"Umask {self.umask_value} configured"))
+            total_points = 10
+        else:
+            checks.append(ValidationCheck("umask_persistent", False, 0, "Umask not found in profile", max_points=10))
+        return ValidationResult(self.id, total_points >= 7, total_points, self.points, checks)

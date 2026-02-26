@@ -25,6 +25,13 @@ class MountNFSShareTask(BaseTask):
             difficulty="medium",
             points=10
         )
+        self.tags = ['v10-new', 'nfs', 'network-storage']
+        self.exam_tips = [
+            "Use showmount -e to discover available NFS exports",
+            "Create mount point before mounting (mkdir -p)",
+            "NFS mount syntax: mount -t nfs server:/export /mountpoint",
+            "Common NFS options: rw, sync, hard, intr, timeo, retrans",
+        ]
         self.nfs_server = None
         self.nfs_export = None
         self.mount_point = None
@@ -125,6 +132,15 @@ class PersistentNFSMountTask(BaseTask):
             difficulty="medium",
             points=12
         )
+        self.requires_persistence = True
+        self.tags = ['v10-new', 'nfs', 'fstab', 'network-storage']
+        self.exam_tips = [
+            "fstab format: server:/export /mountpoint nfs defaults,_netdev 0 0",
+            "_netdev is CRITICAL for network mounts - delays mount until network is up",
+            "Use blkid or lsblk -f to get UUIDs for local filesystems (not for NFS)",
+            "Test fstab without reboot using: mount -a",
+            "Wrong fstab can prevent boot - always test before rebooting",
+        ]
         self.nfs_server = None
         self.nfs_export = None
         self.mount_point = None
@@ -256,6 +272,17 @@ class ConfigureAutofsTask(BaseTask):
             difficulty="exam",
             points=15
         )
+        self.requires_persistence = True
+        self.tags = ['v10-new', 'autofs', 'nfs', 'network-storage']
+        self.exam_tips = [
+            "Install autofs package first: dnf install autofs -y",
+            "Two files needed: /etc/auto.master (master map) and /etc/auto.* (mount map)",
+            "Master map format: /mountpoint /etc/auto.mapname",
+            "Mount map format: subdirectory -options server:/export",
+            "Enable and start autofs service: systemctl enable --now autofs",
+            "Test by accessing the mount point (triggers auto-mount)",
+            "After config changes: systemctl restart autofs",
+        ]
         self.nfs_server = None
         self.nfs_export = None
         self.autofs_mount = None
@@ -403,6 +430,16 @@ class AutofsHomeDirectoriesTask(BaseTask):
             difficulty="exam",
             points=18
         )
+        self.requires_persistence = True
+        self.tags = ['v10-new', 'autofs', 'nfs', 'network-storage', 'home-directories']
+        self.exam_tips = [
+            "Wildcard substitution: * in map matches any name, & substitutes matched value",
+            "Example: * -rw,sync server:/export/& mounts /mountpoint/user to server:/export/user",
+            "For home dirs: /home/guests /etc/auto.home in master map",
+            "In auto.home: * -rw,sync server:/home/&",
+            "Test by cd /home/guests/username - should auto-mount",
+            "Check mounts: mount | grep autofs",
+        ]
         self.nfs_server = None
         self.home_export = None
 
@@ -537,6 +574,15 @@ class MountCIFSShareTask(BaseTask):
             difficulty="medium",
             points=10
         )
+        self.tags = ['v10-new', 'cifs', 'smb', 'network-storage']
+        self.exam_tips = [
+            "Install cifs-utils package: dnf install cifs-utils -y",
+            "CIFS mount syntax: mount -t cifs //server/share /mountpoint -o credentials=file",
+            "Credentials file format: username=user\\npassword=pass",
+            "Secure credentials: chmod 600 /root/smb.cred",
+            "Never put passwords directly in fstab - use credentials file",
+            "For Windows shares: use CIFS, not SMB in mount command",
+        ]
         self.server = None
         self.share = None
         self.mount_point = None
@@ -666,6 +712,16 @@ class PersistentCIFSMountTask(BaseTask):
             difficulty="medium",
             points=12
         )
+        self.requires_persistence = True
+        self.tags = ['v10-new', 'cifs', 'smb', 'fstab', 'network-storage']
+        self.exam_tips = [
+            "fstab CIFS format: //server/share /mountpoint cifs credentials=/path/to/cred,_netdev 0 0",
+            "_netdev is REQUIRED for network mounts in fstab",
+            "Credentials file must exist before mount -a or system boot",
+            "Other useful options: uid=username, gid=groupname, file_mode=0755",
+            "Test fstab: mount -a (mounts all fstab entries)",
+            "Verify: mount | grep cifs",
+        ]
         self.server = None
         self.share = None
         self.mount_point = None

@@ -1,5 +1,5 @@
 """
-Global configuration settings for RHCSA Simulator.
+Global configuration settings for RHCSA EX200 v10 Simulator v4.0.0
 """
 
 import os
@@ -21,15 +21,22 @@ if not INSTALL_DIR.exists():
 # Create data directories if they don't exist
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
-# Exam configuration
-DEFAULT_EXAM_DURATION = 150  # minutes (2.5 hours)
-DEFAULT_EXAM_TASKS = 15
+# SQLite database path
+DB_PATH = DATA_DIR / "rhcsa_simulator.db"
+
+# Exam configuration - v10 aligned
+DEFAULT_EXAM_DURATION = 180  # minutes (3 hours - real exam)
+DEFAULT_EXAM_TASKS = 12  # range 10-15 on real exam
+EXAM_TASK_RANGE = (10, 15)
+MAX_EXAM_SCORE = 300  # matches real exam
 EXAM_PASS_THRESHOLD = 0.70  # 70% to pass
+
+# Reboot simulation
+REBOOT_SIMULATION = True
 
 # Task configuration
 DIFFICULTY_LEVELS = ["easy", "medium", "exam", "hard"]
 TASK_CATEGORIES = [
-    "essential_tools",
     "users_groups",
     "permissions",
     "lvm",
@@ -38,17 +45,47 @@ TASK_CATEGORIES = [
     "selinux",
     "services",
     "boot",
-    "processes",
     "scheduling",
     "containers",
     "scripting",
     "packages",
-    "storage",
-    "ssh",
-    "time_services",
     "partitioning",
-    "network_storage"
+    "network_storage",
+    "repos",
+    "flatpak",
+    "modules",
+    "boot_recovery",
+    "journalctl",
+    "systemd_timers",
+    "firewall",
+    "swap",
 ]
+
+# EX200 v10 Exam Domains (1-9)
+EXAM_DOMAINS = {
+    1: "Software Management",
+    2: "System Setup & Boot",
+    3: "Users, Groups & Permissions",
+    4: "Storage & Filesystems",
+    5: "Network & DNS",
+    6: "Systemd, Services & Processes",
+    7: "Security - SELinux & Firewall",
+    8: "Automation & Scripting",
+    9: "Container Management",
+}
+
+# Map categories to domains
+CATEGORY_TO_DOMAIN = {
+    "packages": 1, "repos": 1, "flatpak": 1, "modules": 1,
+    "boot": 2, "boot_recovery": 2, "journalctl": 2,
+    "users_groups": 3, "permissions": 3,
+    "partitioning": 4, "lvm": 4, "filesystems": 4, "swap": 4, "network_storage": 4,
+    "networking": 5,
+    "services": 6, "systemd_timers": 6,
+    "selinux": 7, "firewall": 7,
+    "scheduling": 8, "scripting": 8,
+    "containers": 9,
+}
 
 # Practice mode configuration
 DEFAULT_PRACTICE_TASKS = 5
@@ -61,9 +98,10 @@ MAX_RETRIES = 3
 
 # Point values by difficulty
 POINTS_BY_DIFFICULTY = {
-    "easy": (3, 6),      # Range: 3-6 points
-    "exam": (5, 12),     # Range: 5-12 points
-    "hard": (10, 20)     # Range: 10-20 points
+    "easy": (3, 8),
+    "medium": (8, 12),
+    "exam": (10, 20),
+    "hard": (15, 20),
 }
 
 # Safe commands whitelist for validation (read-only operations)
@@ -82,13 +120,14 @@ SAFE_VALIDATION_COMMANDS = {
     'ls', 'stat', 'getfacl', 'cat', 'head', 'tail', 'find',
 
     # Network info
-    'ip', 'nmcli', 'hostnamectl', 'hostname', 'ss', 'ping', 'teamdctl',
+    'ip', 'nmcli', 'hostnamectl', 'hostname', 'ss', 'ping',
 
     # Firewall info
     'firewall-cmd',
 
     # SELinux info
     'getenforce', 'getsebool', 'semanage', 'sestatus', 'matchpathcon',
+    'ausearch', 'audit2why', 'sealert',
 
     # Service/systemd info
     'systemctl', 'journalctl',
@@ -105,6 +144,9 @@ SAFE_VALIDATION_COMMANDS = {
     # Package management (read-only)
     'rpm', 'dnf', 'yum',
 
+    # Flatpak (read-only)
+    'flatpak',
+
     # Time services (read-only)
     'timedatectl', 'chronyc',
 
@@ -114,70 +156,52 @@ SAFE_VALIDATION_COMMANDS = {
     # Partitioning (read-only - query only)
     'parted', 'fdisk', 'gdisk', 'partprobe',
 
-    # RAID (read-only)
-    'mdadm',
-
-    # Stratis (read-only)
-    'stratis',
-
     # Shell/scripting (read-only)
     'bash', 'test', 'which', 'type',
 
+    # Boot analysis
+    'systemd-analyze', 'grubby',
+
     # Miscellaneous
-    'grep', 'awk', 'sed', 'cut', 'sort', 'uniq', 'wc', 'date'
+    'grep', 'awk', 'sed', 'cut', 'sort', 'uniq', 'wc', 'date',
+    'chage', 'passwd',
 }
 
 # Dangerous patterns to block (security)
 DANGEROUS_PATTERNS = [
-    r';\s*rm\s+-rf',          # Command injection - rm -rf
-    r'\|\s*sh',                # Pipe to shell
-    r'\|\s*bash',              # Pipe to bash
-    r'`.*`',                   # Command substitution (backticks)
-    r'\$\(',                   # Command substitution $(...)
-    r'>\s*/dev/',              # Device redirection
-    r'>\s*/etc/',              # System config redirection
-    r'dd\s+.*of=/dev/',        # Dangerous dd operations
-    r'mkfs',                   # Filesystem creation (not read-only)
+    r';\s*rm\s+-rf',
+    r'\|\s*sh',
+    r'\|\s*bash',
+    r'`.*`',
+    r'\$\(',
+    r'>\s*/dev/',
+    r'>\s*/etc/',
+    r'dd\s+.*of=/dev/',
+    r'mkfs',
 ]
 
 # Logging configuration
 LOG_DIR = DATA_DIR / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 LOG_FILE = LOG_DIR / "rhcsa_simulator.log"
-LOG_LEVEL = "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+LOG_LEVEL = "INFO"
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 # Display configuration
-USE_COLOR = True  # ANSI color codes for terminal output
-DISPLAY_WIDTH = 80  # Characters
+USE_COLOR = True
+DISPLAY_WIDTH = 80
 SHOW_PROGRESS_BAR = True
 
 # Timer configuration
-TIMER_WARNING_MINUTES = 30  # Warn when this many minutes remain
-TIMER_CHECK_INTERVAL = 60  # Check timer every N seconds
+TIMER_WARNING_MINUTES = 30
+TIMER_CHECK_INTERVAL = 60
 
 # Result file configuration
 RESULT_FILE_PREFIX = "exam_result_"
 RESULT_FILE_SUFFIX = ".json"
-MAX_STORED_RESULTS = 100  # Maximum number of results to keep
-
-# RHCSA objectives mapping (for reference)
-RHCSA_OBJECTIVES = {
-    "essential_tools": "Understand and use essential tools",
-    "users_groups": "Manage users and groups",
-    "permissions": "Manage security (permissions, ACLs)",
-    "lvm": "Configure local storage (LVM)",
-    "filesystems": "Create and configure file systems",
-    "networking": "Deploy, configure, and maintain systems (networking)",
-    "selinux": "Manage security (SELinux)",
-    "services": "Deploy, configure, and maintain systems (services)",
-    "boot": "Manage system boot process",
-    "processes": "Manage processes",
-    "scheduling": "Schedule tasks",
-    "containers": "Manage containers"
-}
+MAX_STORED_RESULTS = 100
 
 # Version
-VERSION = "3.0.0"
-APP_NAME = "RHCSA Mock Exam Simulator"
+VERSION = "4.0.0"
+APP_NAME = "RHCSA EX200 v10 Exam Simulator"

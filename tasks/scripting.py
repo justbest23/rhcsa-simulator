@@ -26,6 +26,12 @@ class CreateBasicScriptTask(BaseTask):
             difficulty="easy",
             points=8
         )
+        self.tags = ['v10-new']
+        self.exam_tips = [
+            "Always start with #!/bin/bash shebang",
+            "Make executable: chmod +x script.sh",
+            "Test syntax: bash -n script.sh",
+        ]
         self.script_path = None
         self.script_purpose = None
 
@@ -178,6 +184,12 @@ class ScriptWithArgumentsTask(BaseTask):
             difficulty="medium",
             points=10
         )
+        self.tags = ['v10-new']
+        self.exam_tips = [
+            "$1, $2 are positional arguments; $@ is all arguments",
+            "$# gives the number of arguments",
+            "Always validate arguments before using them",
+        ]
         self.script_path = None
         self.task_type = None
 
@@ -336,6 +348,13 @@ class ScriptWithConditionalsTask(BaseTask):
             difficulty="medium",
             points=12
         )
+        self.tags = ['v10-new', 'exam-seen']
+        self.exam_tips = [
+            "if [ condition ]; then ... elif ... else ... fi",
+            "File tests: -f (file), -d (dir), -e (exists), -r (readable)",
+            "String: -z (empty), -n (not empty), = (equal)",
+            "Numeric: -eq, -ne, -lt, -gt",
+        ]
         self.script_path = None
         self.condition_type = None
 
@@ -499,6 +518,12 @@ class ScriptWithLoopsTask(BaseTask):
             difficulty="medium",
             points=12
         )
+        self.tags = ['v10-new', 'exam-seen']
+        self.exam_tips = [
+            "for item in list; do ... done",
+            "while [ condition ]; do ... done",
+            "C-style: for ((i=0; i<10; i++)); do ... done",
+        ]
         self.script_path = None
         self.loop_type = None
 
@@ -664,6 +689,12 @@ class ScriptExitCodesTask(BaseTask):
             difficulty="medium",
             points=10
         )
+        self.tags = ['v10-new']
+        self.exam_tips = [
+            "exit 0 = success, exit 1 = general error",
+            "$? holds the exit code of the last command",
+            "Use different exit codes for different error conditions",
+        ]
         self.script_path = None
 
     def generate(self, **params):
@@ -819,6 +850,12 @@ class ScriptCommandSubstitutionTask(BaseTask):
             difficulty="medium",
             points=10
         )
+        self.tags = ['v10-new']
+        self.exam_tips = [
+            "Modern syntax: VAR=$(command) - preferred",
+            "Legacy syntax: VAR=`command` - avoid nesting issues",
+            "Can be nested: $(command1 $(command2))",
+        ]
         self.script_path = None
         self.task_type = None
 

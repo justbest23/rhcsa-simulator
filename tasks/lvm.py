@@ -21,6 +21,12 @@ class VerifyLVExistsTask(BaseTask):
             difficulty="exam",
             points=10
         )
+        self.tags = ['v10-new', 'lvm-basics']
+        self.exam_tips = [
+            "Use 'lvs' or 'lvdisplay' to verify logical volume exists",
+            "LV size may vary slightly due to extent alignment",
+            "Path format: /dev/vg_name/lv_name or /dev/mapper/vg_name-lv_name",
+        ]
         self.vg_name = None
         self.lv_name = None
         self.lv_size_mb = None
@@ -80,6 +86,13 @@ class CreatePVTask(BaseTask):
             difficulty="easy",
             points=6
         )
+        self.tags = ['v10-new', 'lvm-basics']
+        self.exam_tips = [
+            "Use 'pvcreate' to initialize a partition or disk for LVM use",
+            "Verify with 'pvs' or 'pvdisplay' commands",
+            "May need to create a partition first using fdisk or parted with type 8e (LVM)",
+        ]
+        self.requires_persistence = True
         self.device = None
 
     def generate(self, **params):
@@ -135,6 +148,13 @@ class CreateVGTask(BaseTask):
             difficulty="medium",
             points=8
         )
+        self.tags = ['v10-new', 'lvm-basics']
+        self.exam_tips = [
+            "Use 'vgcreate' to create a volume group from one or more physical volumes",
+            "Physical volumes must be initialized with pvcreate first",
+            "Verify with 'vgs' or 'vgdisplay' to see VG size and free space",
+        ]
+        self.requires_persistence = True
         self.vg_name = None
         self.pv_devices = None
 
@@ -196,6 +216,14 @@ class CreateLVTask(BaseTask):
             difficulty="medium",
             points=10
         )
+        self.tags = ['v10-new', 'lvm-basics']
+        self.exam_tips = [
+            "Use 'lvcreate -L <size>M -n <name> <vg_name>' to create a logical volume",
+            "Can also use -l option to specify size in extents or percentage",
+            "Verify with 'lvs' or 'lvdisplay' commands",
+            "LV device appears at /dev/vg_name/lv_name",
+        ]
+        self.requires_persistence = True
         self.vg_name = None
         self.lv_name = None
         self.lv_size_mb = None
@@ -264,6 +292,15 @@ class ExtendLVTask(BaseTask):
             difficulty="exam",
             points=12
         )
+        self.tags = ['v10-new', 'lvm-extend', 'exam-critical']
+        self.exam_tips = [
+            "Use 'lvextend -L +<size>M' to extend by amount, or -L <size>M for total size",
+            "Use -l +100%FREE to use all remaining VG space",
+            "After extending LV, must resize the filesystem: xfs_growfs for XFS, resize2fs for ext4",
+            "Can combine steps with 'lvextend -r' to resize filesystem automatically",
+            "Common exam task - practice both extending LV and filesystem",
+        ]
+        self.requires_persistence = True
         self.vg_name = None
         self.lv_name = None
         self.new_size_mb = None
@@ -342,6 +379,15 @@ class LVMFullWorkflowTask(BaseTask):
             difficulty="exam",
             points=20
         )
+        self.tags = ['v10-new', 'lvm-workflow', 'exam-critical', 'fstab']
+        self.exam_tips = [
+            "Complete LVM workflow: pvcreate → vgcreate → lvcreate → mkfs → mount → fstab",
+            "Use UUID in /etc/fstab for persistent mounting (get with blkid)",
+            "Test fstab with 'mount -a' before rebooting",
+            "XFS is default filesystem in RHEL 9, but ext4 also commonly used",
+            "This is a common multi-step exam task worth significant points",
+        ]
+        self.requires_persistence = True
         self.device = None
         self.vg_name = None
         self.lv_name = None
@@ -457,6 +503,14 @@ class ExtendVGTask(BaseTask):
             difficulty="exam",
             points=10
         )
+        self.tags = ['v10-new', 'lvm-extend']
+        self.exam_tips = [
+            "First create PV on new device with 'pvcreate'",
+            "Then extend VG with 'vgextend <vg_name> <new_device>'",
+            "Verify increased VG size with 'vgs' command",
+            "Free space in VG can then be used to extend existing LVs",
+        ]
+        self.requires_persistence = True
         self.vg_name = None
         self.new_device = None
 
@@ -525,6 +579,14 @@ class RemoveLVTask(BaseTask):
             difficulty="medium",
             points=8
         )
+        self.tags = ['v10-new', 'lvm-management']
+        self.exam_tips = [
+            "Must unmount LV before removing: 'umount /dev/vg/lv'",
+            "Remove fstab entry to prevent boot errors",
+            "Use 'lvremove /dev/vg/lv' or 'lvremove -f' to force",
+            "Verify removal with 'lvs' command",
+        ]
+        self.requires_persistence = True
         self.vg_name = None
         self.lv_name = None
 
@@ -577,6 +639,14 @@ class ReduceLVTask(BaseTask):
             difficulty="hard",
             points=15
         )
+        self.tags = ['v10-new', 'lvm-advanced']
+        self.exam_tips = [
+            "CRITICAL: XFS filesystems CANNOT be reduced - only ext4/ext3 support shrinking",
+            "Always resize filesystem BEFORE reducing LV to avoid data loss",
+            "Workflow: unmount → e2fsck -f → resize2fs → lvreduce → remount",
+            "Reducing LVs is risky and rarely tested on exam - extending is much more common",
+        ]
+        self.requires_persistence = True
         self.vg_name = None
         self.lv_name = None
         self.new_size_mb = None

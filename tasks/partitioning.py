@@ -1,5 +1,7 @@
 """
-Disk partitioning tasks for RHCSA exam.
+Disk partitioning tasks for RHCSA EX200 v10 exam.
+Covers MBR/GPT partition creation, resizing, deletion,
+partition+format combos, and partition table conversion.
 """
 
 import random
@@ -8,480 +10,605 @@ from tasks.base import BaseTask
 from tasks.registry import TaskRegistry
 from core.validator import ValidationCheck, ValidationResult
 from validators.safe_executor import execute_safe
-from utils.helpers import get_practice_device
 
 
 logger = logging.getLogger(__name__)
 
 
-def _get_safe_practice_disk():
-    """Get a safe disk for partitioning practice."""
-    device = get_practice_device()
-    if device:
-        return device
-    return '/dev/sdb'  # Fallback
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
+def _random_device():
+    """Return a randomized practice disk device path."""
+    return random.choice(['/dev/sdb', '/dev/sdc', '/dev/sdd', '/dev/vdb', '/dev/vdc'])
+
+
+def _partition_dev(device, number):
+    """Build partition device path, handling NVMe naming convention."""
+    if 'nvme' in device or 'loop' in device:
+        return f"{device}p{number}"
+    return f"{device}{number}"
+
+
+# ===== 1. CreateMBRPartitionTask ==========================================
 
 @TaskRegistry.register("partitioning")
-class CreatePartitionTask(BaseTask):
-    """Create a partition using fdisk or parted."""
+class CreateMBRPartitionTask(BaseTask):
+    """Create an MBR (msdos) partition using fdisk or parted."""
 
     def __init__(self):
         super().__init__(
-            id="part_create_001",
+            id="part_mbr_create",
             category="partitioning",
             difficulty="medium",
-            points=10
+            points=10,
         )
-        self.device = None
-        self.size_mb = None
-        self.partition_type = None
+        self.tags = ["fdisk", "parted", "mbr", "partition"]
+        self.exam_tips = [
+            "Use fdisk for MBR disks - it is the traditional tool.",
+            "Remember to run 'partprobe' or 'udevadm settle' after writing.",
+            "MBR supports at most 4 primary partitions (or 3 primary + 1 extended).",
+        ]
 
     def generate(self, **params):
-        """Generate partition creation task."""
-        self.device = params.get('device') or _get_safe_practice_disk()
-        self.size_mb = params.get('size', random.choice([500, 1000, 2000]))
-        self.partition_type = params.get('type', 'primary')
+        self.params["device"] = params.get("device", _random_device())
+        self.params["size_mb"] = params.get("size", random.choice([256, 512, 1024, 2048]))
+        self.params["part_num"] = params.get("part_num", random.randint(1, 3))
+        self.params["part_type"] = params.get("part_type", "primary")
+
+        dev = self.params["device"]
+        size = self.params["size_mb"]
+        ptype = self.params["part_type"]
+        pnum = self.params["part_num"]
 
         self.description = (
-            f"Create a new partition:\n"
-            f"  - Device: {self.device}\n"
-            f"  - Size: {self.size_mb}MB\n"
-            f"  - Type: {self.partition_type}\n"
-            f"  - Use fdisk or parted"
+            f"Create an MBR partition on {dev}:\n"
+            f"  - Partition table type: msdos (MBR)\n"
+            f"  - Partition number: {pnum}\n"
+            f"  - Type: {ptype}\n"
+            f"  - Size: {size} MiB\n"
+            f"  - Use fdisk or parted to complete the task\n"
+            f"  - Run partprobe after writing changes"
         )
 
         self.hints = [
-            f"Using fdisk: fdisk {self.device}",
-            "  n = new partition, p = primary, w = write",
-            f"Using parted: parted {self.device} mkpart {self.partition_type} ext4 0% {self.size_mb}MiB",
-            f"Verify: lsblk {self.device}",
-            "Update kernel: partprobe"
+            f"Create MBR label (if new disk): parted -s {dev} mklabel msdos",
+            f"Using fdisk: fdisk {dev}  ->  n (new), p (primary), w (write)",
+            f"Using parted: parted -s {dev} mkpart {ptype} ext4 1MiB {size + 1}MiB",
+            "Update kernel partition table: partprobe",
+            f"Verify: lsblk {dev}  or  fdisk -l {dev}",
         ]
-
         return self
 
     def validate(self):
-        """Validate partition creation."""
         checks = []
-        total_points = 0
+        total = 0
+        dev = self.params["device"]
+        pnum = self.params["part_num"]
+        size = self.params["size_mb"]
 
-        # Check if device has partitions
-        result = execute_safe(['lsblk', '-ln', '-o', 'NAME,SIZE,TYPE', self.device])
-        if result.success:
-            lines = result.stdout.strip().split('\n')
-            partitions = [l for l in lines if 'part' in l]
-
-            if partitions:
-                checks.append(ValidationCheck(
-                    name="partition_exists",
-                    passed=True,
-                    points=6,
-                    message=f"Found {len(partitions)} partition(s) on {self.device}"
-                ))
-                total_points += 6
-
-                # Check size approximately
-                for part_line in partitions:
-                    parts = part_line.split()
-                    if len(parts) >= 2:
-                        size_str = parts[1]
-                        # Rough size check
-                        if 'M' in size_str or 'G' in size_str:
-                            checks.append(ValidationCheck(
-                                name="partition_size",
-                                passed=True,
-                                points=4,
-                                message=f"Partition created with size {size_str}"
-                            ))
-                            total_points += 4
-                            break
-            else:
-                checks.append(ValidationCheck(
-                    name="partition_exists",
-                    passed=False,
-                    points=0,
-                    max_points=6,
-                    message=f"No partitions found on {self.device}"
-                ))
+        # Check 1: MBR (msdos) label  (3 pts)
+        res = execute_safe(["parted", "-s", dev, "print"])
+        if res.success and "msdos" in res.stdout.lower():
+            checks.append(ValidationCheck("mbr_label", True, 3, "Disk has MBR (msdos) partition table"))
+            total += 3
         else:
-            checks.append(ValidationCheck(
-                name="partition_exists",
-                passed=False,
-                points=0,
-                max_points=6,
-                message=f"Could not check device {self.device}"
-            ))
+            checks.append(ValidationCheck("mbr_label", False, 0, "Disk does not have MBR partition table", max_points=3))
 
-        passed = total_points >= (self.points * 0.6)
-        return ValidationResult(self.id, passed, total_points, self.points, checks)
+        # Check 2: Partition exists  (4 pts)
+        part_dev = _partition_dev(dev, pnum)
+        res2 = execute_safe(["lsblk", "-ln", "-o", "NAME,TYPE", dev])
+        part_name = part_dev.split("/")[-1]
+        if res2.success and part_name in res2.stdout:
+            checks.append(ValidationCheck("partition_exists", True, 4, f"Partition {part_dev} exists"))
+            total += 4
+        else:
+            checks.append(ValidationCheck("partition_exists", False, 0, f"Partition {part_dev} not found", max_points=4))
 
+        # Check 3: Approximate size  (3 pts)
+        res3 = execute_safe(["lsblk", "-bln", "-o", "NAME,SIZE", dev])
+        if res3.success:
+            for line in res3.stdout.strip().splitlines():
+                parts = line.split()
+                if len(parts) >= 2 and part_name in parts[0]:
+                    try:
+                        actual_mb = int(parts[1]) / (1024 * 1024)
+                        tolerance = size * 0.15
+                        if abs(actual_mb - size) <= tolerance:
+                            checks.append(ValidationCheck("partition_size", True, 3, f"Size ~{int(actual_mb)} MiB (expected {size} MiB)"))
+                            total += 3
+                        else:
+                            checks.append(ValidationCheck("partition_size", False, 0, f"Size {int(actual_mb)} MiB, expected ~{size} MiB", max_points=3))
+                    except (ValueError, IndexError):
+                        checks.append(ValidationCheck("partition_size", False, 0, "Could not parse partition size", max_points=3))
+                    break
+            else:
+                checks.append(ValidationCheck("partition_size", False, 0, "Partition not found in lsblk output", max_points=3))
+        else:
+            checks.append(ValidationCheck("partition_size", False, 0, "Could not query block devices", max_points=3))
+
+        passed = total >= (self.points * 0.6)
+        return ValidationResult(self.id, passed, total, self.points, checks)
+
+
+# ===== 2. CreateGPTPartitionTask ==========================================
 
 @TaskRegistry.register("partitioning")
 class CreateGPTPartitionTask(BaseTask):
-    """Create GPT partition table and partitions."""
+    """Create a GPT partition table and partition using parted or gdisk."""
 
     def __init__(self):
         super().__init__(
-            id="part_gpt_001",
+            id="part_gpt_create",
             category="partitioning",
             difficulty="medium",
-            points=12
+            points=10,
         )
-        self.device = None
-        self.partition_name = None
+        self.tags = ["gpt", "parted", "gdisk", "partition"]
+        self.exam_tips = [
+            "GPT is required for disks >2 TiB.",
+            "parted is the preferred tool for GPT on RHEL.",
+            "GPT supports up to 128 partitions by default.",
+        ]
 
     def generate(self, **params):
-        """Generate GPT partition task."""
-        self.device = params.get('device') or _get_safe_practice_disk()
-        self.partition_name = params.get('name', 'data')
+        self.params["device"] = params.get("device", _random_device())
+        self.params["size_mb"] = params.get("size", random.choice([512, 1024, 2048, 4096]))
+        self.params["part_name"] = params.get("name", random.choice(["data", "apps", "backup", "logs"]))
+
+        dev = self.params["device"]
+        size = self.params["size_mb"]
+        name = self.params["part_name"]
 
         self.description = (
-            f"Create GPT partition table:\n"
-            f"  - Device: {self.device}\n"
-            f"  - Create GPT label (partition table)\n"
-            f"  - Create one partition named '{self.partition_name}'\n"
-            f"  - Use parted command"
+            f"Create a GPT partition on {dev}:\n"
+            f"  - Create a GPT (gpt) partition table on the disk\n"
+            f"  - Create one partition named '{name}'\n"
+            f"  - Size: {size} MiB\n"
+            f"  - Use parted or gdisk"
         )
 
         self.hints = [
-            f"Create GPT label: parted {self.device} mklabel gpt",
-            f"Create partition: parted {self.device} mkpart {self.partition_name} ext4 0% 100%",
-            "Or interactive: parted {device}",
-            f"Verify: parted {self.device} print",
-            "GPT supports >2TB disks and more partitions"
+            f"Create GPT label: parted -s {dev} mklabel gpt",
+            f"Create partition: parted -s {dev} mkpart {name} ext4 1MiB {size + 1}MiB",
+            f"Verify: parted -s {dev} print",
+            "GPT partitions can have human-readable names.",
         ]
-
         return self
 
     def validate(self):
-        """Validate GPT partition table."""
         checks = []
-        total_points = 0
+        total = 0
+        dev = self.params["device"]
 
-        # Check 1: GPT label exists
-        result = execute_safe(['parted', '-s', self.device, 'print'])
-        if result.success:
-            if 'gpt' in result.stdout.lower():
-                checks.append(ValidationCheck(
-                    name="gpt_label",
-                    passed=True,
-                    points=6,
-                    message="GPT partition table exists"
-                ))
-                total_points += 6
-            elif 'msdos' in result.stdout.lower():
-                checks.append(ValidationCheck(
-                    name="gpt_label",
-                    passed=False,
-                    points=0,
-                    max_points=6,
-                    message="Disk has MBR, not GPT"
-                ))
-            else:
-                checks.append(ValidationCheck(
-                    name="gpt_label",
-                    passed=False,
-                    points=0,
-                    max_points=6,
-                    message="No partition table found"
-                ))
-
-            # Check 2: Has partition
-            if 'Number' in result.stdout and any(c.isdigit() for c in result.stdout):
-                checks.append(ValidationCheck(
-                    name="has_partition",
-                    passed=True,
-                    points=6,
-                    message="Partition exists on GPT disk"
-                ))
-                total_points += 6
-            else:
-                checks.append(ValidationCheck(
-                    name="has_partition",
-                    passed=False,
-                    points=0,
-                    max_points=6,
-                    message="No partitions created"
-                ))
+        # Check 1: GPT label  (4 pts)
+        res = execute_safe(["parted", "-s", dev, "print"])
+        if res.success and "gpt" in res.stdout.lower():
+            checks.append(ValidationCheck("gpt_label", True, 4, "GPT partition table exists"))
+            total += 4
         else:
-            checks.append(ValidationCheck(
-                name="gpt_label",
-                passed=False,
-                points=0,
-                max_points=6,
-                message=f"Could not read {self.device}"
-            ))
+            msg = "MBR found instead of GPT" if (res.success and "msdos" in res.stdout.lower()) else "No GPT partition table found"
+            checks.append(ValidationCheck("gpt_label", False, 0, msg, max_points=4))
 
-        passed = total_points >= (self.points * 0.7)
-        return ValidationResult(self.id, passed, total_points, self.points, checks)
+        # Check 2: Partition exists  (3 pts)
+        res2 = execute_safe(["lsblk", "-ln", "-o", "NAME,TYPE", dev])
+        if res2.success and "part" in res2.stdout:
+            checks.append(ValidationCheck("partition_exists", True, 3, "Partition exists on GPT disk"))
+            total += 3
+        else:
+            checks.append(ValidationCheck("partition_exists", False, 0, "No partitions found", max_points=3))
 
+        # Check 3: Approximate size  (3 pts)
+        part_dev = _partition_dev(dev, 1)
+        part_name = part_dev.split("/")[-1]
+        res3 = execute_safe(["lsblk", "-bln", "-o", "NAME,SIZE", dev])
+        size = self.params["size_mb"]
+        if res3.success:
+            for line in res3.stdout.strip().splitlines():
+                cols = line.split()
+                if len(cols) >= 2 and part_name in cols[0]:
+                    try:
+                        actual_mb = int(cols[1]) / (1024 * 1024)
+                        if abs(actual_mb - size) <= size * 0.15:
+                            checks.append(ValidationCheck("partition_size", True, 3, f"Size ~{int(actual_mb)} MiB"))
+                            total += 3
+                        else:
+                            checks.append(ValidationCheck("partition_size", False, 0, f"Size {int(actual_mb)} MiB, expected ~{size} MiB", max_points=3))
+                    except (ValueError, IndexError):
+                        checks.append(ValidationCheck("partition_size", False, 0, "Could not parse size", max_points=3))
+                    break
+            else:
+                checks.append(ValidationCheck("partition_size", False, 0, "Partition not in lsblk", max_points=3))
+        else:
+            checks.append(ValidationCheck("partition_size", False, 0, "lsblk failed", max_points=3))
+
+        passed = total >= (self.points * 0.6)
+        return ValidationResult(self.id, passed, total, self.points, checks)
+
+
+# ===== 3. ResizePartitionTask =============================================
+
+@TaskRegistry.register("partitioning")
+class ResizePartitionTask(BaseTask):
+    """Resize an existing partition (grow) using parted or growpart."""
+
+    def __init__(self):
+        super().__init__(
+            id="part_resize",
+            category="partitioning",
+            difficulty="hard",
+            points=15,
+        )
+        self.tags = ["parted", "growpart", "resize", "partition"]
+        self.exam_tips = [
+            "You can only grow a partition non-destructively; shrinking risks data loss.",
+            "After resizing, also resize the filesystem (xfs_growfs / resize2fs).",
+            "parted resizepart or growpart are the common tools.",
+        ]
+
+    def generate(self, **params):
+        self.params["device"] = params.get("device", _random_device())
+        self.params["part_num"] = params.get("part_num", 1)
+        self.params["new_size_mb"] = params.get("new_size", random.choice([2048, 3072, 4096]))
+
+        dev = self.params["device"]
+        pnum = self.params["part_num"]
+        new_size = self.params["new_size_mb"]
+        part_dev = _partition_dev(dev, pnum)
+
+        self.description = (
+            f"Resize partition {part_dev}:\n"
+            f"  - Grow partition {pnum} on {dev} to {new_size} MiB\n"
+            f"  - Ensure no data loss\n"
+            f"  - Resize the filesystem after growing the partition\n"
+            f"  - The filesystem may be xfs or ext4"
+        )
+
+        self.hints = [
+            f"Using parted: parted -s {dev} resizepart {pnum} {new_size}MiB",
+            f"Using growpart: growpart {dev} {pnum}",
+            "For XFS: xfs_growfs <mount_point>",
+            f"For ext4: resize2fs {part_dev}",
+            "Always resize filesystem AFTER growing the partition.",
+        ]
+        return self
+
+    def validate(self):
+        checks = []
+        total = 0
+        dev = self.params["device"]
+        pnum = self.params["part_num"]
+        new_size = self.params["new_size_mb"]
+        part_dev = _partition_dev(dev, pnum)
+        part_name = part_dev.split("/")[-1]
+
+        # Check 1: Partition exists  (5 pts)
+        res = execute_safe(["lsblk", "-ln", "-o", "NAME,TYPE", dev])
+        if res.success and part_name in res.stdout:
+            checks.append(ValidationCheck("partition_exists", True, 5, f"Partition {part_dev} exists"))
+            total += 5
+        else:
+            checks.append(ValidationCheck("partition_exists", False, 0, f"Partition {part_dev} not found", max_points=5))
+            return ValidationResult(self.id, False, total, self.points, checks)
+
+        # Check 2: Partition size meets target  (6 pts)
+        res2 = execute_safe(["lsblk", "-bln", "-o", "NAME,SIZE", dev])
+        if res2.success:
+            for line in res2.stdout.strip().splitlines():
+                cols = line.split()
+                if len(cols) >= 2 and part_name in cols[0]:
+                    try:
+                        actual_mb = int(cols[1]) / (1024 * 1024)
+                        tolerance = new_size * 0.10
+                        if actual_mb >= new_size - tolerance:
+                            checks.append(ValidationCheck("partition_resized", True, 6, f"Partition is ~{int(actual_mb)} MiB (target {new_size} MiB)"))
+                            total += 6
+                        else:
+                            checks.append(ValidationCheck("partition_resized", False, 0, f"Partition is {int(actual_mb)} MiB, expected >= ~{new_size} MiB", max_points=6))
+                    except (ValueError, IndexError):
+                        checks.append(ValidationCheck("partition_resized", False, 0, "Could not parse size", max_points=6))
+                    break
+        else:
+            checks.append(ValidationCheck("partition_resized", False, 0, "Could not query size", max_points=6))
+
+        # Check 3: Filesystem still intact  (4 pts)
+        res3 = execute_safe(["blkid", "-o", "value", "-s", "TYPE", part_dev])
+        if res3.success and res3.stdout.strip():
+            checks.append(ValidationCheck("fs_intact", True, 4, f"Filesystem ({res3.stdout.strip()}) intact on partition"))
+            total += 4
+        else:
+            checks.append(ValidationCheck("fs_intact", False, 0, "No filesystem detected on partition", max_points=4))
+
+        passed = total >= (self.points * 0.6)
+        return ValidationResult(self.id, passed, total, self.points, checks)
+
+
+# ===== 4. DeletePartitionTask =============================================
 
 @TaskRegistry.register("partitioning")
 class DeletePartitionTask(BaseTask):
-    """Delete a partition."""
+    """Delete an existing partition."""
 
     def __init__(self):
         super().__init__(
-            id="part_delete_001",
-            category="partitioning",
-            difficulty="medium",
-            points=8
-        )
-        self.device = None
-        self.partition_number = None
-
-    def generate(self, **params):
-        """Generate partition deletion task."""
-        self.device = params.get('device') or _get_safe_practice_disk()
-        self.partition_number = params.get('partition', 1)
-
-        partition_dev = f"{self.device}{self.partition_number}"
-        if 'nvme' in self.device:
-            partition_dev = f"{self.device}p{self.partition_number}"
-
-        self.description = (
-            f"Delete a partition:\n"
-            f"  - Device: {self.device}\n"
-            f"  - Partition number: {self.partition_number}\n"
-            f"  - Ensure partition is unmounted first\n"
-            f"  - Use fdisk or parted"
-        )
-
-        self.hints = [
-            f"Unmount first: umount {partition_dev}",
-            f"Using fdisk: fdisk {self.device}, then d, then w",
-            f"Using parted: parted {self.device} rm {self.partition_number}",
-            "Update kernel: partprobe",
-            f"Verify: lsblk {self.device}"
-        ]
-
-        return self
-
-    def validate(self):
-        """Validate partition deletion."""
-        checks = []
-        total_points = 0
-
-        partition_dev = f"{self.device}{self.partition_number}"
-        if 'nvme' in self.device:
-            partition_dev = f"{self.device}p{self.partition_number}"
-
-        # Check if partition still exists
-        result = execute_safe(['lsblk', '-ln', '-o', 'NAME', self.device])
-        if result.success:
-            partition_name = partition_dev.split('/')[-1]
-            if partition_name not in result.stdout:
-                checks.append(ValidationCheck(
-                    name="partition_deleted",
-                    passed=True,
-                    points=8,
-                    message=f"Partition {self.partition_number} deleted"
-                ))
-                total_points += 8
-            else:
-                checks.append(ValidationCheck(
-                    name="partition_deleted",
-                    passed=False,
-                    points=0,
-                    max_points=8,
-                    message=f"Partition {self.partition_number} still exists"
-                ))
-        else:
-            checks.append(ValidationCheck(
-                name="partition_deleted",
-                passed=False,
-                points=0,
-                max_points=8,
-                message="Could not verify partition status"
-            ))
-
-        passed = total_points >= (self.points * 0.7)
-        return ValidationResult(self.id, passed, total_points, self.points, checks)
-
-
-@TaskRegistry.register("partitioning")
-class PartitionForLVMTask(BaseTask):
-    """Create a partition with LVM type."""
-
-    def __init__(self):
-        super().__init__(
-            id="part_lvm_001",
-            category="partitioning",
-            difficulty="medium",
-            points=10
-        )
-        self.device = None
-        self.size_mb = None
-
-    def generate(self, **params):
-        """Generate LVM partition task."""
-        self.device = params.get('device') or _get_safe_practice_disk()
-        self.size_mb = params.get('size', 1000)
-
-        self.description = (
-            f"Create a partition for LVM:\n"
-            f"  - Device: {self.device}\n"
-            f"  - Size: {self.size_mb}MB\n"
-            f"  - Set partition type to LVM (8e for MBR, 8e00 for GPT)\n"
-            f"  - This partition will be used for LVM physical volume"
-        )
-
-        self.hints = [
-            f"Using fdisk: fdisk {self.device}",
-            "  n = new partition, t = change type, 8e = Linux LVM",
-            f"Using parted: parted {self.device} mkpart primary 0% {self.size_mb}MiB",
-            f"Set LVM flag: parted {self.device} set 1 lvm on",
-            "Verify: fdisk -l {device} or parted {device} print"
-        ]
-
-        return self
-
-    def validate(self):
-        """Validate LVM partition."""
-        checks = []
-        total_points = 0
-
-        # Check if partition exists
-        result = execute_safe(['lsblk', '-ln', '-o', 'NAME,TYPE', self.device])
-        if result.success and 'part' in result.stdout:
-            checks.append(ValidationCheck(
-                name="partition_exists",
-                passed=True,
-                points=5,
-                message="Partition exists"
-            ))
-            total_points += 5
-
-            # Check LVM type
-            result2 = execute_safe(['fdisk', '-l', self.device])
-            if result2.success and ('Linux LVM' in result2.stdout or 'lvm' in result2.stdout.lower()):
-                checks.append(ValidationCheck(
-                    name="lvm_type",
-                    passed=True,
-                    points=5,
-                    message="Partition type is LVM"
-                ))
-                total_points += 5
-            else:
-                # Check with parted
-                result3 = execute_safe(['parted', '-s', self.device, 'print'])
-                if result3.success and 'lvm' in result3.stdout.lower():
-                    checks.append(ValidationCheck(
-                        name="lvm_type",
-                        passed=True,
-                        points=5,
-                        message="Partition has LVM flag"
-                    ))
-                    total_points += 5
-                else:
-                    checks.append(ValidationCheck(
-                        name="lvm_type",
-                        passed=False,
-                        points=0,
-                        max_points=5,
-                        message="Partition type is not LVM"
-                    ))
-        else:
-            checks.append(ValidationCheck(
-                name="partition_exists",
-                passed=False,
-                points=0,
-                max_points=5,
-                message="No partition found"
-            ))
-
-        passed = total_points >= (self.points * 0.7)
-        return ValidationResult(self.id, passed, total_points, self.points, checks)
-
-
-@TaskRegistry.register("partitioning")
-class ViewPartitionTableTask(BaseTask):
-    """View and understand partition table."""
-
-    def __init__(self):
-        super().__init__(
-            id="part_view_001",
+            id="part_delete",
             category="partitioning",
             difficulty="easy",
-            points=6
+            points=6,
         )
-        self.device = None
-        self.output_file = None
+        self.tags = ["fdisk", "parted", "delete", "partition"]
+        self.exam_tips = [
+            "Always unmount and remove fstab entries before deleting a partition.",
+            "Use wipefs -a to clean partition signatures if needed.",
+        ]
 
     def generate(self, **params):
-        """Generate view partition task."""
-        self.device = params.get('device') or _get_safe_practice_disk()
-        self.output_file = params.get('output', '/tmp/partition_info.txt')
+        self.params["device"] = params.get("device", _random_device())
+        self.params["part_num"] = params.get("part_num", random.choice([1, 2, 3]))
+
+        dev = self.params["device"]
+        pnum = self.params["part_num"]
+        part_dev = _partition_dev(dev, pnum)
 
         self.description = (
-            f"View partition information:\n"
-            f"  - Device: {self.device}\n"
-            f"  - Save partition table info to: {self.output_file}\n"
-            f"  - Include partition type (GPT or MBR)\n"
-            f"  - Include all partition details"
+            f"Delete partition {pnum} on {dev}:\n"
+            f"  - Unmount {part_dev} if currently mounted\n"
+            f"  - Remove any /etc/fstab entry for {part_dev}\n"
+            f"  - Delete partition {pnum}\n"
+            f"  - Run partprobe to update kernel"
         )
 
         self.hints = [
-            f"Using fdisk: fdisk -l {self.device} > {self.output_file}",
-            f"Using parted: parted {self.device} print > {self.output_file}",
-            f"Using lsblk: lsblk -o NAME,SIZE,TYPE,FSTYPE {self.device}",
-            "Combine: fdisk -l {device} && parted {device} print"
+            f"Unmount: umount {part_dev}",
+            f"Using fdisk: fdisk {dev}  ->  d (delete), w (write)",
+            f"Using parted: parted -s {dev} rm {pnum}",
+            "Update kernel: partprobe",
+            f"Verify: lsblk {dev}",
         ]
-
         return self
 
     def validate(self):
-        """Validate partition info output."""
         checks = []
-        total_points = 0
+        total = 0
+        dev = self.params["device"]
+        pnum = self.params["part_num"]
+        part_dev = _partition_dev(dev, pnum)
+        part_name = part_dev.split("/")[-1]
 
-        from validators.file_validators import validate_file_exists
-
-        if validate_file_exists(self.output_file):
-            checks.append(ValidationCheck(
-                name="output_exists",
-                passed=True,
-                points=3,
-                message="Output file created"
-            ))
-            total_points += 3
-
-            try:
-                with open(self.output_file, 'r') as f:
-                    content = f.read()
-                    if self.device in content or 'Disk' in content or 'Partition' in content:
-                        checks.append(ValidationCheck(
-                            name="has_content",
-                            passed=True,
-                            points=3,
-                            message="File contains partition information"
-                        ))
-                        total_points += 3
-                    else:
-                        checks.append(ValidationCheck(
-                            name="has_content",
-                            passed=False,
-                            points=0,
-                            max_points=3,
-                            message="File doesn't contain partition info"
-                        ))
-            except Exception:
-                checks.append(ValidationCheck(
-                    name="has_content",
-                    passed=False,
-                    points=0,
-                    max_points=3,
-                    message="Could not read file"
-                ))
+        # Check 1: Partition should NOT exist  (4 pts)
+        res = execute_safe(["lsblk", "-ln", "-o", "NAME", dev])
+        if res.success and part_name not in res.stdout:
+            checks.append(ValidationCheck("partition_deleted", True, 4, f"Partition {pnum} deleted successfully"))
+            total += 4
         else:
-            checks.append(ValidationCheck(
-                name="output_exists",
-                passed=False,
-                points=0,
-                max_points=3,
-                message="Output file not found"
-            ))
+            checks.append(ValidationCheck("partition_deleted", False, 0, f"Partition {pnum} still exists", max_points=4))
 
-        passed = total_points >= (self.points * 0.6)
-        return ValidationResult(self.id, passed, total_points, self.points, checks)
+        # Check 2: Not mounted  (2 pts)
+        res2 = execute_safe(["findmnt", "-rn", "-o", "SOURCE", part_dev])
+        if not res2.success or not res2.stdout.strip():
+            checks.append(ValidationCheck("not_mounted", True, 2, f"{part_dev} is not mounted"))
+            total += 2
+        else:
+            checks.append(ValidationCheck("not_mounted", False, 0, f"{part_dev} is still mounted", max_points=2))
+
+        passed = total >= (self.points * 0.6)
+        return ValidationResult(self.id, passed, total, self.points, checks)
+
+
+# ===== 5. PartitionAndFormatTask ==========================================
+
+@TaskRegistry.register("partitioning")
+class PartitionAndFormatTask(BaseTask):
+    """Create a partition, format it, mount it, and add to fstab (exam-style)."""
+
+    def __init__(self):
+        super().__init__(
+            id="part_format_mount",
+            category="partitioning",
+            difficulty="exam",
+            points=15,
+        )
+        self.requires_persistence = True
+        self.tags = ["partition", "mkfs", "mount", "fstab", "persistence"]
+        self.exam_tips = [
+            "On the real exam you MUST use UUID in /etc/fstab.",
+            "Always test with 'mount -a' and 'findmnt --verify' before finishing.",
+            "A bad fstab entry can prevent the system from booting.",
+        ]
+
+    def generate(self, **params):
+        self.params["device"] = params.get("device", _random_device())
+        self.params["part_num"] = params.get("part_num", 1)
+        self.params["size_mb"] = params.get("size", random.choice([512, 1024, 2048]))
+        self.params["fstype"] = params.get("fstype", random.choice(["xfs", "ext4"]))
+        self.params["mount_point"] = params.get("mount_point", f"/mnt/{random.choice(['data', 'apps', 'backup', 'extra'])}{random.randint(1, 99)}")
+
+        dev = self.params["device"]
+        pnum = self.params["part_num"]
+        size = self.params["size_mb"]
+        fs = self.params["fstype"]
+        mp = self.params["mount_point"]
+        part_dev = _partition_dev(dev, pnum)
+
+        self.description = (
+            f"Create a partition, format, mount, and persist:\n"
+            f"  1. Create a {size} MiB partition (number {pnum}) on {dev}\n"
+            f"  2. Format {part_dev} with {fs}\n"
+            f"  3. Create mount point {mp}\n"
+            f"  4. Mount {part_dev} at {mp}\n"
+            f"  5. Add an /etc/fstab entry using the partition UUID\n"
+            f"  6. Configuration must survive a reboot"
+        )
+
+        self.hints = [
+            f"parted -s {dev} mklabel gpt  (if disk is new)",
+            f"parted -s {dev} mkpart primary {fs} 1MiB {size + 1}MiB",
+            f"mkfs.{fs} {part_dev}",
+            f"mkdir -p {mp}",
+            f"mount {part_dev} {mp}",
+            f"Get UUID: blkid {part_dev}",
+            f"fstab entry: UUID=<uuid> {mp} {fs} defaults 0 0",
+            "Test: mount -a && findmnt --verify",
+        ]
+        return self
+
+    def validate(self):
+        checks = []
+        total = 0
+        dev = self.params["device"]
+        pnum = self.params["part_num"]
+        fs = self.params["fstype"]
+        mp = self.params["mount_point"]
+        part_dev = _partition_dev(dev, pnum)
+        part_name = part_dev.split("/")[-1]
+
+        # Check 1: Partition exists  (3 pts)
+        res = execute_safe(["lsblk", "-ln", "-o", "NAME,TYPE", dev])
+        if res.success and part_name in res.stdout:
+            checks.append(ValidationCheck("partition_exists", True, 3, f"Partition {part_dev} exists"))
+            total += 3
+        else:
+            checks.append(ValidationCheck("partition_exists", False, 0, f"Partition {part_dev} not found", max_points=3))
+
+        # Check 2: Filesystem type  (3 pts)
+        res2 = execute_safe(["blkid", "-o", "value", "-s", "TYPE", part_dev])
+        if res2.success and res2.stdout.strip() == fs:
+            checks.append(ValidationCheck("fs_type", True, 3, f"Filesystem is {fs}"))
+            total += 3
+        else:
+            actual = res2.stdout.strip() if res2.success else "unknown"
+            checks.append(ValidationCheck("fs_type", False, 0, f"Filesystem is '{actual}', expected '{fs}'", max_points=3))
+
+        # Check 3: Mounted at correct point  (3 pts)
+        res3 = execute_safe(["findmnt", "-rn", "-o", "TARGET", part_dev])
+        if res3.success and mp in res3.stdout:
+            checks.append(ValidationCheck("mounted", True, 3, f"Mounted at {mp}"))
+            total += 3
+        else:
+            checks.append(ValidationCheck("mounted", False, 0, f"Not mounted at {mp}", max_points=3))
+
+        # Check 4: fstab entry with UUID  (4 pts)
+        res4 = execute_safe(["blkid", "-o", "value", "-s", "UUID", part_dev])
+        uuid = res4.stdout.strip() if res4.success else ""
+        fstab_ok = False
+        fstab_uuid = False
+        try:
+            with open("/etc/fstab", "r") as f:
+                for line in f:
+                    stripped = line.strip()
+                    if stripped.startswith("#") or not stripped:
+                        continue
+                    if mp in stripped:
+                        fstab_ok = True
+                        if uuid and uuid in stripped:
+                            fstab_uuid = True
+                        break
+        except Exception:
+            pass
+
+        if fstab_uuid:
+            checks.append(ValidationCheck("fstab_uuid", True, 4, "fstab entry present with UUID"))
+            total += 4
+        elif fstab_ok:
+            checks.append(ValidationCheck("fstab_uuid", True, 2, "fstab entry present but NOT using UUID (partial credit)"))
+            total += 2
+        else:
+            checks.append(ValidationCheck("fstab_uuid", False, 0, "No fstab entry found", max_points=4))
+
+        # Check 5: mount point directory exists  (2 pts)
+        import os
+        if os.path.isdir(mp):
+            checks.append(ValidationCheck("mount_dir", True, 2, f"Mount point {mp} exists"))
+            total += 2
+        else:
+            checks.append(ValidationCheck("mount_dir", False, 0, f"Mount point {mp} missing", max_points=2))
+
+        passed = total >= (self.points * 0.6)
+        return ValidationResult(self.id, passed, total, self.points, checks)
+
+
+# ===== 6. ConvertPartitionTableTask =======================================
+
+@TaskRegistry.register("partitioning")
+class ConvertPartitionTableTask(BaseTask):
+    """Convert a disk partition table from MBR to GPT or vice-versa."""
+
+    def __init__(self):
+        super().__init__(
+            id="part_convert_table",
+            category="partitioning",
+            difficulty="hard",
+            points=15,
+        )
+        self.tags = ["gdisk", "parted", "mbr", "gpt", "conversion"]
+        self.exam_tips = [
+            "gdisk can convert MBR to GPT non-destructively in many cases.",
+            "Converting GPT->MBR is only safe when <=4 partitions exist.",
+            "ALWAYS back up data before converting partition tables.",
+        ]
+
+    def generate(self, **params):
+        self.params["device"] = params.get("device", _random_device())
+        direction = params.get("direction", random.choice(["mbr_to_gpt", "gpt_to_mbr"]))
+        self.params["direction"] = direction
+
+        dev = self.params["device"]
+        if direction == "mbr_to_gpt":
+            src, dst = "MBR (msdos)", "GPT"
+            target_label = "gpt"
+        else:
+            src, dst = "GPT", "MBR (msdos)"
+            target_label = "msdos"
+        self.params["target_label"] = target_label
+
+        self.description = (
+            f"Convert the partition table on {dev}:\n"
+            f"  - Current type: {src}\n"
+            f"  - Target type: {dst}\n"
+            f"  - The disk must have the new partition table type after conversion\n"
+            f"  - Note: This is destructive if partitions exist; back up first"
+        )
+
+        if direction == "mbr_to_gpt":
+            self.hints = [
+                f"Using gdisk: gdisk {dev}  ->  w (writes GPT)",
+                f"Or recreate: parted -s {dev} mklabel gpt",
+                f"Verify: parted -s {dev} print  (should show 'gpt')",
+            ]
+        else:
+            self.hints = [
+                f"parted -s {dev} mklabel msdos",
+                f"Verify: parted -s {dev} print  (should show 'msdos')",
+                "Note: gdisk cannot convert GPT to MBR; use parted.",
+            ]
+        return self
+
+    def validate(self):
+        checks = []
+        total = 0
+        dev = self.params["device"]
+        target = self.params["target_label"]
+
+        # Check 1: Correct partition table type  (10 pts)
+        res = execute_safe(["parted", "-s", dev, "print"])
+        if res.success:
+            output_lower = res.stdout.lower()
+            if target in output_lower:
+                checks.append(ValidationCheck("table_type", True, 10, f"Partition table is now {target}"))
+                total += 10
+            else:
+                checks.append(ValidationCheck("table_type", False, 0, f"Partition table is NOT {target}", max_points=10))
+        else:
+            checks.append(ValidationCheck("table_type", False, 0, f"Could not read disk {dev}", max_points=10))
+
+        # Check 2: Disk is accessible / writable  (5 pts)
+        res2 = execute_safe(["fdisk", "-l", dev])
+        if res2.success:
+            checks.append(ValidationCheck("disk_accessible", True, 5, "Disk is accessible"))
+            total += 5
+        else:
+            checks.append(ValidationCheck("disk_accessible", False, 0, "Disk not accessible", max_points=5))
+
+        passed = total >= (self.points * 0.6)
+        return ValidationResult(self.id, passed, total, self.points, checks)

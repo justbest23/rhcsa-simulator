@@ -1,49 +1,43 @@
 """
-Practice mode for RHCSA Simulator v2.0.0
+Practice mode for RHCSA Simulator v4.0.0
 
-Features auto-cleanup between tasks via DeviceManager.
+Features:
+- ResultsDB tracking with SM-2 updates
+- Exam tips display after task completion
+- Domain info alongside category
+- Retry with solution hints
 """
 
 import logging
 from tasks.registry import TaskRegistry
 from core.validator import get_validator
+from core.results_db import get_results_db
 from utils import formatters as fmt
 from utils.helpers import confirm_action
 from config import settings
-from device import get_device_manager
 
 
 logger = logging.getLogger(__name__)
 
 
 class PracticeSession:
-    """
-    Practice mode session.
-
-    Allows practicing specific categories with immediate feedback.
-    """
+    """Practice mode session with ResultsDB tracking."""
 
     def __init__(self):
-        """Initialize practice session."""
         self.category = None
         self.difficulty = "exam"
         self.task_count = settings.DEFAULT_PRACTICE_TASKS
-        self.logger = logging.getLogger(__name__)
 
     def start(self):
         """Start practice session."""
-        # Initialize registry
         TaskRegistry.initialize()
 
-        # Select category
         self.category = self._select_category()
         if not self.category:
             return
 
-        # Select difficulty
         self.difficulty = self._select_difficulty()
 
-        # Get tasks
         tasks = TaskRegistry.get_practice_tasks(
             self.category,
             self.difficulty,
@@ -54,48 +48,13 @@ class PracticeSession:
             print(fmt.error(f"No tasks available for {self.category}"))
             return
 
-        # Show cleanup status
-        device_manager = get_device_manager()
-        device = device_manager.get_practice_device()
-        if device:
-            print(fmt.info(f"\nAuto-cleanup enabled on {device}"))
-            print(fmt.dim("Resources will be cleaned between tasks automatically."))
-
         # Practice each task
         try:
             for i, task in enumerate(tasks, 1):
-                self._practice_task(task, i, len(tasks))
+                self._run_practice_task(task, i, len(tasks))
             print(fmt.success("\nPractice session complete!"))
         except StopIteration:
             print(fmt.info("\nPractice session ended early."))
-
-        # Final cleanup
-        device_manager.cleanup_all_resources(force=True)
-
-    def _show_fix_suggestion(self, check, task):
-        """Show specific suggestions for fixing failed checks."""
-        suggestions = {
-            "user_exists": "useradd -m USERNAME",
-            "correct_uid": "usermod -u UID USERNAME",
-            "correct_groups": "usermod -aG group1,group2 USERNAME",
-            "permissions": "chmod OCTAL file",
-            "service_active": "systemctl start SERVICE",
-            "service_enabled": "systemctl enable SERVICE",
-        }
-        if check.name in suggestions:
-            print(f"   How to fix: {suggestions[check.name]}")
-
-    def _show_solution(self, task):
-        """Show all hints as solution."""
-        print()
-        print("=" * 60)
-        print("SOLUTION / HINTS")
-        print("=" * 60)
-        if task.hints:
-            for i, hint in enumerate(task.hints, 1):
-                print(f"  {i}. {hint}")
-        print("=" * 60)
-        print()
 
     def _select_category(self):
         """Select practice category."""
@@ -108,14 +67,15 @@ class PracticeSession:
             print(fmt.error("No task categories available"))
             return None
 
-        # Display categories
         for i, cat in enumerate(sorted(categories), 1):
             count = TaskRegistry.get_task_count(cat)
-            fmt.print_menu_option(i, fmt.format_category_name(cat), f"{count} tasks available")
+            domain = settings.CATEGORY_TO_DOMAIN.get(cat, "?")
+            domain_name = settings.EXAM_DOMAINS.get(domain, "")
+            label = f"{fmt.format_category_name(cat)} [D{domain}]"
+            fmt.print_menu_option(i, label, f"{count} tasks")
 
         fmt.print_menu_option('Q', "Quit", "Return to main menu")
 
-        # Get selection
         while True:
             choice = input("\nSelect category (number or Q): ").strip()
 
@@ -151,17 +111,10 @@ class PracticeSession:
             else:
                 print(fmt.error("Invalid selection"))
 
-    def _practice_task(self, task, current, total):
-        """Practice a single task with automatic cleanup."""
-        device_manager = get_device_manager()
-
-        # Use task context for automatic cleanup
-        with device_manager.task_context(task.id, auto_cleanup=True):
-            self._run_practice_task(task, current, total)
-
     def _run_practice_task(self, task, current, total):
-        """Run the actual practice task loop."""
+        """Run a single practice task with ResultsDB tracking."""
         attempt = 1
+        db = get_results_db()
 
         while True:
             fmt.clear_screen()
@@ -169,12 +122,20 @@ class PracticeSession:
             print("=" * 60)
             print()
 
-            # Display task
+            # Display task with domain info
             print(fmt.bold("Task:"))
             print(task.description)
             print()
+            print(fmt.bold(f"Category: {fmt.format_category_name(task.category)}"))
+            domain = getattr(task, 'exam_domain', 0)
+            domain_name = settings.EXAM_DOMAINS.get(domain, "")
+            if domain_name:
+                print(fmt.bold(f"Domain: {domain} - {domain_name}"))
             print(fmt.bold(f"Points: {task.points}"))
             print(fmt.bold(f"Difficulty: {fmt.format_difficulty(task.difficulty)}"))
+            persistence = getattr(task, 'requires_persistence', False)
+            if persistence:
+                print(fmt.info("  Requires persistence (survives reboot)"))
             print()
 
             # Show hints
@@ -185,7 +146,6 @@ class PracticeSession:
                     print(f"  {i}. {hint}")
                 print()
 
-            # Wait for completion
             input("Complete this task on your system, then press Enter to validate...")
 
             # Validate
@@ -210,7 +170,26 @@ class PracticeSession:
             print("=" * 60)
             fmt.print_result_summary(result.passed, result.score, result.max_score, result.percentage)
 
-            # If failed, offer retry or show solution
+            # Save to ResultsDB (triggers SM-2 update)
+            db.save_practice_attempt(
+                task_id=task.id,
+                category=task.category,
+                difficulty=task.difficulty,
+                domain=getattr(task, 'exam_domain', 0),
+                score=result.score,
+                max_score=result.max_score,
+                passed=result.passed,
+                mode='practice'
+            )
+
+            # Show exam tips
+            exam_tips = getattr(task, 'exam_tips', [])
+            if exam_tips:
+                print()
+                print(fmt.bold("Exam Tips:"))
+                for tip in exam_tips:
+                    print(f"  * {tip}")
+
             if not result.passed:
                 print()
                 print(fmt.bold("Options:"))
@@ -224,30 +203,58 @@ class PracticeSession:
 
                 if choice == 'r':
                     attempt += 1
-                    continue  # Retry the same task
+                    continue
                 elif choice == 's':
                     self._show_solution(task)
-                    # After showing solution, ask again
                     retry = confirm_action("Try again?", default=True)
                     if retry:
                         attempt += 1
                         continue
                     else:
-                        break  # Move to next task
+                        break
                 elif choice == 'q':
-                    raise StopIteration  # Exit practice session
-                else:  # 'c' or anything else
-                    break  # Move to next task
+                    raise StopIteration
+                else:
+                    break
             else:
-                # Task passed
                 print(fmt.success("\nGreat job!"))
                 input("Press Enter to continue...")
                 break
 
-        # Continue to next task?
         if current < total:
             if not confirm_action("Continue to next task?", default=True):
                 raise StopIteration
+
+    def _show_fix_suggestion(self, check, task):
+        """Show specific suggestions for fixing failed checks."""
+        suggestions = {
+            "user_exists": "useradd -m USERNAME",
+            "correct_uid": "usermod -u UID USERNAME",
+            "correct_groups": "usermod -aG group1,group2 USERNAME",
+            "permissions": "chmod OCTAL file",
+            "service_active": "systemctl start SERVICE",
+            "service_enabled": "systemctl enable SERVICE",
+        }
+        if check.name in suggestions:
+            print(f"   How to fix: {suggestions[check.name]}")
+
+    def _show_solution(self, task):
+        """Show all hints as solution."""
+        print()
+        print("=" * 60)
+        print("SOLUTION / HINTS")
+        print("=" * 60)
+        if task.hints:
+            for i, hint in enumerate(task.hints, 1):
+                print(f"  {i}. {hint}")
+        exam_tips = getattr(task, 'exam_tips', [])
+        if exam_tips:
+            print()
+            print("EXAM TIPS:")
+            for tip in exam_tips:
+                print(f"  * {tip}")
+        print("=" * 60)
+        print()
 
 
 def run_practice_mode():

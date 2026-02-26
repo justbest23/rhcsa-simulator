@@ -1,7 +1,12 @@
 """
-Exam mode orchestrator for RHCSA Simulator v2.0.0
+Exam mode orchestrator for RHCSA Simulator v4.0.0
 
-Features auto-cleanup between tasks via DeviceManager.
+Features:
+- Domain-balanced task generation via TaskRegistry.generate_exam()
+- ExamTimer integration with warnings
+- Reboot simulation with persistence validation
+- ResultsDB storage (SQLite)
+- Domain breakdown in final report
 """
 
 import time
@@ -10,10 +15,11 @@ from datetime import datetime, timedelta
 from config import settings
 from tasks.registry import TaskRegistry
 from core.validator import get_validator
-from core.results import ExamResult, TaskResult, get_results_manager
+from core.results_db import get_results_db
+from core.reboot_engine import get_reboot_engine
+from core.timer import create_exam_timer, TimerDisplay
 from utils import formatters as fmt
 from utils.helpers import generate_id, format_timedelta, confirm_action
-from device import get_device_manager
 
 
 logger = logging.getLogger(__name__)
@@ -23,18 +29,11 @@ class ExamSession:
     """
     Exam mode session orchestrator.
 
-    Manages task generation, display, timer, and validation.
+    Manages domain-balanced task generation, timer, validation,
+    reboot simulation, and ResultsDB persistence.
     """
 
     def __init__(self, task_count=None, timer_enabled=True, duration_minutes=None):
-        """
-        Initialize exam session.
-
-        Args:
-            task_count (int): Number of tasks (default: from settings)
-            timer_enabled (bool): Whether to enable timer
-            duration_minutes (int): Exam duration (default: from settings)
-        """
         self.task_count = task_count or settings.DEFAULT_EXAM_TASKS
         self.timer_enabled = timer_enabled
         self.duration_minutes = duration_minutes or settings.DEFAULT_EXAM_DURATION
@@ -42,46 +41,53 @@ class ExamSession:
         self.end_time = None
         self.tasks = []
         self.exam_id = generate_id("exam")
-        self.logger = logging.getLogger(__name__)
+        self.timer = None
 
     def start(self):
         """Start the exam session."""
-        # Initialize task registry
         TaskRegistry.initialize()
 
-        # Display welcome screen
         self._display_welcome()
 
-        # Confirm to start
         if not confirm_action("Ready to start the exam?", default=True):
             print("Exam cancelled.")
             return None
 
-        # Generate tasks
+        # Generate domain-balanced tasks
         print("\nGenerating exam tasks...")
-        self.tasks = TaskRegistry.get_exam_tasks(self.task_count)
+        self.tasks = TaskRegistry.generate_exam(self.task_count)
 
         if not self.tasks:
             print(fmt.error("Error: Could not generate exam tasks"))
-            self.logger.error("Failed to generate exam tasks")
             return None
 
-        print(fmt.success(f"Generated {len(self.tasks)} tasks"))
+        print(fmt.success(f"Generated {len(self.tasks)} tasks across {self._count_domains()} domains"))
 
-        # Display tasks
         self._display_tasks()
 
         # Start timer
         self.start_time = datetime.now()
 
         if self.timer_enabled:
+            self.timer = create_exam_timer(self.duration_minutes)
+            self.timer.start()
+            end_time = self.start_time + timedelta(minutes=self.duration_minutes)
             print(f"\n{fmt.warning('Timer started!')} You have {self.duration_minutes} minutes.")
-            print(f"Exam ends at: {(self.start_time + timedelta(minutes=self.duration_minutes)).strftime('%H:%M:%S')}")
+            print(f"Exam ends at: {end_time.strftime('%H:%M:%S')}")
         else:
             print(f"\n{fmt.info('Exam started!')} (No time limit)")
 
         print("\nComplete the tasks on your system, then return here to validate your work.")
         print("=" * 60)
+
+    def _count_domains(self):
+        """Count unique domains in generated tasks."""
+        domains = set()
+        for task in self.tasks:
+            domain = getattr(task, 'exam_domain', 0)
+            if domain:
+                domains.add(domain)
+        return len(domains)
 
     def _display_welcome(self):
         """Display exam welcome screen."""
@@ -92,25 +98,18 @@ class ExamSession:
         print(f"  Tasks: {self.task_count}")
         print(f"  Duration: {self.duration_minutes} minutes" if self.timer_enabled else "  Duration: No time limit")
         print(f"  Pass threshold: {settings.EXAM_PASS_THRESHOLD * 100:.0f}%")
+        print(f"  Reboot simulation: {'Enabled' if settings.REBOOT_SIMULATION else 'Disabled'}")
         print()
 
         print(fmt.bold("Instructions:"))
         print("  1. Read all tasks carefully before starting")
         print("  2. Complete tasks on your Linux system")
         print("  3. Return here when ready to validate")
-        print("  4. You can validate multiple times")
+        print("  4. After validation, a reboot simulation checks persistence")
         print()
 
         print(fmt.warning("Note: This simulator only validates your work. It does NOT make changes to your system."))
         print()
-
-        # Show cleanup status
-        device_manager = get_device_manager()
-        device = device_manager.get_practice_device()
-        if device:
-            print(fmt.info(f"Practice device: {device}"))
-            print(fmt.dim("Auto-cleanup will run after exam completion."))
-            print()
 
     def _display_tasks(self):
         """Display all exam tasks."""
@@ -119,92 +118,127 @@ class ExamSession:
         total_points = sum(task.points for task in self.tasks)
 
         for i, task in enumerate(self.tasks, 1):
+            domain = getattr(task, 'exam_domain', 0)
+            domain_name = settings.EXAM_DOMAINS.get(domain, "")
+            domain_tag = f" [{domain_name}]" if domain_name else ""
             fmt.print_task(i, task.description, task.points)
+            if domain_tag:
+                print(fmt.dim(f"      Domain {domain}: {domain_name}"))
 
         print()
         print(fmt.bold(f"Total Points: {total_points}"))
         print("=" * 60)
 
     def validate_all(self):
-        """
-        Validate all tasks and generate exam result.
-
-        Returns:
-            ExamResult: Exam result
-        """
+        """Validate all tasks, run reboot simulation, save to ResultsDB."""
         self.end_time = datetime.now()
+
+        # Stop timer
+        if self.timer:
+            self.timer.stop()
 
         print()
         fmt.print_header("VALIDATING YOUR WORK")
 
-        # Get validator
         validator = get_validator()
 
-        # Validate each task
+        # Phase 1: Initial validation
         validation_results = []
-        task_results = []
+        initial_results_map = {}
 
         for i, task in enumerate(self.tasks, 1):
             print(f"\nValidating Task {i}/{len(self.tasks)}: {task.id}")
-
             result = validator.validate_task(task)
             validation_results.append(result)
-
-            # Create task result
-            task_result = TaskResult(
-                task_id=task.id,
-                category=task.category,
-                difficulty=task.difficulty,
-                description=task.description,
-                score=result.score,
-                max_score=result.max_score,
-                passed=result.passed
-            )
-            task_results.append(task_result)
-
-            # Display result
+            initial_results_map[task.id] = result
             self._display_task_result(i, task, result)
 
-        # Calculate totals
+        # Calculate initial scores
         total_score, max_score, percentage = validator.calculate_total_score(validation_results)
+
+        # Phase 2: Reboot simulation
+        reboot_result = None
+        reboot_passed = None
+
+        if settings.REBOOT_SIMULATION:
+            print()
+            fmt.print_header("REBOOT SIMULATION")
+            print("Simulating system reboot to check persistence...")
+            print()
+
+            engine = get_reboot_engine()
+            reboot_result = engine.simulate_reboot(self.tasks, initial_results_map)
+
+            # Display reboot report
+            report = engine.get_reboot_report(reboot_result, self.tasks)
+            print(report)
+
+            if not reboot_result.boot_success:
+                # Boot failure = automatic fail, score 0
+                total_score = 0
+                percentage = 0
+                reboot_passed = False
+            else:
+                reboot_passed = True
+                # Deduct points for tasks that lost persistence
+                for task_id in reboot_result.tasks_lost_points:
+                    result = initial_results_map.get(task_id)
+                    if result:
+                        total_score -= result.score
+                percentage = (total_score / max_score * 100) if max_score > 0 else 0
+
         passed = percentage >= (settings.EXAM_PASS_THRESHOLD * 100)
 
-        # Create exam result
+        # Display final report
         duration = (self.end_time - self.start_time).total_seconds()
-        exam_result = ExamResult(
+        self._display_final_report(
+            total_score, max_score, percentage, passed,
+            duration, validation_results, reboot_result
+        )
+
+        # Save to ResultsDB
+        db = get_results_db()
+        db.save_exam_result(
             exam_id=self.exam_id,
             start_time=self.start_time.isoformat(),
             end_time=self.end_time.isoformat(),
             duration_seconds=int(duration),
-            timer_enabled=self.timer_enabled,
-            task_results=task_results,
             total_score=total_score,
             max_score=max_score,
-            passed=passed
+            passed=passed,
+            reboot_passed=reboot_passed,
+            task_count=len(self.tasks),
+            mode='exam'
         )
 
-        # Display final report
-        self._display_final_report(exam_result)
+        # Save per-task results
+        for task, result in zip(self.tasks, validation_results):
+            persistence_passed = None
+            if reboot_result and task.id in reboot_result.persistence_results:
+                persistence_passed = reboot_result.persistence_results[task.id].passed
 
-        # Save result
-        results_mgr = get_results_manager()
-        filepath = results_mgr.save_result(exam_result)
-        if filepath:
-            print(f"\n{fmt.success('Result saved to:')} {filepath}")
+            checks_data = [c.to_dict() for c in result.checks] if result.checks else None
+            db.save_task_result(
+                exam_id=self.exam_id,
+                task_id=task.id,
+                category=task.category,
+                difficulty=task.difficulty,
+                domain=getattr(task, 'exam_domain', 0),
+                description=task.description,
+                score=result.score,
+                max_score=result.max_score,
+                passed=result.passed,
+                persistence_passed=persistence_passed,
+                checks=checks_data
+            )
 
-        # Cleanup resources after exam
-        device_manager = get_device_manager()
-        print(f"\n{fmt.info('Cleaning up practice resources...')}")
-        device_manager.cleanup_all_resources(force=True)
-        print(fmt.success("Cleanup complete."))
-
-        return exam_result
+        return passed
 
     def _display_task_result(self, task_num, task, result):
         """Display result for a single task."""
-        print(f"\n{fmt.bold(f'Task {task_num}:')} {task.description[:60]}...")
+        desc = task.description[:60]
+        print(f"\n{fmt.bold(f'Task {task_num}:')} {desc}...")
 
-        # Display checks
         for check in result.checks:
             fmt.print_check_result(
                 check.name,
@@ -214,59 +248,78 @@ class ExamSession:
                 check.max_points
             )
 
-        # Display summary
         status = fmt.success("PASS") if result.passed else fmt.error("FAIL")
         print(f"  Score: {result.score}/{result.max_score} points ({result.percentage:.0f}%) - {status}")
 
-    def _display_final_report(self, exam_result):
-        """Display final exam report."""
+    def _display_final_report(self, total_score, max_score, percentage, passed,
+                               duration, validation_results, reboot_result):
+        """Display final exam report with domain breakdown."""
         fmt.print_header("EXAM RESULTS")
 
         # Overall result
         print(fmt.bold("Overall Performance:"))
-        print(f"  Total Score: {exam_result.total_score}/{exam_result.max_score} points")
-        print(f"  Percentage: {exam_result.percentage:.1f}%")
-        print(f"  Tasks Passed: {sum(1 for t in exam_result.task_results if t.passed)}/{len(exam_result.task_results)}")
-        print(f"  Duration: {format_timedelta(timedelta(seconds=exam_result.duration_seconds))}")
+        print(f"  Total Score: {total_score}/{max_score} points")
+        print(f"  Percentage: {percentage:.1f}%")
+        tasks_passed = sum(1 for r in validation_results if r.passed)
+        print(f"  Tasks Passed: {tasks_passed}/{len(validation_results)}")
+        print(f"  Duration: {format_timedelta(timedelta(seconds=int(duration)))}")
         print()
 
         # Pass/Fail
-        if exam_result.passed:
-            print(fmt.success(f"  ✓ PASSED (Required: {exam_result.pass_threshold * 100:.0f}%)"))
+        threshold_pct = settings.EXAM_PASS_THRESHOLD * 100
+        if passed:
+            print(fmt.success(f"  PASSED (Required: {threshold_pct:.0f}%)"))
         else:
-            print(fmt.error(f"  ✗ FAILED (Required: {exam_result.pass_threshold * 100:.0f}%)"))
+            print(fmt.error(f"  FAILED (Required: {threshold_pct:.0f}%)"))
         print()
+
+        # Reboot status
+        if reboot_result:
+            if not reboot_result.boot_success:
+                print(fmt.error("  BOOT FAILURE - All points lost"))
+            elif reboot_result.tasks_lost_points:
+                lost = len(reboot_result.tasks_lost_points)
+                print(fmt.warning(f"  {lost} task(s) lost points due to failed persistence"))
+            else:
+                print(fmt.success("  All persistence checks passed after reboot"))
+            print()
+
+        # Domain breakdown
+        validator = get_validator()
+        task_results = list(zip(self.tasks, validation_results))
+        domain_breakdown = validator.get_domain_breakdown(task_results)
+
+        if domain_breakdown:
+            print(fmt.bold("Performance by Domain:"))
+            for domain_num in sorted(domain_breakdown.keys()):
+                stats = domain_breakdown[domain_num]
+                pct = stats['percentage']
+                name = stats['name']
+                print(f"  Domain {domain_num} - {name}: "
+                      f"{stats['earned_points']}/{stats['total_points']} pts ({pct:.0f}%)")
+            print()
 
         # Category breakdown
-        print(fmt.bold("Performance by Category:"))
-        breakdown = exam_result.get_category_breakdown()
-
-        for category, stats in sorted(breakdown.items()):
-            from utils.formatters import format_category_name
-            cat_name = format_category_name(category)
-            pct = stats['percentage']
-            print(f"  {cat_name}: {stats['earned_points']}/{stats['total_points']} points ({pct:.0f}%)")
-
-        print()
+        cat_breakdown = validator.get_category_breakdown(task_results)
+        if cat_breakdown:
+            print(fmt.bold("Performance by Category:"))
+            for category in sorted(cat_breakdown.keys()):
+                stats = cat_breakdown[category]
+                pct = stats['percentage']
+                cat_name = fmt.format_category_name(category)
+                print(f"  {cat_name}: {stats['earned_points']}/{stats['total_points']} pts ({pct:.0f}%)")
+            print()
 
 
 def run_exam_mode():
-    """
-    Run exam mode (convenience function).
-
-    Returns:
-        ExamResult: Exam result or None if cancelled
-    """
+    """Run exam mode (convenience function)."""
     session = ExamSession()
     session.start()
 
     if not session.tasks:
         return None
 
-    # Wait for user to complete tasks
     input("\nPress Enter when you're ready to validate your work...")
 
-    # Validate
     result = session.validate_all()
-
     return result

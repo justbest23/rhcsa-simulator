@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """
-RHCSA Mock Exam Simulator v2.0.0 - Main Entry Point
+RHCSA EX200 v10 Exam Simulator v4.0.0 - Main Entry Point
 
-A realistic RHCSA exam simulator with auto-cleanup between tasks.
+Features:
+- 198 tasks across 27 categories, 9 EX200 v10 domains
+- SM-2 spaced repetition for adaptive practice
+- Reboot simulation with persistence validation
+- SQLite-backed progress tracking (ResultsDB)
 """
 
 import sys
@@ -13,33 +17,22 @@ import argparse
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from utils.helpers import require_root
-from utils.logging import setup_logging
-from core.menu import MenuSystem
-from core.exam import run_exam_mode
-from core.practice import run_practice_mode
-from core.practice_enhanced import run_guided_practice
-from core.learn import run_learn_mode
-from core.command_recall import run_command_recall
-from core.flashcard_mode import run_flashcard_mode
-from core.results import get_results_manager
-from core.scenario_mode import run_scenario_mode
-from core.troubleshoot_mode import run_troubleshoot_mode
 from config import settings
 
 
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description='RHCSA Mock Exam Simulator v2.0.0',
+        description=f'{settings.APP_NAME} v{settings.VERSION}',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Quick Start Examples:
-  %(prog)s --quick              5 random tasks with auto-cleanup
-  %(prog)s --quick lvm          5 LVM tasks with auto-cleanup
-  %(prog)s --exam               Start full exam immediately
-  %(prog)s --learn users        Jump to users learning mode
+  %(prog)s --quick              5 random tasks
+  %(prog)s --quick lvm          5 LVM tasks
+  %(prog)s --exam               Full mock exam with reboot sim
+  %(prog)s --learn              Domain-based study mode
   %(prog)s --practice lvm       Practice LVM category
+  %(prog)s --adaptive           SM-2 driven weak-area practice
         """
     )
 
@@ -47,43 +40,42 @@ Quick Start Examples:
                         help='Quick practice (5 tasks). Optionally specify category.')
     parser.add_argument('--exam', action='store_true',
                         help='Start mock exam immediately')
-    parser.add_argument('--learn', metavar='CATEGORY',
-                        help='Jump to learn mode for a category')
+    parser.add_argument('--learn', nargs='?', const='all', metavar='CATEGORY',
+                        help='Learn mode. Optionally specify category.')
     parser.add_argument('--practice', metavar='CATEGORY',
                         help='Start practice mode for a category')
+    parser.add_argument('--adaptive', action='store_true',
+                        help='Start adaptive practice (SM-2 driven)')
     parser.add_argument('--list-categories', action='store_true',
-                        help='List available categories')
+                        help='List available categories and domains')
     parser.add_argument('--version', action='version',
                         version=f'%(prog)s {settings.VERSION}')
 
     return parser.parse_args()
 
 
-def run_quick_practice_cli(category=None):
-    """Run quick practice from CLI with optional category filter."""
+def run_quick_practice(category=None):
+    """Run quick practice - 5 tasks with ResultsDB tracking."""
     from tasks.registry import TaskRegistry
     from core.validator import get_validator
-    from device import get_device_manager
+    from core.results_db import get_results_db
     from utils import formatters as fmt
     from utils.helpers import confirm_action
 
     TaskRegistry.initialize()
+    db = get_results_db()
 
     fmt.clear_screen()
     fmt.print_header("QUICK PRACTICE")
 
     if category and category != 'all':
-        print(f"5 {fmt.format_category_name(category)} tasks with auto-cleanup.")
+        print(f"5 {fmt.format_category_name(category)} tasks.")
     else:
-        print("5 random tasks across all categories with auto-cleanup.")
+        print("5 random tasks across all categories.")
     print()
 
-    device_manager = get_device_manager()
-    device = device_manager.get_practice_device()
-    if device:
-        print(fmt.info(f"Practice device: {device}"))
-        print(fmt.dim("Resources will be cleaned up automatically after each task."))
-    print()
+    if not confirm_action("Ready to start?", default=True):
+        return
 
     # Get tasks
     if category and category != 'all':
@@ -100,44 +92,68 @@ def run_quick_practice_cli(category=None):
     passed = 0
 
     for i, task in enumerate(tasks, 1):
-        with device_manager.task_context(task.id, auto_cleanup=True):
-            fmt.clear_screen()
-            print(f"Quick Practice - Task {i}/{len(tasks)}")
-            print("=" * 60)
+        fmt.clear_screen()
+        print(f"Quick Practice - Task {i}/{len(tasks)}")
+        print("=" * 60)
+        print()
+        print(fmt.bold("Task:"))
+        print(task.description)
+        print()
+
+        cat_name = fmt.format_category_name(task.category)
+        domain = getattr(task, 'exam_domain', 0)
+        domain_name = settings.EXAM_DOMAINS.get(domain, "")
+        print(fmt.bold(f"Category: {cat_name} [D{domain}]"))
+        if domain_name:
+            print(fmt.bold(f"Domain: {domain_name}"))
+        print(fmt.bold(f"Points: {task.points}"))
+        print()
+
+        if task.hints and confirm_action("Show hints?", default=False):
             print()
-            print(fmt.bold("Task:"))
-            print(task.description)
-            print()
-            print(fmt.bold(f"Category: {fmt.format_category_name(task.category)}"))
-            print(fmt.bold(f"Points: {task.points}"))
+            for j, hint in enumerate(task.hints, 1):
+                print(f"  {j}. {hint}")
             print()
 
-            if task.hints and confirm_action("Show hints?", default=False):
-                print()
-                for j, hint in enumerate(task.hints, 1):
-                    print(f"  {j}. {hint}")
-                print()
+        input("Complete the task, then press Enter to validate...")
 
-            input("Complete the task, then press Enter to validate...")
+        result = validator.validate_task(task)
+        completed += 1
 
-            result = validator.validate_task(task)
-            completed += 1
+        print()
+        if result.passed:
+            passed += 1
+            print(fmt.success(f"PASSED - {result.score}/{result.max_score} points"))
+        else:
+            print(fmt.error(f"FAILED - {result.score}/{result.max_score} points"))
+            for check in result.checks:
+                if not check.passed:
+                    print(f"    - {check.message}")
 
+        # Save to ResultsDB
+        db.save_practice_attempt(
+            task_id=task.id,
+            category=task.category,
+            difficulty=task.difficulty,
+            domain=getattr(task, 'exam_domain', 0),
+            score=result.score,
+            max_score=result.max_score,
+            passed=result.passed,
+            mode='quick'
+        )
+
+        # Show exam tips
+        exam_tips = getattr(task, 'exam_tips', [])
+        if exam_tips:
             print()
-            if result.passed:
-                passed += 1
-                print(fmt.success(f"✓ PASSED - {result.score}/{result.max_score} points"))
-            else:
-                print(fmt.error(f"✗ FAILED - {result.score}/{result.max_score} points"))
-                for check in result.checks:
-                    if not check.passed:
-                        print(f"    - {check.message}")
+            print(fmt.bold("Exam Tips:"))
+            for tip in exam_tips:
+                print(f"  * {tip}")
 
-            print()
-            if i < len(tasks):
-                print(fmt.dim("Cleaning up resources..."))
-                if not confirm_action("Continue to next task?", default=True):
-                    break
+        print()
+        if i < len(tasks):
+            if not confirm_action("Continue to next task?", default=True):
+                break
 
     # Summary
     print()
@@ -145,155 +161,76 @@ def run_quick_practice_cli(category=None):
     print(f"Tasks completed: {completed}/{len(tasks)}")
     print(f"Tasks passed: {passed}/{completed}")
     if completed > 0:
-        print(f"Success rate: {passed/completed*100:.0f}%")
+        print(f"Success rate: {passed / completed * 100:.0f}%")
     print()
-
-    device_manager.cleanup_all_resources(force=True)
-    print(fmt.success("All resources cleaned up."))
-
-
-def run_quick_practice():
-    """Run quick practice mode - 5 random tasks with auto-cleanup."""
-    from tasks.registry import TaskRegistry
-    from core.validator import get_validator
-    from device import get_device_manager
-    from utils import formatters as fmt
-    from utils.helpers import confirm_action
-
-    TaskRegistry.initialize()
-
-    fmt.clear_screen()
-    fmt.print_header("QUICK PRACTICE")
-
-    print("5 random tasks across all categories with auto-cleanup.")
-    print()
-
-    device_manager = get_device_manager()
-    device = device_manager.get_practice_device()
-    if device:
-        print(fmt.info(f"Practice device: {device}"))
-        print(fmt.dim("Resources will be cleaned up automatically after each task."))
-    print()
-
-    if not confirm_action("Ready to start?", default=True):
-        return
-
-    # Get 5 random tasks across categories
-    tasks = TaskRegistry.get_exam_tasks(5)
-
-    if not tasks:
-        print(fmt.error("Could not generate tasks"))
-        return
-
-    validator = get_validator()
-    completed = 0
-    passed = 0
-
-    for i, task in enumerate(tasks, 1):
-        with device_manager.task_context(task.id, auto_cleanup=True):
-            fmt.clear_screen()
-            print(f"Quick Practice - Task {i}/5")
-            print("=" * 60)
-            print()
-            print(fmt.bold("Task:"))
-            print(task.description)
-            print()
-            print(fmt.bold(f"Category: {fmt.format_category_name(task.category)}"))
-            print(fmt.bold(f"Points: {task.points}"))
-            print()
-
-            # Show hints on request
-            if task.hints and confirm_action("Show hints?", default=False):
-                print()
-                for j, hint in enumerate(task.hints, 1):
-                    print(f"  {j}. {hint}")
-                print()
-
-            input("Complete the task, then press Enter to validate...")
-
-            # Validate
-            result = validator.validate_task(task)
-            completed += 1
-
-            print()
-            if result.passed:
-                passed += 1
-                print(fmt.success(f"✓ PASSED - {result.score}/{result.max_score} points"))
-            else:
-                print(fmt.error(f"✗ FAILED - {result.score}/{result.max_score} points"))
-                for check in result.checks:
-                    if not check.passed:
-                        print(f"    - {check.message}")
-
-            print()
-            if i < 5:
-                print(fmt.dim("Cleaning up resources..."))
-                if not confirm_action("Continue to next task?", default=True):
-                    break
-
-    # Summary
-    print()
-    fmt.print_header("QUICK PRACTICE COMPLETE")
-    print(f"Tasks completed: {completed}/5")
-    print(f"Tasks passed: {passed}/{completed}")
-    print(f"Success rate: {passed/completed*100:.0f}%" if completed > 0 else "N/A")
-    print()
-
-    # Final cleanup
-    device_manager.cleanup_all_resources(force=True)
-    print(fmt.success("All resources cleaned up."))
 
 
 def main():
     """Main application entry point."""
-    # Set up logging
+    from utils.logging import setup_logging
     setup_logging()
     logger = logging.getLogger(__name__)
 
-    # Parse command line arguments
     args = parse_args()
 
     # Handle --list-categories without root
     if args.list_categories:
         from tasks.registry import TaskRegistry
         TaskRegistry.initialize()
-        print("Available categories:")
-        for cat in sorted(TaskRegistry.get_all_categories()):
-            count = TaskRegistry.get_task_count(cat)
-            print(f"  {cat}: {count} tasks")
+
+        print(f"\n{settings.APP_NAME} v{settings.VERSION}")
+        print(f"Available categories ({TaskRegistry.get_task_count()} tasks total):\n")
+
+        for domain_num in sorted(settings.EXAM_DOMAINS.keys()):
+            domain_name = settings.EXAM_DOMAINS[domain_num]
+            domain_cats = [
+                cat for cat, dom in settings.CATEGORY_TO_DOMAIN.items()
+                if dom == domain_num and cat in TaskRegistry.get_all_categories()
+            ]
+            if domain_cats:
+                print(f"  Domain {domain_num}: {domain_name}")
+                for cat in sorted(domain_cats):
+                    count = TaskRegistry.get_task_count(cat)
+                    print(f"    {cat}: {count} tasks")
+                print()
         return 0
 
     # Check root privileges
     try:
+        from utils.helpers import require_root
         require_root()
     except SystemExit:
         return 1
 
-    # Handle CLI quick modes
+    # CLI quick modes
     if args.quick:
-        run_quick_practice_cli(args.quick)
+        run_quick_practice(args.quick)
         return 0
 
     if args.exam:
+        from core.exam import run_exam_mode
         run_exam_mode()
         return 0
 
     if args.learn:
-        from tasks.registry import TaskRegistry
-        TaskRegistry.initialize()
-        if args.learn in TaskRegistry.get_all_categories():
-            run_learn_mode(category=args.learn)
+        from core.learn import run_learn_mode
+        if args.learn != 'all':
+            from tasks.registry import TaskRegistry
+            TaskRegistry.initialize()
+            if args.learn in TaskRegistry.get_all_categories():
+                run_learn_mode(category=args.learn)
+            else:
+                print(f"Unknown category: {args.learn}")
+                print("Use --list-categories to see available categories")
+                return 1
         else:
-            print(f"Unknown category: {args.learn}")
-            print("Use --list-categories to see available categories")
-            return 1
+            run_learn_mode()
         return 0
 
     if args.practice:
         from tasks.registry import TaskRegistry
         TaskRegistry.initialize()
         if args.practice in TaskRegistry.get_all_categories():
-            # Import and run practice for specific category
             from core.practice import PracticeSession
             session = PracticeSession()
             session.category = args.practice
@@ -305,28 +242,26 @@ def main():
             return 1
         return 0
 
-    # Initialize menu system
+    if args.adaptive:
+        from core.adaptive import run_adaptive_mode
+        run_adaptive_mode()
+        return 0
+
+    # Interactive menu mode
+    from core.menu import MenuSystem
+    from core.exam import run_exam_mode
+    from core.practice import run_practice_mode
+    from core.learn import run_learn_mode
+    from core.adaptive import run_adaptive_mode
+
     menu = MenuSystem()
 
-    # Main loop
     while True:
         try:
             choice = menu.display_main_menu()
 
             if choice == 'learn':
                 run_learn_mode()
-                input("\nPress Enter to return to menu...")
-
-            elif choice == 'guided_practice':
-                run_guided_practice()
-                input("\nPress Enter to return to menu...")
-
-            elif choice == 'command_recall':
-                run_command_recall()
-                input("\nPress Enter to return to menu...")
-
-            elif choice == 'flashcard':
-                run_flashcard_mode()
 
             elif choice == 'quick_practice':
                 run_quick_practice()
@@ -340,11 +275,8 @@ def main():
                 run_practice_mode()
                 input("\nPress Enter to return to menu...")
 
-            elif choice == 'scenario':
-                run_scenario_mode()
-
-            elif choice == 'troubleshoot':
-                run_troubleshoot_mode()
+            elif choice == 'adaptive':
+                run_adaptive_mode()
 
             elif choice == 'dashboard':
                 menu.show_dashboard()
@@ -359,15 +291,7 @@ def main():
                 menu.show_help()
 
             elif choice == 'exit':
-                # Final cleanup before exit
-                try:
-                    from device import get_device_manager
-                    dm = get_device_manager()
-                    dm.cleanup_all_resources(force=True)
-                except Exception:
-                    pass
-
-                print("\nThank you for using RHCSA Mock Exam Simulator!")
+                print(f"\nThank you for using {settings.APP_NAME}!")
                 print("Good luck with your certification!")
                 return 0
 
