@@ -8,6 +8,7 @@ from tasks.base import BaseTask
 from tasks.registry import TaskRegistry
 from core.validator import ValidationCheck, ValidationResult
 from validators.safe_executor import execute_safe
+from utils.helpers import get_swap_practice_device
 
 logger = logging.getLogger(__name__)
 
@@ -37,25 +38,18 @@ class CreateSwapPartitionTask(BaseTask):
         self.size_mb = None
 
     def generate(self, **params):
-        self.size_mb = params.get('size_mb', random.choice([256, 512, 1024]))
-        devices = ['/dev/sdb2', '/dev/sdc1', '/dev/vdb2', '/dev/sdb3']
-        self.device = params.get('device', random.choice(devices))
+        self.size_mb = params.get('size_mb', random.choice([256, 512]))
+        self.device = params.get('device') or get_swap_practice_device() or '/dev/sdb'
 
         self.description = (
-            f"Create and configure a swap partition:\n"
-            f"  - Use device: {self.device}\n"
-            f"  - Create a {self.size_mb}MB partition (if not already created)\n"
-            f"  - Format it as swap space\n"
-            f"  - Activate the swap space\n"
-            f"  - Make it persistent across reboots (add to /etc/fstab)"
+            f"Configure {self.device} as a {self.size_mb}MB persistent swap partition."
         )
 
         self.hints = [
-            f"Create partition with fdisk or parted on the device",
-            f"Format as swap: mkswap {self.device}",
-            f"Activate: swapon {self.device}",
-            "Get UUID: blkid {device}",
-            "Add to /etc/fstab: UUID=<uuid> swap swap defaults 0 0",
+            "mkswap formats a device as swap space",
+            "swapon activates swap on a device",
+            "Use blkid to get the UUID for a stable /etc/fstab entry",
+            "fstab swap entry format: UUID=... none swap defaults 0 0",
         ]
         return self
 
@@ -136,26 +130,19 @@ class CreateSwapFileTask(BaseTask):
         self.size_mb = None
 
     def generate(self, **params):
-        self.size_mb = params.get('size_mb', random.choice([256, 512, 1024, 2048]))
+        self.size_mb = params.get('size_mb', random.choice([256, 512, 1024]))
         self.swap_file = params.get('swap_file', random.choice([
             '/swapfile', '/var/swap', '/swap.img'
         ]))
 
         self.description = (
-            f"Create and configure a swap file:\n"
-            f"  - Create a {self.size_mb}MB swap file at {self.swap_file}\n"
-            f"  - Set correct permissions (600)\n"
-            f"  - Format as swap and activate\n"
-            f"  - Make persistent via /etc/fstab"
+            f"Create a {self.size_mb}MB persistent swap file at {self.swap_file}."
         )
 
         self.hints = [
-            f"Create file: dd if=/dev/zero of={self.swap_file} bs=1M count={self.size_mb}",
-            f"Or: fallocate -l {self.size_mb}M {self.swap_file}",
-            f"Set permissions: chmod 600 {self.swap_file}",
-            f"Format: mkswap {self.swap_file}",
-            f"Activate: swapon {self.swap_file}",
-            f"fstab: {self.swap_file} swap swap defaults 0 0",
+            "fallocate or dd can create a fixed-size file",
+            "Swap files must have permissions 600 before mkswap will accept them",
+            "fstab entry for a swap file uses the file path directly, not a UUID",
         ]
         return self
 
@@ -228,17 +215,13 @@ class SetSwappinessTask(BaseTask):
         self.swappiness = params.get('swappiness', random.choice([10, 20, 30, 40, 60, 80]))
 
         self.description = (
-            f"Configure system swappiness:\n"
-            f"  - Set vm.swappiness to {self.swappiness}\n"
-            f"  - Apply immediately (runtime)\n"
-            f"  - Make persistent across reboots"
+            f"Set vm.swappiness to {self.swappiness}, applied immediately and persistently."
         )
 
         self.hints = [
-            f"Runtime: sysctl vm.swappiness={self.swappiness}",
-            f"Or: echo {self.swappiness} > /proc/sys/vm/swappiness",
-            f"Persistent: echo 'vm.swappiness={self.swappiness}' >> /etc/sysctl.d/99-swappiness.conf",
-            "Apply: sysctl -p /etc/sysctl.d/99-swappiness.conf",
+            "sysctl sets kernel parameters at runtime",
+            "Persistent sysctl settings live in /etc/sysctl.d/ or /etc/sysctl.conf",
+            "sysctl -p reloads a config file without rebooting",
         ]
         return self
 

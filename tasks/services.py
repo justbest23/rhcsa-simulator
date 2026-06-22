@@ -175,10 +175,7 @@ class StartAndEnableServiceTask(BaseTask):
         self.service_name = params.get('service', random.choice(_STARTABLE_SERVICES))
 
         self.description = (
-            f"Configure the '{self.service_name}' service:\n"
-            f"  - Start the service immediately\n"
-            f"  - Enable the service to start automatically at boot\n"
-            f"  - Verify the service is both running and enabled"
+            f"Enable '{self.service_name}' to start now and persistently at every boot."
         )
 
         self.hints = [

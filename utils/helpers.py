@@ -354,7 +354,20 @@ def get_loop_devices():
     return devices
 
 
-def create_practice_devices(count=2, size_mb=500):
+def get_swap_practice_device():
+    """
+    Return a loop device dedicated to swap practice (the 3rd loop device).
+    Falls back to the 1st loop device if fewer than 3 exist.
+    Returns None if no loop devices are set up.
+    """
+    devices = get_loop_devices()
+    if not devices:
+        return None
+    # Use 3rd device if available (reserved for swap), else first
+    return devices[2] if len(devices) >= 3 else devices[0]
+
+
+def create_practice_devices(count=3, size_mb=500):
     """
     Create loop devices for LVM practice.
 

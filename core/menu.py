@@ -342,7 +342,7 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
 
         print()
         print(fmt.bold("Options:"))
-        print("  1. Create practice disks (2 x 500MB)")
+        print("  1. Create practice disks (3 x 500MB — 2 for LVM, 1 for swap)")
         print("  2. Create custom practice disks")
         print("  3. Clean up all practice disks")
         print("  0. Return to menu")
@@ -352,8 +352,8 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
 
         if choice == '1':
             print()
-            print("Creating 2 x 500MB practice disks...")
-            devices = create_practice_devices(count=2, size_mb=500)
+            print("Creating 3 x 500MB practice disks (2 LVM + 1 swap)...")
+            devices = create_practice_devices(count=3, size_mb=500)
             if devices:
                 print(fmt.success(f"Created devices: {', '.join(devices)}"))
             else:
@@ -576,33 +576,42 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
         else:
             print(fmt.dim("  No practice disks found"))
 
-        # ── Step 2: Active swap files ────────────────────────────────────────
+        # ── Step 2: Active swap (files + loop-device partitions) ─────────────
         print()
-        print(fmt.bold("Step 2: Swap Files"))
-        swap_files = []
+        print(fmt.bold("Step 2: Practice Swap"))
+        swap_entries = []   # (device, type)
         try:
             with open('/proc/swaps', 'r') as f:
-                for line in f.readlines()[1:]:
+                for line in f.readlines()[1:]:   # skip header
                     parts = line.split()
-                    if len(parts) >= 2 and parts[1] == 'file':
-                        swap_files.append(parts[0])
+                    if len(parts) < 2:
+                        continue
+                    device, stype = parts[0], parts[1]
+                    # Remove swap files (any path) and loop-device swap partitions
+                    if stype == 'file':
+                        swap_entries.append((device, 'file'))
+                    elif stype == 'partition' and '/loop' in device:
+                        swap_entries.append((device, 'loop'))
         except Exception:
             pass
 
-        if swap_files:
-            for sf in swap_files:
-                print(f"  Active swap file: {sf}")
-            if confirm_action("  Deactivate and remove these swap files?", default=True):
-                for sf in swap_files:
-                    subprocess.run(['swapoff', sf], capture_output=True)
-                    if os.path.exists(sf):
+        if swap_entries:
+            for device, stype in swap_entries:
+                label = 'swap file' if stype == 'file' else 'loop swap'
+                print(f"  Active {label}: {device}")
+            if confirm_action("  Deactivate and remove these swap entries?", default=True):
+                for device, stype in swap_entries:
+                    subprocess.run(['swapoff', device], capture_output=True)
+                    if stype == 'file' and os.path.exists(device):
                         try:
-                            os.remove(sf)
-                            print(fmt.success(f"  Removed {sf}"))
+                            os.remove(device)
+                            print(fmt.success(f"  Removed {device}"))
                         except OSError as e:
-                            print(fmt.error(f"  Could not remove {sf}: {e}"))
+                            print(fmt.error(f"  Could not remove {device}: {e}"))
+                    else:
+                        print(fmt.success(f"  Deactivated {device}"))
         else:
-            print(fmt.dim("  No active swap files found"))
+            print(fmt.dim("  No practice swap found"))
 
         # ── Step 3: /etc/fstab cleanup ───────────────────────────────────────
         print()

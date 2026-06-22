@@ -366,24 +366,19 @@ class ConfigureSwapTask(BaseTask):
 
     def generate(self, **params):
         """Generate swap configuration task."""
-        self.device = params.get('device') or get_practice_device() or '/dev/vdc1'
-        self.size_mb = params.get('size', random.choice([512, 1024, 2048]))
+        from utils.helpers import get_swap_practice_device
+        self.device = params.get('device') or get_swap_practice_device() or get_practice_device() or '/dev/sdb'
+        self.size_mb = params.get('size', random.choice([256, 512]))
 
         self.description = (
-            f"Configure swap space:\n"
-            f"  - Device: {self.device}\n"
-            f"  - Expected size: ~{self.size_mb}MB\n"
-            f"  - Format as swap\n"
-            f"  - Activate swap\n"
-            f"  - Configure to activate at boot (/etc/fstab)"
+            f"Configure {self.device} as {self.size_mb}MB persistent swap space."
         )
 
         self.hints = [
-            f"Format as swap: mkswap {self.device}",
-            f"Activate swap: swapon {self.device}",
-            "Verify: swapon --show or free -m",
-            "Add to /etc/fstab: UUID=<uuid> none swap defaults 0 0",
-            f"Get UUID: blkid {self.device}"
+            "mkswap formats a device as swap; swapon activates it",
+            "Use blkid to get the UUID for a stable /etc/fstab entry",
+            "fstab swap entry: UUID=... none swap defaults 0 0",
+            "Verify: swapon --show",
         ]
 
         return self
@@ -613,25 +608,17 @@ class CreateSwapFileTask(BaseTask):
 
     def generate(self, **params):
         self.swap_file = params.get('file', '/swapfile')
-        self.size_mb = params.get('size', random.choice([512, 1024, 2048]))
+        self.size_mb = params.get('size', random.choice([256, 512, 1024]))
 
         self.description = (
-            f"Create a swap file:\n"
-            f"  - File path: {self.swap_file}\n"
-            f"  - Size: {self.size_mb}MB\n"
-            f"  - Set correct permissions (600)\n"
-            f"  - Format as swap and activate\n"
-            f"  - Configure to activate at boot (/etc/fstab)"
+            f"Create a {self.size_mb}MB persistent swap file at {self.swap_file}."
         )
 
         self.hints = [
-            f"Create file: dd if=/dev/zero of={self.swap_file} bs=1M count={self.size_mb}",
-            f"Or use: fallocate -l {self.size_mb}M {self.swap_file}",
-            f"Set permissions: chmod 600 {self.swap_file}",
-            f"Format as swap: mkswap {self.swap_file}",
-            f"Activate: swapon {self.swap_file}",
-            f"Add to /etc/fstab: {self.swap_file} none swap defaults 0 0",
-            "Verify: swapon --show"
+            "fallocate or dd can create a fixed-size file",
+            "Swap files must have permissions 600 before mkswap will accept them",
+            "fstab entry for a swap file uses the file path directly, not a UUID",
+            "Verify with swapon --show",
         ]
 
         return self
