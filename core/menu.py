@@ -175,7 +175,7 @@ LEARN & PRACTICE
   1. Learn Mode - Study EX200 v10 domains with explanations,
      commands, exam tips. SM-2 indicators show weak areas.
   2. Practice Mode - Pick a category, choose difficulty,
-     validate your work and review hints.
+     get instant feedback with retry & solution hints.
   3. Adaptive Mode - SM-2 selects your weakest/due categories.
      Difficulty adjusts to your performance. Best for review.
 

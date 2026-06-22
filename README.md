@@ -36,6 +36,14 @@ A realistic command-line RHCSA EX200 v10 (Red Hat Enterprise Linux 10) exam simu
 - **Easy Setup**: Menu-driven setup for practice disks (option 13)
 - **Works on Cloud VMs**: Practice LVM on AWS/Azure/GCP without adding volumes
 
+### AI-Powered Feedback (Optional)
+- **Intelligent Analysis**: Line-by-line command analysis using Claude AI
+- **Smart Explanations**: Understands WHY you failed, not just that you failed
+- **Approach Comparison**: Compares your solution to optimal approaches
+- **Contextual Tips**: RHCSA exam tips personalized to each task
+- **Command Tracking**: Automatically tracks and categorizes commands you execute
+
+**Setup**: See [AI_SETUP.md](AI_SETUP.md) for configuration instructions (requires Anthropic API key)
 
 ## Requirements
 
@@ -415,7 +423,7 @@ sudo rm /var/lib/rhcsa-simulator/loops/*.img
 - **Task Types**: 178 tasks covering 100% of RHCSA objectives
 - **Validators**: 90+ validation functions
 - **Modes**: 8 (Learn, Guided Practice, Command Recall, Exam, Practice, Scenario, Troubleshoot, Flashcards)
-- **Dependencies**: None (Python standard library only)
+- **Dependencies**: 0 (Python stdlib only, optional: anthropic for AI feedback)
 
 ### Testing Tasks
 
@@ -491,6 +499,12 @@ This is an educational tool for RHCSA exam preparation. Use at your own risk on 
 - Export Reports (TXT, HTML, PDF)
 - Fix suggestions for failed validation checks
 
+**v2.0.0** - AI-Powered Feedback Release
+- Added AI-powered intelligent feedback using Claude API
+- Command history tracking and analysis
+- Line-by-line approach comparison
+- Contextual failure explanations
+- Complete RHCSA exam coverage (all 12 categories)
 
 **v1.0.0** - Initial release
 
