@@ -33,10 +33,11 @@ class ExamSession:
     reboot simulation, and ResultsDB persistence.
     """
 
-    def __init__(self, task_count=None, timer_enabled=True, duration_minutes=None):
+    def __init__(self, task_count=None, timer_enabled=True, duration_minutes=None, reboot_simulation=None):
         self.task_count = task_count or settings.DEFAULT_EXAM_TASKS
         self.timer_enabled = timer_enabled
         self.duration_minutes = duration_minutes or settings.DEFAULT_EXAM_DURATION
+        self.reboot_simulation = reboot_simulation if reboot_simulation is not None else settings.REBOOT_SIMULATION
         self.start_time = None
         self.end_time = None
         self.tasks = []
@@ -98,7 +99,7 @@ class ExamSession:
         print(f"  Tasks: {self.task_count}")
         print(f"  Duration: {self.duration_minutes} minutes" if self.timer_enabled else "  Duration: No time limit")
         print(f"  Pass threshold: {settings.EXAM_PASS_THRESHOLD * 100:.0f}%")
-        print(f"  Reboot simulation: {'Enabled' if settings.REBOOT_SIMULATION else 'Disabled'}")
+        print(f"  Reboot simulation: {'Enabled' if self.reboot_simulation else 'Disabled'}")
         print()
 
         print(fmt.bold("Instructions:"))
@@ -160,7 +161,7 @@ class ExamSession:
         reboot_result = None
         reboot_passed = None
 
-        if settings.REBOOT_SIMULATION:
+        if self.reboot_simulation:
             print()
             fmt.print_header("REBOOT SIMULATION")
             print("Simulating system reboot to check persistence...")
@@ -331,10 +332,28 @@ def _select_exam_task_count():
             print(fmt.error("Invalid selection"))
 
 
+def _select_reboot_simulation():
+    """Prompt user to enable or disable reboot simulation."""
+    from utils import formatters as fmt
+    print()
+    print(fmt.bold("Reboot simulation:"))
+    print("  1. Enabled   — persistence tasks validated after simulated reboot (recommended)")
+    print("  2. Disabled  — skip reboot phase, score initial validation only")
+    while True:
+        choice = input("\nSelect [1]: ").strip() or '1'
+        if choice == '1':
+            return True
+        elif choice == '2':
+            return False
+        else:
+            print(fmt.error("Invalid selection"))
+
+
 def run_exam_mode():
     """Run exam mode (convenience function)."""
     task_count = _select_exam_task_count()
-    session = ExamSession(task_count=task_count)
+    reboot_sim = _select_reboot_simulation()
+    session = ExamSession(task_count=task_count, reboot_simulation=reboot_sim)
     session.start()
 
     if not session.tasks:
