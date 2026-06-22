@@ -495,9 +495,8 @@ class CronExpressionTask(BaseTask):
         )
         self.hints = [
             "Cron format: minute hour day-of-month month day-of-week",
-            f"Expected: {self.cron_expression} {self.command}",
-            "*/N = every N units, 0 = at zero, 1-5 = Monday-Friday",
-            f"Edit: crontab -e -u {self.username}",
+            "*/N = every N units, 0 = midnight/start, 1-5 = Monday-Friday",
+            f"Edit the user's crontab: crontab -e -u {self.username}",
         ]
         return self
 

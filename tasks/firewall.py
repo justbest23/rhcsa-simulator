@@ -497,9 +497,8 @@ class SetDefaultZoneTask(BaseTask):
         )
 
         self.hints = [
-            f"firewall-cmd --set-default-zone={self.zone}",
-            "firewall-cmd --get-default-zone",
-            f"Expected output: {self.zone}",
+            "firewall-cmd has a --set-default-zone option",
+            "Verify with: firewall-cmd --get-default-zone",
         ]
         return self
 

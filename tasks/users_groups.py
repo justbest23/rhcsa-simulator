@@ -571,21 +571,15 @@ class ConfigureSudoTask(BaseTask):
         passwd_note = " without a password" if self.nopasswd else " (password required)"
 
         self.description = (
-            f"Configure sudo access for user '{self.username}':\n"
-            f"  - Allowed commands: {self.allowed_cmds}\n"
-            f"  - The user should be able to run these commands as root"
-            f"{passwd_note}\n"
-            f"  - Configuration must be placed in /etc/sudoers.d/{self.username}\n"
-            f"  - File must have correct permissions (0440)\n\n"
-            f"  Expected sudoers line:\n"
-            f"    {self.username} ALL=(ALL) {nopasswd_str}{self.allowed_cmds}"
+            f"Grant '{self.username}' sudo access to run {self.allowed_cmds} as root"
+            f"{passwd_note}. Place the rule in /etc/sudoers.d/{self.username}."
         )
 
         self.hints = [
-            f"Create /etc/sudoers.d/{self.username} with the rule.",
-            f"Content: {self.username} ALL=(ALL) {nopasswd_str}{self.allowed_cmds}",
-            "Set permissions: chmod 0440 /etc/sudoers.d/{0}".format(self.username),
-            "Validate: visudo -cf /etc/sudoers.d/{0}".format(self.username),
+            f"Drop-in sudoers files go in /etc/sudoers.d/, not /etc/sudoers",
+            "sudoers rule format: user ALL=(ALL) [NOPASSWD:] command[,command]",
+            "File permissions must be 0440 — world-writable files are ignored",
+            f"Validate syntax before relying on it: visudo -cf /etc/sudoers.d/{self.username}",
         ]
         return self
 
