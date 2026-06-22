@@ -486,7 +486,7 @@ class ExtendFilesystemTask(BaseTask):
             default_dev = '/dev/mapper/vg_practice-lv_practice'
         self.device = params.get('device') or default_dev
         self.fstype = params.get('fstype', random.choice(['xfs', 'ext4']))
-        self.expected_size_mb = params.get('size', random.choice([1500, 2000, 3000]))
+        self.expected_size_mb = params.get('size', random.choice([250, 300, 350]))
 
         resize_cmd = 'xfs_growfs' if self.fstype == 'xfs' else 'resize2fs'
 
@@ -496,16 +496,16 @@ class ExtendFilesystemTask(BaseTask):
             f"  - Filesystem type: {self.fstype}\n"
             f"  - Resize to approximately {self.expected_size_mb}MB\n"
             f"  - Filesystem must remain mounted (if applicable)\n"
-            f"  - Data must not be lost"
+            f"  - Data must not be lost\n"
+            f"  - Note: if this LV does not exist yet, set up practice disks first (Setup → 1)"
         )
 
         self.hints = [
-            f"For XFS: xfs_growfs <mount_point>",
+            "First extend the underlying LV with lvextend, then resize the filesystem",
+            f"For XFS: xfs_growfs <mount_point> (must be mounted)",
             f"For ext4: resize2fs {self.device}",
-            "XFS can only grow, not shrink",
-            "ext4 resize can be done online (mounted) for growth",
-            "First ensure underlying LV/partition is extended",
-            "Verify with 'df -h' after resizing"
+            "XFS can only grow, never shrink",
+            "Verify the new size with 'df -h' after resizing",
         ]
 
         return self

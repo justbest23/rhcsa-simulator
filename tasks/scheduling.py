@@ -69,18 +69,15 @@ class CreateCronJobTask(BaseTask):
             f"Create a cron job:\n"
             f"  - User: {self.username}\n"
             f"  - Schedule: {self.schedule_desc}\n"
-            f"  - Cron expression: {self.schedule}\n"
             f"  - Command: {self.command}\n"
             f"  - Use crontab command to configure"
         )
 
         self.hints = [
             f"Edit crontab: crontab -e (for current user) or crontab -e -u {self.username}",
-            f"Add line: {self.schedule} {self.command}",
-            "Cron format: minute hour day month weekday command",
+            "Cron format: minute hour day-of-month month day-of-week command",
             f"Verify: crontab -l -u {self.username}",
-            "* means 'every'",
-            "*/15 means 'every 15th'"
+            "Fields: * = any value, */n = every nth, n-m = range, n,m = list",
         ]
 
         return self
@@ -162,31 +159,40 @@ class CreateSystemCronTask(BaseTask):
         self.job_name = None
         self.command = None
         self.schedule = None
+        self.schedule_desc = None
         self.user = None
 
     def generate(self, **params):
         """Generate system cron task."""
         self.job_name = params.get('job_name', f'custom-job-{random.randint(1,99)}')
         self.user = params.get('user', 'root')
-        self.schedule = params.get('schedule', '0 3 * * *')
         self.command = params.get('command', '/usr/local/bin/maintenance.sh')
+
+        schedules = [
+            ('0 3 * * *', 'daily at 3:00 AM'),
+            ('0 0 * * 0', 'weekly on Sunday at midnight'),
+            ('0 */4 * * *', 'every 4 hours'),
+            ('30 6 * * 1-5', 'weekdays at 6:30 AM'),
+            ('0 12 1 * *', 'on the 1st of every month at noon'),
+        ]
+        self.schedule, self.schedule_desc = params.get('schedule_pair', random.choice(schedules))
 
         self.description = (
             f"Create a system-wide cron job:\n"
             f"  - Job name: {self.job_name}\n"
             f"  - File: /etc/cron.d/{self.job_name}\n"
             f"  - Run as user: {self.user}\n"
-            f"  - Schedule: {self.schedule}\n"
+            f"  - Schedule: {self.schedule_desc}\n"
             f"  - Command: {self.command}\n"
             f"  - Configure in /etc/cron.d/ (not user crontab)"
         )
 
         self.hints = [
             f"Create file: /etc/cron.d/{self.job_name}",
-            f"Format: {self.schedule} {self.user} {self.command}",
             "System cron format: min hour day month weekday user command",
+            "Unlike user crontabs, /etc/cron.d/ files include the username field",
             f"Permissions: chmod 644 /etc/cron.d/{self.job_name}",
-            "No need to restart cron service"
+            "No need to restart crond",
         ]
 
         return self
