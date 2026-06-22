@@ -359,71 +359,34 @@ def get_loop_devices():
 
 def get_swap_practice_device():
     """
-    Return the loop device backed by the dedicated swap image (swap.img).
-    Uses losetup -j to find it precisely — no index guessing.
-    Returns None if the swap device has not been set up.
+    Return the loop device to use for swap partition practice.
+    Uses losetup -j on disk2.img for precise, stable detection.
+    Falls back to the last available loop device if disk2.img isn't attached.
     """
     import subprocess
     import os
 
-    swap_img = '/var/lib/rhcsa-simulator/loops/swap.img'
-    if not os.path.exists(swap_img):
-        return None
-    try:
-        result = subprocess.run(
-            ['losetup', '-j', swap_img],
-            capture_output=True, text=True, timeout=10
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.split(':')[0].strip()
-    except Exception:
-        pass
-    return None
-
-
-def create_swap_device(size_mb=512):
-    """
-    Create and attach a dedicated swap practice loop device (swap.img).
-    Separate from the LVM practice disks so there is no interference.
-    Returns the loop device path, or None on failure.
-    """
-    import subprocess
-    import os
-
-    loop_dir = '/var/lib/rhcsa-simulator/loops'
-    swap_img = os.path.join(loop_dir, 'swap.img')
-    os.makedirs(loop_dir, exist_ok=True)
-
-    # Already attached?
-    existing = get_swap_practice_device()
-    if existing:
-        return existing
-
-    # Create image if it doesn't exist
-    if not os.path.exists(swap_img):
+    # Prefer disk2.img — 3rd practice disk, reserved for partition/swap practice
+    disk2_img = '/var/lib/rhcsa-simulator/loops/disk2.img'
+    if os.path.exists(disk2_img):
         try:
-            subprocess.run(
-                ['dd', 'if=/dev/zero', f'of={swap_img}', 'bs=1M', f'count={size_mb}'],
-                capture_output=True, timeout=60, check=True
+            result = subprocess.run(
+                ['losetup', '-j', disk2_img],
+                capture_output=True, text=True, timeout=10
             )
-        except Exception as e:
-            logger.error(f"Could not create swap image: {e}")
-            return None
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.split(':')[0].strip()
+        except Exception:
+            pass
 
-    # Attach
-    try:
-        result = subprocess.run(
-            ['losetup', '--find', '--show', swap_img],
-            capture_output=True, text=True, timeout=10
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-    except Exception as e:
-        logger.error(f"Could not attach swap image: {e}")
+    # Fallback: last loop device we own (avoids taking an LVM disk)
+    devices = get_loop_devices()
+    if devices:
+        return devices[-1]
     return None
 
 
-def create_practice_devices(count=2, size_mb=500):
+def create_practice_devices(count=3, size_mb=500):
     """
     Create loop devices for LVM practice.
 

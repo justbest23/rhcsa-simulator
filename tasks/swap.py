@@ -38,18 +38,23 @@ class CreateSwapPartitionTask(BaseTask):
         self.size_mb = None
 
     def generate(self, **params):
-        self.size_mb = params.get('size_mb', 0)  # device determines actual size
-        self.device = params.get('device') or get_swap_practice_device() or '/dev/sdb'
+        self.size_mb = params.get('size_mb', random.choice([256, 512]))
+        self.loop_device = params.get('loop_device') or get_swap_practice_device() or '/dev/sdb'
+        # Partition 1 on the loop device (e.g. /dev/loop2p1)
+        self.device = params.get('device') or f"{self.loop_device}p1"
 
         self.description = (
-            f"Configure {self.device} as a persistent swap partition."
+            f"Use {self.loop_device} to create a {self.size_mb}MB swap partition "
+            f"and configure it as persistent swap."
         )
 
         self.hints = [
-            "mkswap formats a device as swap space",
-            "swapon activates swap on a device",
+            f"Use fdisk {self.loop_device} to create a new partition of ~{self.size_mb}MB",
+            "Run partprobe after fdisk so the kernel sees the new partition",
+            "mkswap formats the partition as swap space",
+            "swapon activates the swap partition",
             "Use blkid to get the UUID for a stable /etc/fstab entry",
-            "fstab swap entry format: UUID=... none swap defaults 0 0",
+            "fstab swap entry: UUID=... none swap defaults 0 0",
         ]
         return self
 
@@ -57,23 +62,25 @@ class CreateSwapPartitionTask(BaseTask):
         checks = []
         total_points = 0
 
-        # Check 1: Swap is active (4 pts)
+        # Check 1: Swap is active on the partition (4 pts)
         result = execute_safe(['swapon', '--show'])
         swap_active = result.success and self.device in result.stdout
         if swap_active:
             checks.append(ValidationCheck("swap_active", True, 4, f"Swap active on {self.device}"))
             total_points += 4
         else:
-            checks.append(ValidationCheck("swap_active", False, 0, f"Swap not active on {self.device}", max_points=4))
+            checks.append(ValidationCheck("swap_active", False, 0,
+                f"Swap not active on {self.device} — run: mkswap {self.device} && swapon {self.device}", max_points=4))
 
-        # Check 2: Device is formatted as swap (4 pts)
+        # Check 2: Partition is formatted as swap (4 pts)
         result = execute_safe(['blkid', self.device])
         is_swap = result.success and 'TYPE="swap"' in result.stdout
         if is_swap:
-            checks.append(ValidationCheck("swap_formatted", True, 4, "Device formatted as swap"))
+            checks.append(ValidationCheck("swap_formatted", True, 4, f"{self.device} formatted as swap"))
             total_points += 4
         else:
-            checks.append(ValidationCheck("swap_formatted", False, 0, "Device not formatted as swap", max_points=4))
+            checks.append(ValidationCheck("swap_formatted", False, 0,
+                f"{self.device} not formatted as swap — run: mkswap {self.device}", max_points=4))
 
         # Check 3: In /etc/fstab (4 pts)
         result = execute_safe(['cat', '/etc/fstab'])
@@ -85,21 +92,20 @@ class CreateSwapPartitionTask(BaseTask):
                     continue
                 parts = line.split()
                 if len(parts) >= 3 and parts[2] == 'swap':
-                    if self.device in line or 'UUID=' in parts[0]:
-                        # Verify UUID matches if UUID-based
-                        if 'UUID=' in parts[0]:
-                            uuid = parts[0].split('=')[1]
-                            blkid = execute_safe(['blkid', '-U', uuid])
-                            if blkid.success and self.device in blkid.stdout:
-                                fstab_ok = True
-                        else:
+                    if self.device in line:
+                        fstab_ok = True
+                    elif 'UUID=' in parts[0]:
+                        uuid_val = parts[0].split('=')[1]
+                        blkid = execute_safe(['blkid', '-U', uuid_val])
+                        if blkid.success and self.device in blkid.stdout:
                             fstab_ok = True
 
         if fstab_ok:
-            checks.append(ValidationCheck("fstab_entry", True, 4, "Swap in /etc/fstab"))
+            checks.append(ValidationCheck("fstab_entry", True, 4, "Swap partition in /etc/fstab"))
             total_points += 4
         else:
-            checks.append(ValidationCheck("fstab_entry", False, 0, "Swap not in /etc/fstab", max_points=4))
+            checks.append(ValidationCheck("fstab_entry", False, 0,
+                f"No fstab entry for swap on {self.device} — add UUID or device path with type 'swap'", max_points=4))
 
         passed = total_points >= (self.points * 0.7)
         return ValidationResult(self.id, passed, total_points, self.points, checks)
