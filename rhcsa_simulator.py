@@ -284,6 +284,9 @@ def main():
             elif choice == 'export':
                 menu.export_report()
 
+            elif choice == 'history':
+                menu.show_result_history()
+
             elif choice == 'setup':
                 menu.show_setup()
 

@@ -230,7 +230,9 @@ class ExamSession:
                 max_score=result.max_score,
                 passed=result.passed,
                 persistence_passed=persistence_passed,
-                checks=checks_data
+                checks=checks_data,
+                hints=getattr(task, 'hints', None),
+                exam_tips=getattr(task, 'exam_tips', None),
             )
 
         return passed

@@ -102,6 +102,14 @@ class ResultsDB:
                     ON practice_history(created_at);
             """)
             conn.commit()
+
+            # Migration: add hints/exam_tips columns if not present
+            for col in ('hints_json', 'exam_tips_json'):
+                try:
+                    conn.execute(f"ALTER TABLE task_results ADD COLUMN {col} TEXT")
+                    conn.commit()
+                except sqlite3.OperationalError:
+                    pass  # column already exists
         finally:
             conn.close()
 
@@ -128,21 +136,36 @@ class ResultsDB:
 
     def save_task_result(self, exam_id, task_id, category, difficulty, domain,
                          description, score, max_score, passed,
-                         persistence_passed=None, checks=None):
+                         persistence_passed=None, checks=None,
+                         hints=None, exam_tips=None):
         """Save a per-task result."""
         checks_json = json.dumps(checks) if checks else None
+        hints_json = json.dumps(hints) if hints else None
+        exam_tips_json = json.dumps(exam_tips) if exam_tips else None
         conn = self._get_conn()
         try:
             conn.execute("""
                 INSERT INTO task_results
                 (exam_id, task_id, category, difficulty, domain, description,
-                 score, max_score, passed, persistence_passed, checks_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 score, max_score, passed, persistence_passed, checks_json,
+                 hints_json, exam_tips_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (exam_id, task_id, category, difficulty, domain, description,
                   score, max_score, 1 if passed else 0,
                   1 if persistence_passed else (0 if persistence_passed is not None else None),
-                  checks_json))
+                  checks_json, hints_json, exam_tips_json))
             conn.commit()
+        finally:
+            conn.close()
+
+    def get_exam_task_results(self, exam_id):
+        """Get all per-task results for a specific exam, in order."""
+        conn = self._get_conn()
+        try:
+            rows = conn.execute("""
+                SELECT * FROM task_results WHERE exam_id = ? ORDER BY id ASC
+            """, (exam_id,)).fetchall()
+            return [dict(r) for r in rows]
         finally:
             conn.close()
 

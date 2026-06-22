@@ -42,6 +42,7 @@ class MenuSystem:
             print(fmt.bold("PROGRESS"))
             fmt.print_menu_option(4, "Dashboard", "Stats, history & weak areas")
             fmt.print_menu_option(5, "Export Report", "Generate progress report")
+            fmt.print_menu_option(6, "Result History", "Drill into past exam results task by task")
             print()
 
             # Footer
@@ -65,6 +66,8 @@ class MenuSystem:
                 return 'dashboard'
             elif choice == '5':
                 return 'export'
+            elif choice == '6':
+                return 'history'
             elif choice == 's':
                 return 'setup'
             elif choice in ('?', 'h'):
@@ -496,6 +499,178 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
 
         print()
         input("Press Enter to return...")
+
+    def show_result_history(self):
+        """List recent exam results and allow drilling into task-level detail."""
+        import json
+        from core.results_db import get_results_db
+
+        db = get_results_db()
+
+        while True:
+            fmt.clear_screen()
+            fmt.print_header("RESULT HISTORY")
+
+            exams = db.get_recent_exams(10)
+
+            if not exams:
+                print(fmt.info("No exam results yet. Complete a mock exam to see results here."))
+                print()
+                input("Press Enter to return...")
+                return
+
+            print(fmt.bold(f"Last {len(exams)} exam sessions:"))
+            print()
+            for i, ex in enumerate(exams, 1):
+                date = ex['start_time'][:16].replace('T', ' ') if ex['start_time'] else '?'
+                pct = ex['percentage']
+                status = fmt.success("PASS") if ex['passed'] else fmt.error("FAIL")
+                tasks = ex.get('task_count', '?')
+                score = f"{ex['total_score']}/{ex['max_score']}"
+                print(f"  {i:2}. {date}  {score} pts  {pct:.0f}%  {status}  ({tasks} tasks)")
+
+            print()
+            print(fmt.dim("  0. Return to menu"))
+            print()
+
+            choice = input("Select a session to review (number): ").strip()
+            if choice == '0' or choice.lower() == 'q':
+                return
+
+            try:
+                idx = int(choice) - 1
+                if not (0 <= idx < len(exams)):
+                    print(fmt.error("Invalid selection"))
+                    input("Press Enter to continue...")
+                    continue
+            except ValueError:
+                print(fmt.error("Please enter a number"))
+                input("Press Enter to continue...")
+                continue
+
+            self._show_exam_detail(db, exams[idx])
+
+    def _show_exam_detail(self, db, exam):
+        """Show per-task breakdown for one exam session."""
+        import json
+        from config import settings
+
+        exam_id = exam['exam_id']
+        task_results = db.get_exam_task_results(exam_id)
+
+        if not task_results:
+            print(fmt.info("No per-task data saved for this session."))
+            print(fmt.dim("(Per-task detail is saved starting from sessions after this update)"))
+            input("\nPress Enter to return...")
+            return
+
+        task_list = list(enumerate(task_results, 1))
+
+        while True:
+            fmt.clear_screen()
+            date = exam['start_time'][:16].replace('T', ' ') if exam['start_time'] else '?'
+            pct = exam['percentage']
+            status = fmt.success("PASS") if exam['passed'] else fmt.error("FAIL")
+            fmt.print_header(f"EXAM DETAIL — {date}")
+            print(f"  Result: {status}  {exam['total_score']}/{exam['max_score']} pts  ({pct:.0f}%)")
+            print()
+
+            for num, tr in task_list:
+                icon = fmt.success("✓") if tr['passed'] else fmt.error("✗")
+                cat = fmt.format_category_name(tr['category'])
+                domain = settings.EXAM_DOMAINS.get(tr.get('domain', 0), '')
+                score_str = f"{tr['score']}/{tr['max_score']}pt"
+                # Show first line of description only
+                first_line = tr['description'].splitlines()[0] if tr['description'] else tr['task_id']
+                print(f"  {num:2}. {icon} [{score_str:>8}]  {first_line[:55]}")
+                if domain:
+                    d_num = tr.get('domain', '?')
+                    print(f"       {fmt.dim(f'D{d_num} {domain} — {cat}')}")
+
+            print()
+            print(fmt.dim("  Enter task number for full detail, 0 to go back"))
+            print()
+
+            choice = input("Select task: ").strip()
+            if choice == '0' or choice.lower() == 'q':
+                return
+
+            try:
+                tidx = int(choice) - 1
+                if not (0 <= tidx < len(task_list)):
+                    continue
+            except ValueError:
+                continue
+
+            self._show_task_detail(task_list[tidx][1])
+
+    def _show_task_detail(self, tr):
+        """Show full detail for one task result including failed checks and hints."""
+        import json
+
+        fmt.clear_screen()
+        status = fmt.success("PASSED") if tr['passed'] else fmt.error("FAILED")
+        cat = fmt.format_category_name(tr['category'])
+        print(f"{status}  {tr['score']}/{tr['max_score']} points  [{cat} / {tr['difficulty']}]")
+        print("=" * 60)
+        print()
+
+        # Task description (what was asked)
+        print(fmt.bold("Task:"))
+        print(tr['description'] or "(no description saved)")
+        print()
+
+        # Validation checks (what the system found)
+        checks = []
+        if tr.get('checks_json'):
+            try:
+                checks = json.loads(tr['checks_json'])
+            except Exception:
+                pass
+
+        if checks:
+            print(fmt.bold("Validation breakdown:"))
+            for c in checks:
+                icon = fmt.success("✓") if c.get('passed') else fmt.error("✗")
+                pts = c.get('points', 0)
+                max_pts = c.get('max_points', pts)
+                msg = c.get('message', c.get('name', ''))
+                print(f"  {icon} [{pts}/{max_pts}pt]  {msg}")
+            print()
+
+        # Hints / what to study (only if task failed)
+        if not tr['passed']:
+            hints = []
+            if tr.get('hints_json'):
+                try:
+                    hints = json.loads(tr['hints_json'])
+                except Exception:
+                    pass
+
+            exam_tips = []
+            if tr.get('exam_tips_json'):
+                try:
+                    exam_tips = json.loads(tr['exam_tips_json'])
+                except Exception:
+                    pass
+
+            if hints:
+                print(fmt.bold("What to study / how to fix it:"))
+                for h in hints:
+                    print(f"  • {h}")
+                print()
+
+            if exam_tips:
+                print(fmt.bold("Exam tips:"))
+                for t in exam_tips:
+                    print(f"  * {t}")
+                print()
+
+            if not hints and not exam_tips:
+                print(fmt.dim("(No hints saved for this session — re-run a new exam to get hints)"))
+                print()
+
+        input("Press Enter to return to session view...")
 
     def populate_practice_environment(self):
         """Install/remove lightweight packages to build up DNF transaction history."""
