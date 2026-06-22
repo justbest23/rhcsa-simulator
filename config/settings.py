@@ -39,21 +39,24 @@ DIFFICULTY_LEVELS = ["easy", "medium", "exam", "hard"]
 TASK_CATEGORIES = [
     "users_groups",
     "permissions",
+    "essential_tools",
     "lvm",
     "filesystems",
     "networking",
+    "ssh",
     "selinux",
     "services",
+    "processes",
+    "time_services",
+    "troubleshooting",
     "boot",
     "scheduling",
-    "containers",
     "scripting",
     "packages",
     "partitioning",
     "network_storage",
     "repos",
     "flatpak",
-    "modules",
     "boot_recovery",
     "journalctl",
     "systemd_timers",
@@ -61,7 +64,7 @@ TASK_CATEGORIES = [
     "swap",
 ]
 
-# EX200 v10 Exam Domains (1-9)
+# EX200 v10 Exam Domains (1-8)
 EXAM_DOMAINS = {
     1: "Software Management",
     2: "System Setup & Boot",
@@ -71,20 +74,18 @@ EXAM_DOMAINS = {
     6: "Systemd, Services & Processes",
     7: "Security - SELinux & Firewall",
     8: "Automation & Scripting",
-    9: "Container Management",
 }
 
 # Map categories to domains
 CATEGORY_TO_DOMAIN = {
-    "packages": 1, "repos": 1, "flatpak": 1, "modules": 1,
+    "packages": 1, "repos": 1, "flatpak": 1,
     "boot": 2, "boot_recovery": 2, "journalctl": 2,
-    "users_groups": 3, "permissions": 3,
+    "users_groups": 3, "permissions": 3, "essential_tools": 3,
     "partitioning": 4, "lvm": 4, "filesystems": 4, "swap": 4, "network_storage": 4,
-    "networking": 5,
-    "services": 6, "systemd_timers": 6,
+    "networking": 5, "ssh": 5,
+    "services": 6, "systemd_timers": 6, "processes": 6, "time_services": 6, "troubleshooting": 6,
     "selinux": 7, "firewall": 7,
     "scheduling": 8, "scripting": 8,
-    "containers": 9,
 }
 
 # Practice mode configuration

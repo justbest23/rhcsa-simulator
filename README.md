@@ -1,6 +1,8 @@
 # RHCSA Mock Exam Simulator
 
-A realistic command-line RHCSA (Red Hat Certified System Administrator) exam simulator that generates exam tasks, validates your system configuration, and tracks your progress over time.
+A realistic command-line RHCSA EX200 v10 (Red Hat Enterprise Linux 10) exam simulator that generates exam tasks, validates your system configuration, and tracks your progress over time.
+
+> **EX200 v10 aligned**: All tasks cover the official Red Hat EX200 v10 exam objectives. Containers/Podman and DNF module streams have been removed (they are not on the v10 exam). Flatpak, systemd timers, tuning profiles (tuned-adm), and secure file transfer (scp) are included as they appear on the v10 objectives.
 
 > **Note**: This project is under active development. While functional and useful for RHCSA prep, you may encounter bugs or incomplete features. Contributions, bug reports, and feedback are welcome!
 
@@ -45,8 +47,8 @@ A realistic command-line RHCSA (Red Hat Certified System Administrator) exam sim
 
 ## Requirements
 
-- **OS**: RHEL 8/9, Rocky Linux 8/9, or Alma Linux 8/9
-- **Python**: 3.6 or later (included in RHEL 8/9)
+- **OS**: RHEL 10, Rocky Linux 9/10, or Alma Linux 9/10 (EX200 v10 exam targets RHEL 10)
+- **Python**: 3.9 or later (included in RHEL 10)
 - **Privileges**: Must run as root (uses `sudo`)
 - **Dependencies**: None (uses Python standard library only)
 

@@ -475,3 +475,207 @@ class SecureSSHDTask(BaseTask):
 
         passed = total_points >= (self.points * 0.7)
         return ValidationResult(self.id, passed, total_points, self.points, checks)
+
+
+@TaskRegistry.register("ssh")
+class SecureFileTransferTask(BaseTask):
+    """Transfer a file securely using scp — push direction (EX200 v10 objective)."""
+
+    def __init__(self):
+        super().__init__(
+            id="ssh_scp_001",
+            category="ssh",
+            difficulty="easy",
+            points=8
+        )
+        self.src_file = None
+        self.dest_path = None
+        self.exam_tips = [
+            "scp syntax: scp [src] [user@host:dest] for push, scp [user@host:src] [dest] for pull",
+            "scp -r copies entire directories recursively",
+            "sftp provides an interactive file-browser session over SSH",
+            "rsync -avz is preferred for large or incremental transfers",
+            "scp and sftp both use SSH for transport — same auth as ssh",
+        ]
+
+    def generate(self, **params):
+        src_choices = ['/etc/hostname', '/etc/os-release', '/etc/redhat-release']
+        self.src_file = params.get('src', random.choice(src_choices))
+        self.dest_path = params.get('dest', f'/tmp/scp_transfer_{random.randint(100, 999)}')
+
+        self.description = (
+            f"Securely transfer a file using scp (push direction):\n\n"
+            f"  1. Copy '{self.src_file}' TO '{self.dest_path}' on localhost\n"
+            f"     Command: scp {self.src_file} root@localhost:{self.dest_path}\n"
+            f"  2. Verify the destination file exists and is not empty\n\n"
+            f"scp uses SSH for secure transport. Knowing scp is required for RHCSA."
+        )
+
+        self.hints = [
+            "Ensure sshd is running: systemctl start sshd",
+            f"Transfer: scp {self.src_file} root@localhost:{self.dest_path}",
+            f"Verify: ls -l {self.dest_path}",
+            "If prompted for a password, use your root credentials",
+            "Alternatively: cp {0} {1} (bypasses SSH but tests same concept locally)".format(self.src_file, self.dest_path),
+        ]
+
+        return self
+
+    def validate(self):
+        import os
+        checks = []
+        total_points = 0
+
+        if os.path.exists(self.dest_path):
+            checks.append(ValidationCheck("file_transferred", True, 5, f"File exists at {self.dest_path}"))
+            total_points += 5
+        else:
+            checks.append(ValidationCheck("file_transferred", False, 0, f"No file found at {self.dest_path}", max_points=5))
+            return ValidationResult(self.id, False, total_points, self.points, checks)
+
+        try:
+            if os.path.getsize(self.dest_path) > 0:
+                checks.append(ValidationCheck("file_not_empty", True, 3, "File has content"))
+                total_points += 3
+            else:
+                checks.append(ValidationCheck("file_not_empty", False, 0, "File is empty", max_points=3))
+        except Exception as e:
+            checks.append(ValidationCheck("file_not_empty", False, 0, f"Could not stat: {e}", max_points=3))
+
+        passed = total_points >= (self.points * 0.7)
+        return ValidationResult(self.id, passed, total_points, self.points, checks)
+
+
+@TaskRegistry.register("ssh")
+class SCPDirectoryTransferTask(BaseTask):
+    """Transfer a directory recursively with scp -r (EX200 v10 objective)."""
+
+    def __init__(self):
+        super().__init__(
+            id="ssh_scp_002",
+            category="ssh",
+            difficulty="medium",
+            points=10
+        )
+        self.src_dir = None
+        self.dest_dir = None
+        self.exam_tips = [
+            "scp -r copies an entire directory tree recursively",
+            "rsync -avz is preferred for large directories — shows progress and handles errors",
+            "Trailing slash on source changes what gets copied: /dir/ vs /dir",
+        ]
+
+    def generate(self, **params):
+        tag = random.randint(100, 999)
+        self.src_dir = params.get('src', f'/tmp/scp_src_{tag}')
+        self.dest_dir = params.get('dest', f'/tmp/scp_dst_{tag}')
+
+        self.description = (
+            f"Transfer a directory securely using scp:\n\n"
+            f"  1. Create a source directory '{self.src_dir}' with at least 2 files\n"
+            f"     mkdir -p {self.src_dir} && echo data1 > {self.src_dir}/file1.txt && echo data2 > {self.src_dir}/file2.txt\n"
+            f"  2. Copy the directory to '{self.dest_dir}' on localhost using scp -r\n"
+            f"     scp -r {self.src_dir} root@localhost:{self.dest_dir}\n"
+            f"  3. Verify the destination directory exists with the files inside"
+        )
+
+        self.hints = [
+            f"Create: mkdir -p {self.src_dir} && touch {self.src_dir}/{{file1,file2}}.txt",
+            f"Transfer: scp -r {self.src_dir} root@localhost:{self.dest_dir}",
+            f"Verify: ls -l {self.dest_dir}",
+            "Ensure sshd is running: systemctl is-active sshd",
+        ]
+
+        return self
+
+    def validate(self):
+        import os
+        checks = []
+        total_points = 0
+
+        if os.path.isdir(self.dest_dir):
+            checks.append(ValidationCheck("dir_exists", True, 5, f"Directory exists at {self.dest_dir}"))
+            total_points += 5
+        else:
+            checks.append(ValidationCheck("dir_exists", False, 0, f"No directory at {self.dest_dir}", max_points=5))
+            return ValidationResult(self.id, False, total_points, self.points, checks)
+
+        try:
+            items = os.listdir(self.dest_dir)
+            if items:
+                checks.append(ValidationCheck("dir_content", True, 5, f"Directory contains {len(items)} item(s)"))
+                total_points += 5
+            else:
+                checks.append(ValidationCheck("dir_content", False, 0, "Destination directory is empty", max_points=5))
+        except Exception as e:
+            checks.append(ValidationCheck("dir_content", False, 0, f"Could not list dir: {e}", max_points=5))
+
+        passed = total_points >= (self.points * 0.7)
+        return ValidationResult(self.id, passed, total_points, self.points, checks)
+
+
+@TaskRegistry.register("ssh")
+class SCPFromRemoteTask(BaseTask):
+    """Pull a file from a remote host using scp (EX200 v10 objective)."""
+
+    def __init__(self):
+        super().__init__(
+            id="ssh_scp_003",
+            category="ssh",
+            difficulty="medium",
+            points=10
+        )
+        self.remote_src = None
+        self.local_dest = None
+        self.exam_tips = [
+            "scp pulls from remote: scp user@host:/remote/path /local/path",
+            "Know both push (local → remote) and pull (remote → local) directions",
+            "sftp: connect then use 'get /remote/path [local_path]' to retrieve files",
+        ]
+
+    def generate(self, **params):
+        tag = random.randint(100, 999)
+        self.remote_src = params.get('remote_src', random.choice(['/etc/hostname', '/etc/os-release']))
+        self.local_dest = params.get('local_dest', f'/tmp/remote_pull_{tag}')
+
+        self.description = (
+            f"Retrieve a file from a remote system using scp (pull direction):\n\n"
+            f"  1. Pull '{self.remote_src}' FROM localhost TO '{self.local_dest}'\n"
+            f"     scp root@localhost:{self.remote_src} {self.local_dest}\n"
+            f"  2. Verify the file was retrieved and has content\n\n"
+            f"On the exam you may need to retrieve files or logs from a remote host.\n"
+            f"This tests the pull direction of scp."
+        )
+
+        self.hints = [
+            "Ensure sshd is running: systemctl is-active sshd",
+            f"Pull the file: scp root@localhost:{self.remote_src} {self.local_dest}",
+            f"Verify: cat {self.local_dest}",
+            f"sftp alternative: sftp root@localhost then: get {self.remote_src} {self.local_dest}",
+        ]
+
+        return self
+
+    def validate(self):
+        import os
+        checks = []
+        total_points = 0
+
+        if os.path.exists(self.local_dest):
+            checks.append(ValidationCheck("file_retrieved", True, 6, f"File retrieved to {self.local_dest}"))
+            total_points += 6
+        else:
+            checks.append(ValidationCheck("file_retrieved", False, 0, f"No file at {self.local_dest}", max_points=6))
+            return ValidationResult(self.id, False, total_points, self.points, checks)
+
+        try:
+            if os.path.getsize(self.local_dest) > 0:
+                checks.append(ValidationCheck("file_valid", True, 4, "Retrieved file has content"))
+                total_points += 4
+            else:
+                checks.append(ValidationCheck("file_valid", False, 0, "Retrieved file is empty", max_points=4))
+        except Exception as e:
+            checks.append(ValidationCheck("file_valid", False, 0, f"Could not stat: {e}", max_points=4))
+
+        passed = total_points >= (self.points * 0.7)
+        return ValidationResult(self.id, passed, total_points, self.points, checks)

@@ -10,11 +10,10 @@ EXAM_OBJECTIVES = {
             "Install and update software packages using dnf",
             "Configure package repositories (BaseOS, AppStream, third-party)",
             "Manage RPM packages (query, verify, install)",
-            "Work with package module streams",
             "Install and manage Flatpak applications and repositories",
             "Manage package groups and environments",
         ],
-        "categories": ["packages", "repos", "flatpak", "modules"],
+        "categories": ["packages", "repos", "flatpak"],
     },
     2: {
         "name": "System Setup & Boot",
@@ -48,7 +47,7 @@ EXAM_OBJECTIVES = {
     },
     4: {
         "name": "Storage & Filesystems",
-        "weight": 15,
+        "weight": 19,
         "objectives": [
             "Create MBR and GPT partitions",
             "Create and manage LVM (PV, VG, LV)",
@@ -117,18 +116,6 @@ EXAM_OBJECTIVES = {
             "Use exit codes in scripts",
         ],
         "categories": ["scheduling", "scripting"],
-    },
-    9: {
-        "name": "Container Management",
-        "weight": 4,
-        "objectives": [
-            "Pull and manage container images with Podman",
-            "Run containers with port mappings",
-            "Inspect and manage running containers",
-            "Configure containers to start automatically (systemd)",
-            "Run rootless containers",
-        ],
-        "categories": ["containers"],
     },
 }
 

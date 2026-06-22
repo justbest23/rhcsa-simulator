@@ -37,6 +37,7 @@ class BaseTask(ABC):
         self.exam_tips = []
         self.prerequisites = []
         self.tags = []
+        self.task_order = None  # None = no ordering constraint; int = logical sequence within category
 
     @abstractmethod
     def generate(self, **params):

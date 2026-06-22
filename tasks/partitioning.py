@@ -57,6 +57,7 @@ class CreateMBRPartitionTask(BaseTask):
             difficulty="medium",
             points=10,
         )
+        self.task_order = 10
         self.tags = ["fdisk", "parted", "mbr", "partition"]
         self.exam_tips = [
             "Use fdisk for MBR disks - it is the traditional tool.",
@@ -66,7 +67,7 @@ class CreateMBRPartitionTask(BaseTask):
 
     def generate(self, **params):
         self.params["device"] = params.get("device", _random_device())
-        self.params["size_mb"] = params.get("size", random.choice([256, 512, 1024, 2048]))
+        self.params["size_mb"] = params.get("size", random.choice([100, 150, 200, 300]))
         self.params["part_num"] = params.get("part_num", random.randint(1, 3))
         self.params["part_type"] = params.get("part_type", "primary")
 
@@ -158,6 +159,7 @@ class CreateGPTPartitionTask(BaseTask):
             difficulty="medium",
             points=10,
         )
+        self.task_order = 10
         self.tags = ["gpt", "parted", "gdisk", "partition"]
         self.exam_tips = [
             "GPT is required for disks >2 TiB.",
@@ -167,7 +169,7 @@ class CreateGPTPartitionTask(BaseTask):
 
     def generate(self, **params):
         self.params["device"] = params.get("device", _random_device())
-        self.params["size_mb"] = params.get("size", random.choice([512, 1024, 2048, 4096]))
+        self.params["size_mb"] = params.get("size", random.choice([100, 150, 200, 300]))
         self.params["part_name"] = params.get("name", random.choice(["data", "apps", "backup", "logs"]))
 
         dev = self.params["device"]
@@ -253,6 +255,7 @@ class ResizePartitionTask(BaseTask):
             difficulty="hard",
             points=15,
         )
+        self.task_order = 30
         self.tags = ["parted", "growpart", "resize", "partition"]
         self.exam_tips = [
             "You can only grow a partition non-destructively; shrinking risks data loss.",
@@ -263,7 +266,7 @@ class ResizePartitionTask(BaseTask):
     def generate(self, **params):
         self.params["device"] = params.get("device", _random_device())
         self.params["part_num"] = params.get("part_num", 1)
-        self.params["new_size_mb"] = params.get("new_size", random.choice([2048, 3072, 4096]))
+        self.params["new_size_mb"] = params.get("new_size", random.choice([300, 350, 400]))
 
         dev = self.params["device"]
         pnum = self.params["part_num"]
@@ -350,6 +353,7 @@ class DeletePartitionTask(BaseTask):
             difficulty="easy",
             points=6,
         )
+        self.task_order = 40
         self.tags = ["fdisk", "parted", "delete", "partition"]
         self.exam_tips = [
             "Always unmount and remove fstab entries before deleting a partition.",
@@ -422,6 +426,7 @@ class PartitionAndFormatTask(BaseTask):
             difficulty="exam",
             points=15,
         )
+        self.task_order = 20
         self.requires_persistence = True
         self.tags = ["partition", "mkfs", "mount", "fstab", "persistence"]
         self.exam_tips = [
@@ -433,7 +438,7 @@ class PartitionAndFormatTask(BaseTask):
     def generate(self, **params):
         self.params["device"] = params.get("device", _random_device())
         self.params["part_num"] = params.get("part_num", 1)
-        self.params["size_mb"] = params.get("size", random.choice([512, 1024, 2048]))
+        self.params["size_mb"] = params.get("size", random.choice([100, 150, 200, 300]))
         self.params["fstype"] = params.get("fstype", random.choice(["xfs", "ext4"]))
         self.params["mount_point"] = params.get("mount_point", f"/mnt/{random.choice(['data', 'apps', 'backup', 'extra'])}{random.randint(1, 99)}")
 
@@ -554,6 +559,7 @@ class ConvertPartitionTableTask(BaseTask):
             difficulty="hard",
             points=15,
         )
+        self.task_order = 50
         self.tags = ["gdisk", "parted", "mbr", "gpt", "conversion"]
         self.exam_tips = [
             "gdisk can convert MBR to GPT non-destructively in many cases.",

@@ -364,7 +364,7 @@ class CreateAtJobTask(BaseTask):
                 name="at_jobs_exist",
                 passed=True,
                 points=5,
-                message=f"At job(s) scheduled ({len(result.stdout.strip().split('\\n'))} job(s))"
+                message="At job(s) scheduled ({} job(s))".format(len(result.stdout.strip().split('\n')))
             ))
             total_points += 5
         else:

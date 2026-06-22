@@ -8,6 +8,7 @@ from tasks.base import BaseTask
 from tasks.registry import TaskRegistry
 from core.validator import ValidationCheck, ValidationResult
 from validators.safe_executor import execute_safe
+from validators.file_validators import validate_file_exists
 
 
 logger = logging.getLogger(__name__)
@@ -577,6 +578,208 @@ class FindResourceHogTask(BaseTask):
                 max_points=4,
                 message=f"Output file not found"
             ))
+
+        passed = total_points >= (self.points * 0.6)
+        return ValidationResult(self.id, passed, total_points, self.points, checks)
+
+
+@TaskRegistry.register("processes")
+class ManageTuningProfileTask(BaseTask):
+    """Apply a named tuning profile with tuned-adm (EX200 v10 objective)."""
+
+    def __init__(self):
+        super().__init__(
+            id="proc_tuned_001",
+            category="processes",
+            difficulty="easy",
+            points=8
+        )
+        self.profile = None
+        self.exam_tips = [
+            "tuned-adm list — shows all available profiles",
+            "tuned-adm active — shows the currently active profile",
+            "tuned-adm profile <name> — applies a profile immediately (no reboot needed)",
+            "'virtual-guest' and 'throughput-performance' are common exam profiles",
+        ]
+
+    def generate(self, **params):
+        self.profile = params.get('profile', random.choice([
+            'throughput-performance',
+            'virtual-guest',
+            'balanced',
+            'powersave',
+        ]))
+
+        self.description = (
+            f"Configure system tuning profile:\n\n"
+            f"  1. Ensure the tuned service is running and enabled at boot\n"
+            f"  2. Apply the '{self.profile}' tuning profile\n"
+            f"  3. Verify the profile is active\n\n"
+            f"The tuned daemon adjusts kernel parameters for the selected workload type."
+        )
+
+        self.hints = [
+            "Start and enable tuned: systemctl enable --now tuned",
+            "List available profiles: tuned-adm list",
+            f"Apply profile: tuned-adm profile {self.profile}",
+            "Verify: tuned-adm active",
+            "Profile takes effect immediately — no reboot required",
+        ]
+
+        return self
+
+    def validate(self):
+        checks = []
+        total_points = 0
+
+        result = execute_safe(['systemctl', 'is-active', 'tuned'])
+        if result.success and result.stdout.strip() == 'active':
+            checks.append(ValidationCheck("tuned_running", True, 3, "tuned service is running"))
+            total_points += 3
+        else:
+            checks.append(ValidationCheck("tuned_running", False, 0, "tuned service is not running", max_points=3))
+            return ValidationResult(self.id, False, total_points, self.points, checks)
+
+        result = execute_safe(['tuned-adm', 'active'])
+        if result.success and self.profile in result.stdout:
+            checks.append(ValidationCheck("profile_active", True, 5, f"Profile '{self.profile}' is active"))
+            total_points += 5
+        else:
+            active = result.stdout.strip() if result.success else 'unknown'
+            checks.append(ValidationCheck("profile_active", False, 0, f"Expected '{self.profile}', got: {active}", max_points=5))
+
+        passed = total_points >= (self.points * 0.7)
+        return ValidationResult(self.id, passed, total_points, self.points, checks)
+
+
+@TaskRegistry.register("processes")
+class SetTuningProfileRecommendedTask(BaseTask):
+    """Apply tuned-recommended profile and ensure persistence (EX200 v10 objective)."""
+
+    def __init__(self):
+        super().__init__(
+            id="proc_tuned_002",
+            category="processes",
+            difficulty="medium",
+            points=10
+        )
+        self.exam_tips = [
+            "tuned-adm recommend — suggests the best profile for current hardware/environment",
+            "Always verify the active profile after applying with tuned-adm active",
+            "The tuned service must be enabled so the profile survives reboot",
+        ]
+
+    def generate(self, **params):
+        self.description = (
+            "Configure the system to use the tuned-recommended tuning profile:\n\n"
+            "  1. Ensure the tuned service is running and enabled at boot\n"
+            "  2. Determine the recommended profile for this system\n"
+            "  3. Apply that recommended profile\n"
+            "  4. Verify it is active\n\n"
+            "The recommended profile is selected based on hardware and environment detection."
+        )
+
+        self.hints = [
+            "Start and enable tuned: systemctl enable --now tuned",
+            "Get recommendation: tuned-adm recommend",
+            "Apply it in one step: tuned-adm profile $(tuned-adm recommend)",
+            "Verify: tuned-adm active",
+        ]
+
+        return self
+
+    def validate(self):
+        checks = []
+        total_points = 0
+
+        result_active = execute_safe(['systemctl', 'is-active', 'tuned'])
+        result_enabled = execute_safe(['systemctl', 'is-enabled', 'tuned'])
+        running = result_active.success and result_active.stdout.strip() == 'active'
+        enabled = result_enabled.success and 'enabled' in result_enabled.stdout
+
+        if running and enabled:
+            checks.append(ValidationCheck("tuned_enabled", True, 4, "tuned is running and enabled at boot"))
+            total_points += 4
+        elif running:
+            checks.append(ValidationCheck("tuned_enabled", False, 2, "tuned running but not enabled at boot", max_points=4))
+            total_points += 2
+        else:
+            checks.append(ValidationCheck("tuned_enabled", False, 0, "tuned service is not running", max_points=4))
+            return ValidationResult(self.id, False, total_points, self.points, checks)
+
+        result = execute_safe(['tuned-adm', 'active'])
+        if result.success and 'Current active profile:' in result.stdout and 'none' not in result.stdout.lower():
+            checks.append(ValidationCheck("profile_active", True, 6, f"Active: {result.stdout.strip()}"))
+            total_points += 6
+        else:
+            checks.append(ValidationCheck("profile_active", False, 0, "No tuning profile is active", max_points=6))
+
+        passed = total_points >= (self.points * 0.7)
+        return ValidationResult(self.id, passed, total_points, self.points, checks)
+
+
+@TaskRegistry.register("processes")
+class ListTuningProfilesTask(BaseTask):
+    """List available tuning profiles and identify the active one."""
+
+    def __init__(self):
+        super().__init__(
+            id="proc_tuned_003",
+            category="processes",
+            difficulty="easy",
+            points=6
+        )
+        self.output_file = None
+        self.exam_tips = [
+            "tuned-adm list shows all installed profiles",
+            "The active profile is highlighted in the output",
+            "Use tuned-adm active to get just the current profile name",
+        ]
+
+    def generate(self, **params):
+        self.output_file = params.get('output', '/tmp/tuned_profiles.txt')
+
+        self.description = (
+            f"Investigate the system tuning configuration:\n\n"
+            f"  1. Ensure tuned is running\n"
+            f"  2. List all available tuning profiles and save the output to {self.output_file}\n"
+            f"  3. The file must include the currently active profile\n\n"
+            f"This tests your ability to inspect system tuning state."
+        )
+
+        self.hints = [
+            "Start tuned if not running: systemctl start tuned",
+            f"List and save: tuned-adm list > {self.output_file}",
+            "Check active profile: tuned-adm active",
+            f"Or combine: {{ tuned-adm list; tuned-adm active; }} > {self.output_file}",
+        ]
+
+        return self
+
+    def validate(self):
+        checks = []
+        total_points = 0
+
+        result = execute_safe(['systemctl', 'is-active', 'tuned'])
+        if result.success and result.stdout.strip() == 'active':
+            checks.append(ValidationCheck("tuned_running", True, 2, "tuned is running"))
+            total_points += 2
+        else:
+            checks.append(ValidationCheck("tuned_running", False, 0, "tuned is not running", max_points=2))
+
+        if validate_file_exists(self.output_file):
+            try:
+                with open(self.output_file) as f:
+                    content = f.read()
+                if 'balanced' in content or 'throughput' in content or 'virtual' in content:
+                    checks.append(ValidationCheck("profiles_listed", True, 4, "Output file contains tuning profiles"))
+                    total_points += 4
+                else:
+                    checks.append(ValidationCheck("profiles_listed", False, 0, "Output file does not appear to contain profile list", max_points=4))
+            except Exception:
+                checks.append(ValidationCheck("profiles_listed", False, 0, "Could not read output file", max_points=4))
+        else:
+            checks.append(ValidationCheck("profiles_listed", False, 0, f"Output file {self.output_file} not found", max_points=4))
 
         passed = total_points >= (self.points * 0.6)
         return ValidationResult(self.id, passed, total_points, self.points, checks)

@@ -229,7 +229,10 @@ class TaskRegistry:
     def get_practice_tasks(cls, category, difficulty="exam", count=None):
         if count is None:
             count = settings.DEFAULT_PRACTICE_TASKS
-        return cls.get_random_tasks(count, categories=[category], difficulty=difficulty)
+        tasks = cls.get_random_tasks(count, categories=[category], difficulty=difficulty)
+        # Sort by task_order to ensure logical dependency ordering (None = no constraint, sort last)
+        tasks.sort(key=lambda t: (t.task_order is None, t.task_order or 0))
+        return tasks
 
     @classmethod
     def initialize(cls):

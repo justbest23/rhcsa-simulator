@@ -21,6 +21,7 @@ class VerifyLVExistsTask(BaseTask):
             difficulty="exam",
             points=10
         )
+        self.task_order = 36
         self.tags = ['v10-new', 'lvm-basics']
         self.exam_tips = [
             "Use 'lvs' or 'lvdisplay' to verify logical volume exists",
@@ -34,7 +35,7 @@ class VerifyLVExistsTask(BaseTask):
     def generate(self, **params):
         self.vg_name = params.get('vg_name', f'vg_exam{random.randint(1,99)}')
         self.lv_name = params.get('lv_name', f'lv_data{random.randint(1,99)}')
-        self.lv_size_mb = params.get('size', random.choice([500, 1000, 2000]))
+        self.lv_size_mb = params.get('size', random.choice([200, 300, 400]))
 
         self.description = (
             f"Create a logical volume with these specifications:\n"
@@ -86,6 +87,7 @@ class CreatePVTask(BaseTask):
             difficulty="easy",
             points=6
         )
+        self.task_order = 10
         self.tags = ['v10-new', 'lvm-basics']
         self.exam_tips = [
             "Use 'pvcreate' to initialize a partition or disk for LVM use",
@@ -148,6 +150,7 @@ class CreateVGTask(BaseTask):
             difficulty="medium",
             points=8
         )
+        self.task_order = 20
         self.tags = ['v10-new', 'lvm-basics']
         self.exam_tips = [
             "Use 'vgcreate' to create a volume group from one or more physical volumes",
@@ -216,6 +219,7 @@ class CreateLVTask(BaseTask):
             difficulty="medium",
             points=10
         )
+        self.task_order = 30
         self.tags = ['v10-new', 'lvm-basics']
         self.exam_tips = [
             "Use 'lvcreate -L <size>M -n <name> <vg_name>' to create a logical volume",
@@ -237,7 +241,7 @@ class CreateLVTask(BaseTask):
         else:
             self.vg_name = params.get('vg_name', 'vg_practice')
             self.lv_name = params.get('lv_name', 'lv_practice')
-        self.lv_size_mb = params.get('size', random.choice([500, 1000, 2000]))
+        self.lv_size_mb = params.get('size', random.choice([200, 300, 400]))
 
         self.description = (
             f"Create a logical volume:\n"
@@ -292,6 +296,7 @@ class ExtendLVTask(BaseTask):
             difficulty="exam",
             points=12
         )
+        self.task_order = 50
         self.tags = ['v10-new', 'lvm-extend', 'exam-critical']
         self.exam_tips = [
             "Use 'lvextend -L +<size>M' to extend by amount, or -L <size>M for total size",
@@ -315,8 +320,8 @@ class ExtendLVTask(BaseTask):
         else:
             self.vg_name = params.get('vg_name', 'vg_practice')
             self.lv_name = params.get('lv_name', 'lv_practice')
-        self.extend_by_mb = params.get('extend_by', random.choice([500, 1000]))
-        self.new_size_mb = params.get('new_size', random.choice([1500, 2500, 3000]))
+        self.extend_by_mb = params.get('extend_by', random.choice([100, 150]))
+        self.new_size_mb = params.get('new_size', random.choice([350, 400, 450]))
 
         use_extend_by = params.get('use_extend_by', True)
 
@@ -379,6 +384,7 @@ class LVMFullWorkflowTask(BaseTask):
             difficulty="exam",
             points=20
         )
+        self.task_order = 35
         self.tags = ['v10-new', 'lvm-workflow', 'exam-critical', 'fstab']
         self.exam_tips = [
             "Complete LVM workflow: pvcreate → vgcreate → lvcreate → mkfs → mount → fstab",
@@ -405,7 +411,7 @@ class LVMFullWorkflowTask(BaseTask):
 
         self.vg_name = params.get('vg_name', f'vg_exam{random.randint(1,99)}')
         self.lv_name = params.get('lv_name', f'lv_data{random.randint(1,99)}')
-        self.lv_size_mb = params.get('size', random.choice([1000, 1500, 2000]))
+        self.lv_size_mb = params.get('size', random.choice([200, 300, 400]))
         self.mount_point = params.get('mount', f'/mnt/lvm{random.randint(1,99)}')
         self.fstype = params.get('fstype', 'xfs')
 
@@ -503,6 +509,7 @@ class ExtendVGTask(BaseTask):
             difficulty="exam",
             points=10
         )
+        self.task_order = 40
         self.tags = ['v10-new', 'lvm-extend']
         self.exam_tips = [
             "First create PV on new device with 'pvcreate'",
@@ -579,6 +586,7 @@ class RemoveLVTask(BaseTask):
             difficulty="medium",
             points=8
         )
+        self.task_order = 60
         self.tags = ['v10-new', 'lvm-management']
         self.exam_tips = [
             "Must unmount LV before removing: 'umount /dev/vg/lv'",
@@ -639,6 +647,7 @@ class ReduceLVTask(BaseTask):
             difficulty="hard",
             points=15
         )
+        self.task_order = 60
         self.tags = ['v10-new', 'lvm-advanced']
         self.exam_tips = [
             "CRITICAL: XFS filesystems CANNOT be reduced - only ext4/ext3 support shrinking",
@@ -655,7 +664,7 @@ class ReduceLVTask(BaseTask):
         existing_vg, existing_lv = get_practice_lv()
         self.vg_name = params.get('vg_name', existing_vg or 'vg_practice')
         self.lv_name = params.get('lv_name', existing_lv or 'lv_practice')
-        self.new_size_mb = params.get('new_size', random.choice([500, 750, 1000]))
+        self.new_size_mb = params.get('new_size', random.choice([100, 150, 200]))
 
         self.description = (
             f"Reduce a logical volume:\n"
