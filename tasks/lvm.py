@@ -35,21 +35,17 @@ class VerifyLVExistsTask(BaseTask):
     def generate(self, **params):
         self.vg_name = params.get('vg_name', f'vg_exam{random.randint(1,99)}')
         self.lv_name = params.get('lv_name', f'lv_data{random.randint(1,99)}')
-        self.lv_size_mb = params.get('size', random.choice([200, 300, 400]))
+        self.lv_size_mb = params.get('size', random.choice([300, 350, 400]))
 
         self.description = (
-            f"Create a logical volume with these specifications:\n"
-            f"  - Volume group: {self.vg_name}\n"
-            f"  - Logical volume: {self.lv_name}\n"
-            f"  - Size: {self.lv_size_mb}MB\n"
-            f"\n"
-            f"Note: Assume VG already exists or create it if needed"
+            f"Create a {self.lv_size_mb}MB logical volume named '{self.lv_name}' "
+            f"in volume group '{self.vg_name}'. Create the VG first if it does not exist."
         )
 
         self.hints = [
-            "Use lvcreate command",
-            "Format: lvcreate -L <size>M -n <lv_name> <vg_name>",
-            "Verify with 'lvs' command"
+            "lvcreate creates a logical volume in an existing VG",
+            "Use -L for size in MB and -n for the LV name",
+            "Verify with: lvs",
         ]
 
         return self
@@ -106,17 +102,12 @@ class CreatePVTask(BaseTask):
             self.device = '/dev/vdb'  # Fallback for display
 
         self.description = (
-            f"Create a physical volume:\n"
-            f"  - Device: {self.device}\n"
-            f"  - Initialize for LVM use\n"
-            f"  - Verify PV is created"
+            f"Initialize {self.device} as a physical volume for LVM use."
         )
 
         self.hints = [
-            f"Create PV: pvcreate {self.device}",
-            "List PVs: pvs or pvdisplay",
-            f"Verify: pvs {self.device}",
-            "May need to partition device first with fdisk/parted"
+            "pvcreate initializes a block device as an LVM physical volume",
+            "Verify with: pvs",
         ]
 
         return self
@@ -174,18 +165,14 @@ class CreateVGTask(BaseTask):
         devices_str = ' '.join(self.pv_devices)
 
         self.description = (
-            f"Create a volume group:\n"
-            f"  - VG name: {self.vg_name}\n"
-            f"  - Physical volumes: {devices_str}\n"
-            f"  - Use all specified devices\n"
-            f"  - Verify VG is active"
+            f"Create volume group '{self.vg_name}' using {devices_str}. "
+            f"Initialize the device as a PV first if needed."
         )
 
         self.hints = [
-            f"Create VG: vgcreate {self.vg_name} {devices_str}",
-            "List VGs: vgs or vgdisplay",
-            f"Verify: vgs {self.vg_name}",
-            "Ensure PVs are created first with pvcreate"
+            "vgcreate takes a VG name followed by one or more PV devices",
+            "PVs must be initialized with pvcreate first",
+            "Verify with: vgs",
         ]
 
         return self
@@ -241,22 +228,18 @@ class CreateLVTask(BaseTask):
         else:
             self.vg_name = params.get('vg_name', 'vg_practice')
             self.lv_name = params.get('lv_name', 'lv_practice')
-        self.lv_size_mb = params.get('size', random.choice([200, 300, 400]))
+        self.lv_size_mb = params.get('size', random.choice([300, 350, 400]))
 
         self.description = (
-            f"Create a logical volume:\n"
-            f"  - Volume group: {self.vg_name}\n"
-            f"  - LV name: {self.lv_name}\n"
-            f"  - Size: {self.lv_size_mb}MB\n"
-            f"  - Verify LV is created and active"
+            f"Create a {self.lv_size_mb}MB logical volume named '{self.lv_name}' "
+            f"in volume group '{self.vg_name}'."
         )
 
         self.hints = [
-            f"Create LV: lvcreate -L {self.lv_size_mb}M -n {self.lv_name} {self.vg_name}",
-            "List LVs: lvs or lvdisplay",
-            f"Verify: lvs {self.vg_name}/{self.lv_name}",
-            "LV device path: /dev/{vg_name}/{lv_name}",
-            "Ensure VG exists first"
+            "lvcreate creates a logical volume in an existing VG",
+            "Use -L for size in MB and -n for the LV name",
+            "LV device path: /dev/<vg_name>/<lv_name>",
+            "Verify with: lvs or lvdisplay",
         ]
 
         return self
