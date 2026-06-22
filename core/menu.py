@@ -209,6 +209,7 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
         print("  1. Setup Practice Disks (loop devices for LVM)")
         print("  2. View Task Statistics")
         print("  3. Network Backup/Restore")
+        print("  4. System Reset (remove practice artifacts)")
         print("  0. Return to Menu")
         print()
 
@@ -220,6 +221,8 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
             self.show_stats()
         elif choice == '3':
             self.network_management()
+        elif choice == '4':
+            self.system_reset()
 
     def show_stats(self):
         """Show task statistics."""
@@ -488,5 +491,243 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
                 except ValueError:
                     print(fmt.error("Invalid input"))
 
+        print()
+        input("Press Enter to return...")
+
+    def system_reset(self):
+        """Reset system to barebones practice-ready state without touching SSH or network."""
+        import subprocess
+        import os
+        import re
+        from utils.helpers import (
+            cleanup_practice_devices, get_loop_devices, confirm_action
+        )
+
+        fmt.clear_screen()
+        fmt.print_header("SYSTEM RESET")
+
+        print(fmt.warning("This removes practice artifacts: LVM, swap files, practice repos,"))
+        print(fmt.warning("cron/at jobs, tuned profile, and scripts in /usr/local/bin/."))
+        print(fmt.info("SSH, network, firewall, SELinux, and users will NOT be touched."))
+        print()
+
+        if not confirm_action("Continue with system reset?", default=False):
+            print(fmt.dim("Reset cancelled."))
+            print()
+            input("Press Enter to return...")
+            return
+
+        # ── Step 1: Loop devices / LVM ───────────────────────────────────────
+        print()
+        print(fmt.bold("Step 1: Practice Disks (loop devices / LVM)"))
+        loop_devices = get_loop_devices()
+        if loop_devices:
+            print(f"  Found: {', '.join(loop_devices)}")
+            if confirm_action("  Remove all LVM structures and practice disks?", default=True):
+                if cleanup_practice_devices():
+                    print(fmt.success("  Practice disks cleaned up"))
+                else:
+                    print(fmt.error("  Cleanup had errors — check manually"))
+        else:
+            print(fmt.dim("  No practice disks found"))
+
+        # ── Step 2: Active swap files ────────────────────────────────────────
+        print()
+        print(fmt.bold("Step 2: Swap Files"))
+        swap_files = []
+        try:
+            with open('/proc/swaps', 'r') as f:
+                for line in f.readlines()[1:]:
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[1] == 'file':
+                        swap_files.append(parts[0])
+        except Exception:
+            pass
+
+        if swap_files:
+            for sf in swap_files:
+                print(f"  Active swap file: {sf}")
+            if confirm_action("  Deactivate and remove these swap files?", default=True):
+                for sf in swap_files:
+                    subprocess.run(['swapoff', sf], capture_output=True)
+                    if os.path.exists(sf):
+                        try:
+                            os.remove(sf)
+                            print(fmt.success(f"  Removed {sf}"))
+                        except OSError as e:
+                            print(fmt.error(f"  Could not remove {sf}: {e}"))
+        else:
+            print(fmt.dim("  No active swap files found"))
+
+        # ── Step 3: /etc/fstab cleanup ───────────────────────────────────────
+        print()
+        print(fmt.bold("Step 3: /etc/fstab Cleanup"))
+        _fstab_patterns = [
+            re.compile(r'/var/lib/rhcsa-simulator/loops/'),
+            re.compile(r'/dev/loop\d+\s'),
+            re.compile(r'\s/tmp/swap\S*'),
+            re.compile(r'\s/root/swapfile'),
+            re.compile(r'\s/opt/swap\S*'),
+        ]
+        try:
+            with open('/etc/fstab', 'r') as f:
+                fstab_lines = f.readlines()
+
+            practice_lines, clean_lines = [], []
+            for line in fstab_lines:
+                stripped = line.strip()
+                if not stripped or stripped.startswith('#'):
+                    clean_lines.append(line)
+                    continue
+                if any(p.search(line) for p in _fstab_patterns):
+                    practice_lines.append(line.rstrip())
+                else:
+                    clean_lines.append(line)
+
+            if practice_lines:
+                print("  Practice entries to remove:")
+                for pl in practice_lines:
+                    print(f"    {pl}")
+                if confirm_action("  Remove these entries from /etc/fstab?", default=True):
+                    with open('/etc/fstab', 'w') as f:
+                        f.writelines(clean_lines)
+                    print(fmt.success("  /etc/fstab cleaned"))
+            else:
+                print(fmt.dim("  No practice entries in /etc/fstab"))
+        except Exception as e:
+            print(fmt.error(f"  Error reading /etc/fstab: {e}"))
+
+        # ── Step 4: Practice repos ───────────────────────────────────────────
+        print()
+        print(fmt.bold("Step 4: Practice Repos (/etc/yum.repos.d/)"))
+        _practice_repo_ids = {
+            'localrepo', 'internalmirror', 'customrepo', 'examrepo', 'backuprepo',
+        }
+        repo_files_to_remove = []
+        repo_dir = '/etc/yum.repos.d'
+        try:
+            for fname in os.listdir(repo_dir):
+                if fname.endswith('.repo'):
+                    repo_id = fname[:-5]
+                    if repo_id in _practice_repo_ids:
+                        repo_files_to_remove.append(os.path.join(repo_dir, fname))
+        except Exception:
+            pass
+
+        if repo_files_to_remove:
+            print("  Practice repo files found:")
+            for rf in repo_files_to_remove:
+                print(f"    {rf}")
+            if confirm_action("  Remove these repo files?", default=True):
+                for rf in repo_files_to_remove:
+                    try:
+                        os.remove(rf)
+                    except OSError as e:
+                        print(fmt.error(f"  Could not remove {rf}: {e}"))
+                print(fmt.success("  Practice repos removed"))
+        else:
+            print(fmt.dim("  No practice repos found"))
+
+        # ── Step 5: Root crontab ─────────────────────────────────────────────
+        print()
+        print(fmt.bold("Step 5: Root Crontab"))
+        try:
+            result = subprocess.run(
+                ['crontab', '-l', '-u', 'root'],
+                capture_output=True, text=True
+            )
+            crontab_content = result.stdout.strip()
+            if result.returncode == 0 and crontab_content:
+                print("  Current root crontab:")
+                for line in crontab_content.splitlines():
+                    print(f"    {line}")
+                if confirm_action("  Clear root crontab?", default=True):
+                    subprocess.run(['crontab', '-r', '-u', 'root'], capture_output=True)
+                    print(fmt.success("  Root crontab cleared"))
+            else:
+                print(fmt.dim("  Root crontab is empty"))
+        except Exception as e:
+            print(fmt.error(f"  Error accessing crontab: {e}"))
+
+        # ── Step 6: At jobs ──────────────────────────────────────────────────
+        print()
+        print(fmt.bold("Step 6: Scheduled 'at' Jobs"))
+        try:
+            result = subprocess.run(['atq'], capture_output=True, text=True)
+            if result.stdout.strip():
+                print("  Pending at jobs:")
+                for line in result.stdout.strip().splitlines():
+                    print(f"    {line}")
+                if confirm_action("  Remove all pending at jobs?", default=True):
+                    job_ids = [
+                        line.split()[0]
+                        for line in result.stdout.strip().splitlines()
+                        if line.strip()
+                    ]
+                    for jid in job_ids:
+                        subprocess.run(['atrm', jid], capture_output=True)
+                    print(fmt.success("  At jobs removed"))
+            else:
+                print(fmt.dim("  No pending at jobs"))
+        except FileNotFoundError:
+            print(fmt.dim("  'at' not installed — skipping"))
+        except Exception as e:
+            print(fmt.error(f"  Error: {e}"))
+
+        # ── Step 7: Tuned profile ────────────────────────────────────────────
+        print()
+        print(fmt.bold("Step 7: Tuned Profile"))
+        try:
+            active_result = subprocess.run(
+                ['tuned-adm', 'active'], capture_output=True, text=True
+            )
+            current = active_result.stdout.strip() if active_result.returncode == 0 else "unknown"
+            print(f"  Current: {current}")
+
+            rec_result = subprocess.run(
+                ['tuned-adm', 'recommend'], capture_output=True, text=True
+            )
+            recommended = rec_result.stdout.strip() if rec_result.returncode == 0 else 'balanced'
+            print(f"  Recommended for this system: {recommended}")
+
+            if confirm_action(f"  Reset tuned to '{recommended}'?", default=True):
+                subprocess.run(['tuned-adm', 'profile', recommended], capture_output=True)
+                print(fmt.success(f"  Tuned profile set to '{recommended}'"))
+        except FileNotFoundError:
+            print(fmt.dim("  tuned-adm not installed — skipping"))
+        except Exception as e:
+            print(fmt.error(f"  Error: {e}"))
+
+        # ── Step 8: Practice scripts in /usr/local/bin ───────────────────────
+        print()
+        print(fmt.bold("Step 8: Practice Scripts (/usr/local/bin/*.sh)"))
+        try:
+            scripts = [
+                os.path.join('/usr/local/bin', f)
+                for f in os.listdir('/usr/local/bin')
+                if f.endswith('.sh') and os.path.isfile(os.path.join('/usr/local/bin', f))
+            ]
+            if scripts:
+                print("  Shell scripts found:")
+                for s in scripts:
+                    print(f"    {s}")
+                if confirm_action("  Remove these scripts?", default=True):
+                    for s in scripts:
+                        try:
+                            os.remove(s)
+                        except OSError as e:
+                            print(fmt.error(f"  Could not remove {s}: {e}"))
+                    print(fmt.success("  Scripts removed"))
+            else:
+                print(fmt.dim("  No .sh scripts in /usr/local/bin"))
+        except Exception as e:
+            print(fmt.error(f"  Error: {e}"))
+
+        # ── Done ─────────────────────────────────────────────────────────────
+        print()
+        print("=" * 50)
+        print(fmt.success("System reset complete!"))
+        print(fmt.info("SSH and network were not modified."))
+        print(fmt.info("Firewall, SELinux, and users were not modified."))
         print()
         input("Press Enter to return...")
