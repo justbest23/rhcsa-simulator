@@ -38,11 +38,11 @@ class CreateSwapPartitionTask(BaseTask):
         self.size_mb = None
 
     def generate(self, **params):
-        self.size_mb = params.get('size_mb', random.choice([256, 512]))
+        self.size_mb = params.get('size_mb', 0)  # device determines actual size
         self.device = params.get('device') or get_swap_practice_device() or '/dev/sdb'
 
         self.description = (
-            f"Configure {self.device} as a {self.size_mb}MB persistent swap partition."
+            f"Configure {self.device} as a persistent swap partition."
         )
 
         self.hints = [

@@ -345,7 +345,7 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
 
         print()
         print(fmt.bold("Options:"))
-        print("  1. Create practice disks (3 x 500MB — 2 for LVM, 1 for swap)")
+        print("  1. Create practice disks (2 x 500MB LVM + 1 x 512MB swap)")
         print("  2. Create custom practice disks")
         print("  3. Clean up all practice disks")
         print("  0. Return to menu")
@@ -355,10 +355,17 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
 
         if choice == '1':
             print()
-            print("Creating 3 x 500MB practice disks (2 LVM + 1 swap)...")
-            devices = create_practice_devices(count=3, size_mb=500)
-            if devices:
-                print(fmt.success(f"Created devices: {', '.join(devices)}"))
+            print("Creating 2 x 500MB LVM disks + 1 x 512MB swap disk...")
+            from utils.helpers import create_swap_device
+            devices = create_practice_devices(count=2, size_mb=500)
+            swap_dev = create_swap_device(size_mb=512)
+            all_devs = devices + ([swap_dev] if swap_dev else [])
+            if all_devs:
+                print(fmt.success(f"Created devices: {', '.join(all_devs)}"))
+                if swap_dev:
+                    print(fmt.info(f"  Swap device: {swap_dev} (512MB, for swap tasks)"))
+                else:
+                    print(fmt.warning("  Swap device could not be created"))
             else:
                 print(fmt.error("Failed to create practice disks"))
 

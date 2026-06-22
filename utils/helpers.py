@@ -2,10 +2,13 @@
 Helper utility functions for RHCSA Simulator.
 """
 
+import logging
 import os
 import sys
 import uuid
 from datetime import timedelta
+
+logger = logging.getLogger(__name__)
 
 
 def check_root():
@@ -356,18 +359,71 @@ def get_loop_devices():
 
 def get_swap_practice_device():
     """
-    Return a loop device dedicated to swap practice (the 3rd loop device).
-    Falls back to the 1st loop device if fewer than 3 exist.
-    Returns None if no loop devices are set up.
+    Return the loop device backed by the dedicated swap image (swap.img).
+    Uses losetup -j to find it precisely — no index guessing.
+    Returns None if the swap device has not been set up.
     """
-    devices = get_loop_devices()
-    if not devices:
+    import subprocess
+    import os
+
+    swap_img = '/var/lib/rhcsa-simulator/loops/swap.img'
+    if not os.path.exists(swap_img):
         return None
-    # Use 3rd device if available (reserved for swap), else first
-    return devices[2] if len(devices) >= 3 else devices[0]
+    try:
+        result = subprocess.run(
+            ['losetup', '-j', swap_img],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.split(':')[0].strip()
+    except Exception:
+        pass
+    return None
 
 
-def create_practice_devices(count=3, size_mb=500):
+def create_swap_device(size_mb=512):
+    """
+    Create and attach a dedicated swap practice loop device (swap.img).
+    Separate from the LVM practice disks so there is no interference.
+    Returns the loop device path, or None on failure.
+    """
+    import subprocess
+    import os
+
+    loop_dir = '/var/lib/rhcsa-simulator/loops'
+    swap_img = os.path.join(loop_dir, 'swap.img')
+    os.makedirs(loop_dir, exist_ok=True)
+
+    # Already attached?
+    existing = get_swap_practice_device()
+    if existing:
+        return existing
+
+    # Create image if it doesn't exist
+    if not os.path.exists(swap_img):
+        try:
+            subprocess.run(
+                ['dd', 'if=/dev/zero', f'of={swap_img}', 'bs=1M', f'count={size_mb}'],
+                capture_output=True, timeout=60, check=True
+            )
+        except Exception as e:
+            logger.error(f"Could not create swap image: {e}")
+            return None
+
+    # Attach
+    try:
+        result = subprocess.run(
+            ['losetup', '--find', '--show', swap_img],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception as e:
+        logger.error(f"Could not attach swap image: {e}")
+    return None
+
+
+def create_practice_devices(count=2, size_mb=500):
     """
     Create loop devices for LVM practice.
 
@@ -439,19 +495,23 @@ def cleanup_practice_devices():
     loop_dir = '/var/lib/rhcsa-simulator/loops'
 
     try:
-        # Get all our loop devices
+        # Collect all simulator loop devices (LVM disks + swap)
         devices = get_loop_devices()
+        swap_dev = get_swap_practice_device()
+        if swap_dev and swap_dev not in devices:
+            devices.append(swap_dev)
 
         for device in devices:
-            # Remove any LVM structures first
+            # Deactivate swap if active on this device
+            subprocess.run(['swapoff', device], capture_output=True, timeout=10)
+            # Remove any LVM structures
             subprocess.run(['pvremove', '-ff', '-y', device],
                          capture_output=True, timeout=10)
-
             # Detach loop device
             subprocess.run(['losetup', '-d', device],
                          capture_output=True, timeout=10)
 
-        # Remove image files
+        # Remove all image files (disk*.img and swap.img)
         if os.path.exists(loop_dir):
             for f in os.listdir(loop_dir):
                 if f.endswith('.img'):

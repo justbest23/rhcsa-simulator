@@ -368,10 +368,10 @@ class ConfigureSwapTask(BaseTask):
         """Generate swap configuration task."""
         from utils.helpers import get_swap_practice_device
         self.device = params.get('device') or get_swap_practice_device() or get_practice_device() or '/dev/sdb'
-        self.size_mb = params.get('size', random.choice([256, 512]))
+        self.size_mb = 0  # device determines size
 
         self.description = (
-            f"Configure {self.device} as {self.size_mb}MB persistent swap space."
+            f"Configure {self.device} as persistent swap space."
         )
 
         self.hints = [
