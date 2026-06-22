@@ -16,7 +16,7 @@ NC='\033[0m' # No Color
 
 # Configuration
 INSTALL_DIR="/opt/rhcsa-simulator"
-BIN_LINK="/usr/local/bin/rhcsa-simulator"
+BIN_LINK="/usr/local/bin/test-rhcsa-simulator"
 REQUIRED_PYTHON_VERSION="3.6"
 
 echo "========================================="
@@ -112,7 +112,7 @@ if [ -f "$INSTALL_DIR/rhcsa_simulator.py" ] && [ -L "$BIN_LINK" ]; then
     echo "  Executable: $BIN_LINK"
     echo
     echo "Usage:"
-    echo "  sudo rhcsa-simulator"
+    echo "  sudo test-rhcsa-simulator"
     echo
     echo -e "${YELLOW}Note: You must run as root (sudo) to validate system state${NC}"
 else

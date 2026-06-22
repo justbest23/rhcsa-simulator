@@ -76,7 +76,7 @@ The installer will:
 sudo mkdir -p /opt/rhcsa-simulator
 sudo cp -r * /opt/rhcsa-simulator/
 sudo chmod +x /opt/rhcsa-simulator/rhcsa_simulator.py
-sudo ln -s /opt/rhcsa-simulator/rhcsa_simulator.py /usr/local/bin/rhcsa-simulator
+sudo ln -s /opt/rhcsa-simulator/rhcsa_simulator.py /usr/local/bin/test-rhcsa-simulator
 ```
 
 ## Usage
@@ -84,7 +84,7 @@ sudo ln -s /opt/rhcsa-simulator/rhcsa_simulator.py /usr/local/bin/rhcsa-simulato
 ### Launch the Simulator
 
 ```bash
-sudo rhcsa-simulator
+sudo test-rhcsa-simulator
 ```
 
 **Note**: Root privileges are required to validate system state (users, services, permissions, etc.)
