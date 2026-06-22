@@ -26,8 +26,8 @@ DB_PATH = DATA_DIR / "rhcsa_simulator.db"
 
 # Exam configuration - v10 aligned
 DEFAULT_EXAM_DURATION = 180  # minutes (3 hours - real exam)
-DEFAULT_EXAM_TASKS = 12  # range 10-15 on real exam
-EXAM_TASK_RANGE = (10, 15)
+DEFAULT_EXAM_TASKS = 20  # real exam is 20-25 tasks
+EXAM_TASK_RANGE = (20, 25)
 MAX_EXAM_SCORE = 300  # matches real exam
 EXAM_PASS_THRESHOLD = 0.70  # 70% to pass
 

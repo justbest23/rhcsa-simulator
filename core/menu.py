@@ -28,7 +28,7 @@ class MenuSystem:
             # Quick Start section
             print(fmt.bold("QUICK START"))
             fmt.print_menu_option('Q', "Quick Practice", "5 random tasks")
-            fmt.print_menu_option('E', "Mock Exam", f"{settings.DEFAULT_EXAM_TASKS} tasks, {settings.DEFAULT_EXAM_DURATION} min, reboot sim")
+            fmt.print_menu_option('E', "Mock Exam", f"20–25 tasks, {settings.DEFAULT_EXAM_DURATION} min, reboot sim")
             print()
 
             # Learn & Practice section

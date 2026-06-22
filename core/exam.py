@@ -311,9 +311,30 @@ class ExamSession:
             print()
 
 
+def _select_exam_task_count():
+    """Prompt user to select exam task count."""
+    from utils import formatters as fmt
+    print()
+    print(fmt.bold("Select number of exam tasks:"))
+    print("  1. 20 tasks  — standard (real exam minimum)")
+    print("  2. 25 tasks  — full exam (real exam maximum)")
+    print("  3. 12 tasks  — quick practice run")
+    while True:
+        choice = input("\nSelect [1]: ").strip() or '1'
+        if choice == '1':
+            return 20
+        elif choice == '2':
+            return 25
+        elif choice == '3':
+            return 12
+        else:
+            print(fmt.error("Invalid selection"))
+
+
 def run_exam_mode():
     """Run exam mode (convenience function)."""
-    session = ExamSession()
+    task_count = _select_exam_task_count()
+    session = ExamSession(task_count=task_count)
     session.start()
 
     if not session.tasks:
