@@ -91,7 +91,7 @@ class TaskRegistry:
         return sum(len(tasks) for tasks in cls._tasks.values())
 
     @classmethod
-    def get_random_task(cls, category=None, difficulty=None):
+    def get_random_task(cls, category=None, difficulty=None, skip_reboot=False):
         if category:
             task_classes = cls._tasks.get(category, [])
         else:
@@ -115,6 +115,22 @@ class TaskRegistry:
             if filtered:
                 task_classes = filtered
 
+        # Filter out tasks that require reboots
+        if skip_reboot:
+            no_reboot = []
+            for tc in task_classes:
+                try:
+                    inst = tc()
+                    if not inst.requires_reboot:
+                        no_reboot.append(tc)
+                except Exception:
+                    pass
+            if no_reboot:
+                task_classes = no_reboot
+
+        if not task_classes:
+            return None
+
         task_class = random.choice(task_classes)
         try:
             task = task_class()
@@ -125,7 +141,7 @@ class TaskRegistry:
             return None
 
     @classmethod
-    def get_random_tasks(cls, count, categories=None, difficulty=None, exclude_ids=None):
+    def get_random_tasks(cls, count, categories=None, difficulty=None, exclude_ids=None, skip_reboot=False):
         tasks = []
         exclude_ids = exclude_ids or []
         attempts = 0
@@ -142,7 +158,7 @@ class TaskRegistry:
         while len(tasks) < count and attempts < max_attempts:
             attempts += 1
             category = available_categories[len(tasks) % len(available_categories)]
-            task = cls.get_random_task(category=category, difficulty=difficulty)
+            task = cls.get_random_task(category=category, difficulty=difficulty, skip_reboot=skip_reboot)
             if task and task.id not in exclude_ids:
                 tasks.append(task)
                 exclude_ids.append(task.id)
@@ -195,7 +211,7 @@ class TaskRegistry:
             if not trimmed:
                 break
 
-        # Generate tasks per domain
+        # Generate tasks per domain — enforce one task per category to avoid duplicates
         for domain_num, needed in domain_counts.items():
             domain_cats = [
                 cat for cat, dom in settings.CATEGORY_TO_DOMAIN.items()
@@ -205,17 +221,27 @@ class TaskRegistry:
             if not available_cats:
                 continue
 
-            for _ in range(needed):
-                cat = random.choice(available_cats)
-                # Prefer exam difficulty, fall back to medium/hard
+            used_cats = set()
+            remaining_for_domain = needed
+            shuffled_cats = available_cats.copy()
+            random.shuffle(shuffled_cats)
+
+            for cat in shuffled_cats:
+                if remaining_for_domain <= 0:
+                    break
+                if cat in used_cats:
+                    continue
+                # Prefer exam difficulty, fall back to any difficulty
                 task = cls.get_random_task(category=cat, difficulty="exam")
                 if not task:
                     task = cls.get_random_task(category=cat)
                 if task and task.id not in exclude_ids:
                     tasks.append(task)
                     exclude_ids.append(task.id)
+                    used_cats.add(cat)
+                    remaining_for_domain -= 1
 
-        # If we couldn't fill all slots, add random tasks
+        # If we couldn't fill all slots, add random tasks (allowing category repeats as last resort)
         while len(tasks) < count:
             task = cls.get_random_task(difficulty="exam")
             if task and task.id not in exclude_ids:
@@ -226,10 +252,10 @@ class TaskRegistry:
         return tasks
 
     @classmethod
-    def get_practice_tasks(cls, category, difficulty="exam", count=None):
+    def get_practice_tasks(cls, category, difficulty="exam", count=None, skip_reboot=False):
         if count is None:
             count = settings.DEFAULT_PRACTICE_TASKS
-        tasks = cls.get_random_tasks(count, categories=[category], difficulty=difficulty)
+        tasks = cls.get_random_tasks(count, categories=[category], difficulty=difficulty, skip_reboot=skip_reboot)
         # Sort by task_order to ensure logical dependency ordering (None = no constraint, sort last)
         tasks.sort(key=lambda t: (t.task_order is None, t.task_order or 0))
         return tasks

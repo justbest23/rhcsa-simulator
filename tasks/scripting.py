@@ -38,9 +38,9 @@ class CreateBasicScriptTask(BaseTask):
     def generate(self, **params):
         """Generate basic script task."""
         purposes = [
-            ('list_users', 'List all usernames from /etc/passwd'),
-            ('disk_usage', 'Display disk usage of /home directory'),
-            ('system_info', 'Display hostname and kernel version'),
+            ('list_users', 'print all usernames from /etc/passwd to stdout, one per line'),
+            ('disk_usage', 'display the disk usage summary of the /home directory'),
+            ('system_info', 'display the system hostname followed by the kernel version'),
         ]
 
         self.script_purpose, purpose_desc = params.get('purpose', random.choice(purposes))
@@ -54,20 +54,21 @@ class CreateBasicScriptTask(BaseTask):
             expected_content = "hostname; uname -r"
 
         self.description = (
-            f"Create a shell script:\n"
-            f"  - Script path: {self.script_path}\n"
-            f"  - Purpose: {purpose_desc}\n"
-            f"  - Must start with proper shebang (#!/bin/bash)\n"
-            f"  - Must be executable"
+            f"Create a shell script at '{self.script_path}' that:\n"
+            f"  - Starts with a proper shebang line\n"
+            f"  - When executed, will {purpose_desc}\n"
+            f"  - Is executable by root"
         )
 
         self.hints = [
-            f"Create the script: vim {self.script_path}",
-            "First line must be: #!/bin/bash",
-            f"Script should contain: {expected_content}",
+            f"Create with: vim {self.script_path}",
+            "A shebang line identifies the interpreter (first line of every bash script)",
             f"Make executable: chmod +x {self.script_path}",
-            f"Test the script: {self.script_path}"
+            f"Test syntax without running: bash -n {self.script_path}",
+            f"Run to verify output: {self.script_path}",
         ]
+
+        self._expected_content = expected_content
 
         return self
 

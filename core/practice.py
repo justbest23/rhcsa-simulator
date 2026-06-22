@@ -27,6 +27,7 @@ class PracticeSession:
         self.category = None
         self.difficulty = "exam"
         self.task_count = settings.DEFAULT_PRACTICE_TASKS
+        self.skip_reboot = False
 
     def start(self):
         """Start practice session."""
@@ -37,16 +38,21 @@ class PracticeSession:
             return
 
         self.difficulty = self._select_difficulty()
+        self.skip_reboot = self._select_reboot_filter()
 
         tasks = TaskRegistry.get_practice_tasks(
             self.category,
             self.difficulty,
-            self.task_count
+            self.task_count,
+            skip_reboot=self.skip_reboot,
         )
 
         if not tasks:
-            print(fmt.error(f"No tasks available for {self.category}"))
+            print(fmt.error(f"No tasks available for {self.category} with current filters"))
             return
+
+        label = " [no-reboot mode]" if self.skip_reboot else ""
+        print(fmt.info(f"\nStarting {len(tasks)}-task practice session{label}"))
 
         # Practice each task
         try:
@@ -108,6 +114,22 @@ class PracticeSession:
                 return 'exam'
             elif choice == '3':
                 return 'hard'
+            else:
+                print(fmt.error("Invalid selection"))
+
+    def _select_reboot_filter(self):
+        """Ask whether to exclude tasks that require rebooting the system."""
+        print()
+        print(fmt.bold("Reboot-required tasks:"))
+        fmt.print_menu_option(1, "Include all tasks", "Including tasks that require a system reboot (recommended for full exam prep)")
+        fmt.print_menu_option(2, "Skip reboot tasks", "Exclude tasks that require rebooting — safe for a live system you're actively using")
+
+        while True:
+            choice = input("\nSelect [1]: ").strip() or '1'
+            if choice == '1':
+                return False
+            elif choice == '2':
+                return True
             else:
                 print(fmt.error("Invalid selection"))
 

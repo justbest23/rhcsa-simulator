@@ -2,6 +2,7 @@
 File permissions and ACL tasks for RHCSA exam.
 """
 
+import os
 import random
 import logging
 from tasks.base import BaseTask
@@ -335,24 +336,29 @@ class SetSpecialPermissionsTask(BaseTask):
         self.file_path = params.get('file', f'/tmp/specialperm{file_suffix}')
 
         special_options = [
-            ('setuid', '4755', 'Set the setuid bit (4)'),
-            ('setgid', '2755', 'Set the setgid bit (2)'),
-            ('sticky', '1777', 'Set the sticky bit (1)')
+            ('setuid', '4755', 'setuid', 'file', 'run as the file owner regardless of who executes it'),
+            ('setgid', '2755', 'setgid', 'file', 'run with the file group regardless of who executes it'),
+            ('sticky', '1777', 'sticky bit', 'directory', 'only the file owner can delete files within it'),
         ]
 
-        self.special_bit, self.permissions, description = random.choice(special_options)
+        self.special_bit, self.permissions, perm_name, target_type, effect = random.choice(special_options)
+
+        if target_type == 'directory' and not os.path.isdir(self.file_path):
+            os.makedirs(self.file_path, exist_ok=True)
 
         self.description = (
-            f"Set special permissions on '{self.file_path}':\n"
-            f"  - {description}\n"
-            f"  - Final permissions: {self.permissions}"
+            f"Apply the {perm_name} to the {target_type} at '{self.file_path}'.\n\n"
+            f"Effect: {effect.capitalize()}.\n\n"
+            f"The base permissions should be rwxr-xr-x for a file (755),\n"
+            f"or rwxrwxrwx for a sticky directory (777). Apply the appropriate\n"
+            f"special bit on top of those base permissions."
         )
 
         self.hints = [
-            f"Use 'chmod {self.permissions} <file>'",
-            "Special bits: setuid=4, setgid=2, sticky=1",
-            "Combine with standard permissions",
-            "Verify with 'ls -l' (shows as 's' or 't' in permissions)"
+            f"First create the {target_type} if it doesn't exist",
+            "Special permission bits can be applied with chmod using symbolic notation (+s, +t) or octal",
+            "Symbolic: chmod +t (sticky), chmod u+s (setuid), chmod g+s (setgid)",
+            f"Verify with: ls -ld {self.file_path}  — look for 's' or 't' in the permission string",
         ]
 
         return self
@@ -417,12 +423,11 @@ class SharedDirectoryTask(BaseTask):
         )
         self.tags = ['v10-new', 'special-permissions', 'collaborative']
         self.exam_tips = [
-            "Collaborative directories need SGID + sticky bit = 3770",
-            "SGID (2xxx) makes new files inherit the directory's group",
-            "Sticky bit (1xxx) prevents users from deleting others' files",
-            "Combined: chmod 3770 gives both SGID and sticky",
-            "Set group ownership with chown :groupname directory",
-            "Verify with ls -ld - should show drwxrws--T or similar"
+            "Collaborative directories typically combine two special bits for shared access",
+            "One special bit ensures new files inherit the directory group instead of the creator's group",
+            "Another special bit ensures users can only delete files they own within the directory",
+            "Set group ownership with: chown :groupname directory",
+            "Verify with: ls -ld — the permission string will show special bit characters",
         ]
         self.dir_path = None
         self.group = None
@@ -445,11 +450,10 @@ class SharedDirectoryTask(BaseTask):
 
         self.hints = [
             f"Create directory: mkdir -p {self.dir_path}",
-            f"Set ownership: chown :{self.group} {self.dir_path}",
-            "SGID makes new files inherit group: chmod g+s or 2xxx",
-            "Sticky bit prevents deletion by others: chmod +t or 1xxx",
-            "Combined: chmod 3770 (SGID + Sticky + rwxrwx---)",
-            "Verify: ls -ld should show drwxrws--T or drwxrwx--t"
+            f"Set group ownership: chown :{self.group} {self.dir_path}",
+            "You need two special bits: one for group inheritance, one for deletion protection",
+            "chmod supports symbolic special-bit notation: u+s, g+s, +t",
+            f"Verify: ls -ld {self.dir_path}  — look for 's' and 't' characters in the output",
         ]
 
         return self

@@ -33,6 +33,7 @@ class RootPasswordResetTask(BaseTask):
             points=20
         )
         self.requires_persistence = False
+        self.requires_reboot = True
         self.tags = ['v10-new', 'exam-seen']
         self.exam_tips = [
             "On RHEL 10 sulogin may require existing root password",
@@ -66,30 +67,22 @@ class RootPasswordResetTask(BaseTask):
         scenario_desc, scenario_action = random.choice(scenarios)
 
         self.description = (
-            f"Reset the root password using rd.break:\n"
+            f"SCENARIO: {scenario_desc}\n"
             f"\n"
-            f"  Scenario: {scenario_desc}\n"
-            f"  {scenario_action}\n"
+            f"Recover root access and set the root password to: {self.new_password}\n"
             f"\n"
-            f"  Steps:\n"
-            f"  1. Reboot and interrupt the GRUB menu (press 'e')\n"
-            f"  2. Append 'rd.break' to the linux/linux16 kernel line\n"
-            f"  3. Press Ctrl-x to boot into the initramfs shell\n"
-            f"  4. Remount /sysroot read-write: mount -o remount,rw /sysroot\n"
-            f"  5. chroot /sysroot\n"
-            f"  6. Set the new root password to: {self.new_password}\n"
-            f"  7. touch /.autorelabel (critical for SELinux)\n"
-            f"  8. exit and reboot"
+            f"The system is currently running. You will need to interrupt the boot\n"
+            f"process to gain access without the current root password.\n"
+            f"Changes must survive reboot."
         )
 
         self.hints = [
-            "Interrupt GRUB: press any key during countdown, then 'e' to edit",
-            "Find the line starting with 'linux' and append 'rd.break' at the end",
-            "After rd.break drops you to switch_root:/# prompt, remount sysroot",
-            "mount -o remount,rw /sysroot && chroot /sysroot",
-            f"passwd root  (set to: {self.new_password})",
-            "touch /.autorelabel  <-- DO NOT FORGET THIS",
-            "exit; exit  (or reboot)",
+            "The GRUB bootloader allows editing kernel parameters before boot",
+            "Pressing 'e' at the GRUB menu lets you edit the boot entry",
+            "The kernel command line accepts special boot parameters that alter the init process",
+            "After gaining a shell, the real root filesystem is not yet mounted writable",
+            f"The new root password to set is: {self.new_password}",
+            "SELinux labels will be wrong after chroot modifications — plan accordingly",
         ]
 
         return self
@@ -199,6 +192,7 @@ class RootPasswordResetSuloginTask(BaseTask):
             points=20
         )
         self.requires_persistence = False
+        self.requires_reboot = True
         self.tags = ['v10-new', 'exam-seen']
         self.exam_tips = [
             "On RHEL 10 sulogin may require existing root password",
@@ -563,6 +557,7 @@ class EmergencyTargetBootTask(BaseTask):
             points=10
         )
         self.requires_persistence = False
+        self.requires_reboot = True
         self.tags = ['systemd', 'emergency', 'rescue']
         self.exam_tips = [
             "emergency.target provides minimal environment with root filesystem only.",
@@ -595,28 +590,19 @@ class EmergencyTargetBootTask(BaseTask):
             self.target, target_name, target_desc = random.choice(target_choices)
 
         self.description = (
-            f"Boot the system into {target_name} mode:\n"
+            f"Configure the system to boot into {target_name} mode by default.\n"
             f"\n"
-            f"  Target: {self.target}\n"
-            f"  Description: {target_desc}\n"
+            f"Target: {self.target}\n"
+            f"This target provides: {target_desc}.\n"
             f"\n"
-            f"  Methods:\n"
-            f"  A) Temporary (one-time boot):\n"
-            f"     - Interrupt GRUB, press 'e' to edit\n"
-            f"     - Append 'systemd.unit={self.target}' to the kernel line\n"
-            f"     - Press Ctrl-x to boot\n"
-            f"\n"
-            f"  B) Persistent (set as default target):\n"
-            f"     - systemctl set-default {self.target}\n"
-            f"\n"
-            f"  For this task, set the default target to {self.target}"
+            f"The change must be persistent — the system should boot into this target\n"
+            f"on the next and all subsequent reboots, not just once."
         )
 
         self.hints = [
-            f"systemctl set-default {self.target}",
-            f"systemctl isolate {self.target}  (switch immediately without reboot)",
-            "systemctl get-default  (verify current default target)",
-            "For temporary boot: append systemd.unit=<target> to kernel line in GRUB",
+            "systemctl can manage the default boot target permanently",
+            "Use 'systemctl --help' or 'man systemctl' to find the relevant subcommand",
+            "Verify your change with a systemctl query before rebooting",
         ]
 
         return self
@@ -700,6 +686,7 @@ class FixBrokenFstabRecoveryTask(BaseTask):
             points=18
         )
         self.requires_persistence = True
+        self.requires_reboot = True
         self.tags = ['fstab', 'troubleshooting', 'boot-failure']
         self.exam_tips = [
             "A single typo in /etc/fstab can prevent boot entirely.",
@@ -913,6 +900,7 @@ class RecoverFromReadOnlyRootTask(BaseTask):
             points=15
         )
         self.requires_persistence = True
+        self.requires_reboot = True
         self.tags = ['mount', 'root-filesystem', 'emergency']
         self.exam_tips = [
             "In emergency mode, / is often mounted read-only.",

@@ -38,6 +38,7 @@ class BaseTask(ABC):
         self.prerequisites = []
         self.tags = []
         self.task_order = None  # None = no ordering constraint; int = logical sequence within category
+        self.requires_reboot = False  # True if completing this task requires rebooting the system
 
     @abstractmethod
     def generate(self, **params):

@@ -206,6 +206,7 @@ class AddKernelParameterTask(BaseTask):
             points=10
         )
         self.requires_persistence = True
+        self.requires_reboot = True
         self.tags = ["grub", "kernel", "grubby", "boot-parameter"]
         self.exam_tips = [
             "grubby --args='<param>' --update-kernel=ALL is the fastest method.",
@@ -323,6 +324,7 @@ class RemoveKernelParameterTask(BaseTask):
             points=10
         )
         self.requires_persistence = True
+        self.requires_reboot = True
         self.tags = ["grub", "kernel", "grubby", "boot-parameter"]
         self.exam_tips = [
             "grubby --remove-args='<param>' --update-kernel=ALL is the fastest way.",
@@ -1010,6 +1012,7 @@ class SELinuxAutorelabelTask(BaseTask):
             points=5
         )
         self.requires_persistence = False
+        self.requires_reboot = True
         self.tags = ["selinux", "autorelabel", "boot"]
         self.exam_tips = [
             "After resetting root password via rd.break you MUST 'touch /.autorelabel'.",
@@ -1082,6 +1085,7 @@ class RebuildInitramfsTask(BaseTask):
             points=8
         )
         self.requires_persistence = False
+        self.requires_reboot = True
         self.tags = ["dracut", "initramfs", "kernel", "boot"]
         self.exam_tips = [
             "'dracut -f' rebuilds initramfs for the running kernel.",
