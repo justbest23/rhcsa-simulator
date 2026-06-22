@@ -122,5 +122,44 @@ fi
 
 echo
 echo "========================================="
+echo "Optional: Populate Practice Environment"
+echo "========================================="
+echo
+echo "Some practice tasks (e.g. DNF history) work best with a populated"
+echo "transaction history. This installs and removes small packages to"
+echo "build up ~12 DNF transactions. Nothing is permanently changed."
+echo
+read -p "Populate DNF transaction history now? [Y/n]: " -r
+echo
+if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+    echo "Building DNF transaction history..."
+    PRACTICE_PKGS=(tree dos2unix bc mtr strace lsof pv screen nmap zip ltrace telnet whois jq)
+    CYCLES=0
+    TARGET=12
+    for pkg in "${PRACTICE_PKGS[@]}"; do
+        if [ "$CYCLES" -ge "$TARGET" ]; then
+            break
+        fi
+        if rpm -q "$pkg" &>/dev/null; then
+            continue  # already installed — skip
+        fi
+        echo "  Installing $pkg..."
+        if dnf install -y --quiet "$pkg" &>/dev/null 2>&1; then
+            echo "  Removing $pkg..."
+            dnf remove -y --quiet "$pkg" &>/dev/null 2>&1
+            CYCLES=$((CYCLES + 1))
+        fi
+    done
+    if [ "$CYCLES" -gt 0 ]; then
+        echo -e "${GREEN}✓ Completed $CYCLES install/remove cycles ($((CYCLES * 2)) new DNF transactions)${NC}"
+    else
+        echo -e "${YELLOW}No cycles completed — check DNF repo access with: dnf repolist${NC}"
+    fi
+else
+    echo "Skipped. Run 'Setup → Populate Practice Environment' in the simulator later."
+fi
+
+echo
+echo "========================================="
 echo "Installation Complete!"
 echo "========================================="

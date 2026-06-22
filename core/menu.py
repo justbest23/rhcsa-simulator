@@ -210,6 +210,7 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
         print("  2. View Task Statistics")
         print("  3. Network Backup/Restore")
         print("  4. System Reset (remove practice artifacts)")
+        print("  5. Populate Practice Environment (DNF history)")
         print("  0. Return to Menu")
         print()
 
@@ -223,6 +224,8 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
             self.network_management()
         elif choice == '4':
             self.system_reset()
+        elif choice == '5':
+            self.populate_practice_environment()
 
     def show_stats(self):
         """Show task statistics."""
@@ -490,6 +493,48 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
                         print(fmt.error("Invalid selection"))
                 except ValueError:
                     print(fmt.error("Invalid input"))
+
+        print()
+        input("Press Enter to return...")
+
+    def populate_practice_environment(self):
+        """Install/remove lightweight packages to build up DNF transaction history."""
+        from utils.helpers import populate_dnf_history, confirm_action
+
+        fmt.clear_screen()
+        fmt.print_header("POPULATE PRACTICE ENVIRONMENT")
+
+        print("This will install and immediately remove a series of small packages")
+        print("to build up DNF transaction history for practice tasks.")
+        print()
+        print(fmt.info("Only packages NOT already installed will be touched."))
+        print(fmt.info("Nothing on your system will be permanently changed."))
+        print(fmt.warning("Requires active DNF repos and internet/local mirror access."))
+        print(fmt.warning("Takes 2–5 minutes depending on connection speed."))
+        print()
+
+        if not confirm_action("Build DNF transaction history?", default=True):
+            print(fmt.dim("Cancelled."))
+            print()
+            input("Press Enter to return...")
+            return
+
+        print()
+        print("Working... (this may take a few minutes)")
+        print()
+
+        def progress(msg):
+            print(f"  {msg}")
+
+        cycles = populate_dnf_history(target_transactions=12, progress_callback=progress)
+
+        print()
+        if cycles > 0:
+            print(fmt.success(f"Done! Completed {cycles} install/remove cycles ({cycles * 2} new DNF transactions)."))
+            print(fmt.info("Run 'dnf history' to verify."))
+        else:
+            print(fmt.error("No cycles completed — repos may not be configured or packages unavailable."))
+            print(fmt.dim("Make sure DNF repos are set up: dnf repolist"))
 
         print()
         input("Press Enter to return...")

@@ -564,7 +564,63 @@ def get_practice_vg():
                 vg_name = parts[0]
                 if vg_name not in system_vgs:
                     return vg_name
-        
+
         return None
     except Exception:
         return None
+
+
+def populate_dnf_history(target_transactions=12, progress_callback=None):
+    """
+    Build up DNF transaction history by installing and removing lightweight
+    packages in cycles. Only installs packages not currently present so it
+    never removes something the user already had.
+
+    Returns the number of install/remove cycles completed.
+    """
+    import subprocess
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    # Small packages available in RHEL 10 BaseOS/AppStream
+    candidates = [
+        'tree', 'dos2unix', 'bc', 'mtr', 'strace',
+        'lsof', 'pv', 'words', 'screen', 'nmap',
+        'zip', 'ltrace', 'telnet', 'whois', 'jq',
+    ]
+
+    cycles = 0
+
+    for pkg in candidates:
+        if cycles >= target_transactions:
+            break
+
+        # Skip if already installed — never touch pre-existing packages
+        check = subprocess.run(['rpm', '-q', pkg], capture_output=True)
+        if check.returncode == 0:
+            logger.debug(f"Skipping {pkg} (already installed)")
+            continue
+
+        if progress_callback:
+            progress_callback(f"Installing {pkg}...")
+
+        install = subprocess.run(
+            ['dnf', 'install', '-y', '--quiet', pkg],
+            capture_output=True, text=True, timeout=120
+        )
+        if install.returncode != 0:
+            logger.debug(f"Could not install {pkg}: {install.stderr[:200]}")
+            continue
+
+        if progress_callback:
+            progress_callback(f"Removing {pkg}...")
+
+        subprocess.run(
+            ['dnf', 'remove', '-y', '--quiet', pkg],
+            capture_output=True, text=True, timeout=120
+        )
+        cycles += 1
+        logger.info(f"DNF history cycle: {pkg} installed+removed")
+
+    return cycles
