@@ -621,3 +621,23 @@ def print_timer_status(remaining_str, is_critical=False, is_warning=False):
         time_display = success(remaining_str)
 
     print(f"  {icon}{time_display} remaining")
+
+
+def page_output(text: str) -> None:
+    """
+    Display text through less if it is taller than the terminal.
+    Preserves ANSI color codes (-R), exits immediately if content
+    fits on one screen (-F), and does not clear the screen on exit (-X).
+    Falls back to plain print if less is not available.
+    """
+    import os
+    import subprocess
+    pager = os.environ.get('PAGER', 'less')
+    try:
+        proc = subprocess.Popen(
+            [pager, '-R', '-F', '-X'],
+            stdin=subprocess.PIPE,
+        )
+        proc.communicate(input=text.encode('utf-8', errors='replace'))
+    except (FileNotFoundError, OSError):
+        print(text)

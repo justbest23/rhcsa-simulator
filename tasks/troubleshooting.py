@@ -91,6 +91,18 @@ def restore_any_active_fault():
         if param:
             subprocess.run(['grubby', '--remove-args', param, '--update-kernel=ALL'], capture_output=True)
             msgs.append(f"Removed injected kernel parameter '{param}'")
+    elif task_id == 'fs_extend_001':
+        vg = info.get('vg', 'vg_practice')
+        lv = info.get('lv', 'lv_practice')
+        pv = info.get('pv', '')
+        mp = info.get('mp', '/mnt/practice_extend')
+        subprocess.run(['umount', mp], capture_output=True)
+        subprocess.run(['lvremove', '-ff', f'/dev/{vg}/{lv}'], capture_output=True)
+        subprocess.run(['vgchange', '-an', vg], capture_output=True)
+        subprocess.run(['vgremove', '-ff', vg], capture_output=True)
+        if pv:
+            subprocess.run(['pvremove', '-ff', '-y', pv], capture_output=True)
+        msgs.append(f"Cleaned up practice LVM ({vg}/{lv}) and {mp}")
     else:
         msgs.append(f"Unknown fault type: {task_id}")
 

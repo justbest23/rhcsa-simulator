@@ -8,7 +8,9 @@ Features:
 - Retry with solution hints
 """
 
+import io
 import logging
+from contextlib import redirect_stdout
 from tasks.registry import TaskRegistry
 from core.validator import get_validator
 from core.results_db import get_results_db
@@ -157,33 +159,36 @@ class PracticeSession:
         stop_requested = False
         while True:
             fmt.clear_screen()
-            print(f"Practice Task {current}/{total}" + (f" (Attempt {attempt})" if attempt > 1 else ""))
-            print("=" * 60)
-            print()
 
-            # Display task with domain info
-            print(fmt.bold("Task:"))
-            print(task.description)
-            print()
-            print(fmt.bold(f"Category: {fmt.format_category_name(task.category)}"))
-            domain = getattr(task, 'exam_domain', 0)
-            domain_name = settings.EXAM_DOMAINS.get(domain, "")
-            if domain_name:
-                print(fmt.bold(f"Domain: {domain} - {domain_name}"))
-            print(fmt.bold(f"Points: {task.points}"))
-            print(fmt.bold(f"Difficulty: {fmt.format_difficulty(task.difficulty)}"))
-            persistence = getattr(task, 'requires_persistence', False)
-            if persistence:
-                print(fmt.info("  Requires persistence (survives reboot)"))
-            print()
+            # Build the task display into a buffer so we can page it
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                print(f"Practice Task {current}/{total}" + (f" (Attempt {attempt})" if attempt > 1 else ""))
+                print("=" * 60)
+                print()
 
-            # Show hints
-            if task.hints and confirm_action("Show hints?", default=False):
+                print(fmt.bold("Task:"))
+                print(task.description)
                 print()
-                print(fmt.bold("Hints:"))
-                for i, hint in enumerate(task.hints, 1):
-                    print(f"  {i}. {hint}")
+                print(fmt.bold(f"Category: {fmt.format_category_name(task.category)}"))
+                domain = getattr(task, 'exam_domain', 0)
+                domain_name = settings.EXAM_DOMAINS.get(domain, "")
+                if domain_name:
+                    print(fmt.bold(f"Domain: {domain} - {domain_name}"))
+                print(fmt.bold(f"Points: {task.points}"))
+                print(fmt.bold(f"Difficulty: {fmt.format_difficulty(task.difficulty)}"))
+                persistence = getattr(task, 'requires_persistence', False)
+                if persistence:
+                    print(fmt.info("  Requires persistence (survives reboot)"))
                 print()
+
+                if task.hints:
+                    print(fmt.bold("Hints:"))
+                    for i, hint in enumerate(task.hints, 1):
+                        print(f"  {i}. {hint}")
+                    print()
+
+            fmt.page_output(buf.getvalue())
 
             input("Complete this task on your system, then press Enter to validate...")
 
@@ -191,23 +196,33 @@ class PracticeSession:
             validator = get_validator()
             result = validator.validate_task(task)
 
-            # Display result
-            print()
-            print(fmt.bold("Validation Results:"))
-            print("=" * 60)
-            for check in result.checks:
-                fmt.print_check_result(
-                    check.name,
-                    check.passed,
-                    check.message,
-                    check.points,
-                    check.max_points
-                )
-                if not check.passed:
-                    self._show_fix_suggestion(check, task)
+            # Build result + exam tips into a buffer, then page it
+            rbuf = io.StringIO()
+            with redirect_stdout(rbuf):
+                print()
+                print(fmt.bold("Validation Results:"))
+                print("=" * 60)
+                for check in result.checks:
+                    fmt.print_check_result(
+                        check.name,
+                        check.passed,
+                        check.message,
+                        check.points,
+                        check.max_points
+                    )
+                    if not check.passed:
+                        self._show_fix_suggestion(check, task)
+                print("=" * 60)
+                fmt.print_result_summary(result.passed, result.score, result.max_score, result.percentage)
 
-            print("=" * 60)
-            fmt.print_result_summary(result.passed, result.score, result.max_score, result.percentage)
+                exam_tips = getattr(task, 'exam_tips', [])
+                if exam_tips:
+                    print()
+                    print(fmt.bold("Exam Tips:"))
+                    for tip in exam_tips:
+                        print(f"  * {tip}")
+
+            fmt.page_output(rbuf.getvalue())
 
             # Save to ResultsDB (triggers SM-2 update)
             db.save_practice_attempt(
@@ -220,14 +235,6 @@ class PracticeSession:
                 passed=result.passed,
                 mode='practice'
             )
-
-            # Show exam tips
-            exam_tips = getattr(task, 'exam_tips', [])
-            if exam_tips:
-                print()
-                print(fmt.bold("Exam Tips:"))
-                for tip in exam_tips:
-                    print(f"  * {tip}")
 
             if not result.passed:
                 print()
