@@ -1225,13 +1225,74 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
         if not autofs_dirty:
             print(fmt.dim("  Autofs config is clean"))
 
-        # ── Step 10: Restore any active troubleshooting fault ────────────────
+        # ── Step 10: Practice users and groups ───────────────────────────────
+        print()
+        print(fmt.bold("Step 10: Practice Users & Groups"))
+
+        # Regex patterns derived from every username/groupname generator in tasks/.
+        # Only matches: known prefix + exactly 2 digit suffix (the randint range),
+        # or a fixed practice name. Does NOT match plain words without digits.
+        import re as _re
+        # Name-based pattern: prefix + 1-2 digit suffix (randint range is 10-99 or 1-99)
+        _USER_PAT_NUMBERED = _re.compile(
+            r'^('
+            r'alice|bob|carol|dave|eve|frank|grace|hank|'
+            r'anna|ben|clara|dan|ella|finn|gina|hugo|iris|jake|'
+            r'staffuser|ageuser|operator|locktest|removeuser|shelluser|troubleuser|'
+            r'(?:nginx|redis|tomcat|grafana|prometheus|elasticsearch|kafka|rabbitmq|consul|vault)svc|'
+            r'appsvc|mailsvc|websvc|dbsvc|ftpsvc|logsvc|'
+            r'loginuser|sudouser|'
+            r'user'
+            r')\d{1,2}$'
+        )
+        # Fixed names with no numeric suffix
+        _USER_PAT_FIXED = _re.compile(r'^sudopractice$')
+
+        def _is_practice_user(name):
+            return bool(_USER_PAT_NUMBERED.match(name) or _USER_PAT_FIXED.match(name))
+        _GROUP_PAT = _re.compile(
+            r'^(devteam|qagroup|opsgroup|infrateam|secteam|datateam|cloudops)\d{2}$'
+        )
+
+        practice_users, practice_groups = [], []
+        try:
+            import pwd, grp as _grp
+            for pw in pwd.getpwall():
+                if pw.pw_uid >= 1000 and _is_practice_user(pw.pw_name):
+                    practice_users.append(pw.pw_name)
+            for gr in _grp.getgrall():
+                if gr.gr_gid >= 1000 and _GROUP_PAT.match(gr.gr_name):
+                    practice_groups.append(gr.gr_name)
+        except Exception as e:
+            print(fmt.error(f"  Error scanning users/groups: {e}"))
+
+        if practice_users:
+            print("  Practice users found:")
+            for u in practice_users:
+                print(f"    {u}")
+            if confirm_action("  Delete these users (and their home dirs)?", default=True):
+                for u in practice_users:
+                    subprocess.run(['userdel', '-r', u], capture_output=True)
+                print(fmt.success(f"  Removed {len(practice_users)} practice user(s)"))
+        else:
+            print(fmt.dim("  No practice users found"))
+
+        if practice_groups:
+            print("  Practice groups found:")
+            for g in practice_groups:
+                print(f"    {g}")
+            if confirm_action("  Delete these groups?", default=True):
+                for g in practice_groups:
+                    subprocess.run(['groupdel', g], capture_output=True)
+                print(fmt.success(f"  Removed {len(practice_groups)} practice group(s)"))
+
+        # ── Step 11: Restore any active troubleshooting fault ────────────────
         try:
             from tasks.troubleshooting import restore_any_active_fault
             had_fault, msg = restore_any_active_fault()
             if had_fault:
                 print()
-                print(fmt.bold("Step 10: Active Fault Restore"))
+                print(fmt.bold("Step 11: Active Fault Restore"))
                 print(fmt.success(f"  Restored: {msg}"))
         except Exception as e:
             print()
