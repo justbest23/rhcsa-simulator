@@ -13,6 +13,33 @@ from validators.safe_executor import execute_safe
 from validators.file_validators import validate_file_contains
 
 
+def _normalize_cron(expression):
+    """
+    Normalize a cron expression for comparison.
+    - Day-of-week: 7 and 0 both mean Sunday — map 7 → 0.
+    - Strips extra whitespace between fields.
+    """
+    parts = expression.split()
+    if len(parts) >= 5:
+        # Normalize day-of-week field (index 4): replace 7 with 0
+        dow = parts[4].replace('7', '0')
+        parts[4] = dow
+    return ' '.join(parts)
+
+
+def _cron_schedule_matches(stored_schedule, crontab_line):
+    """
+    Return True if the crontab line contains a schedule equivalent to stored_schedule.
+    Handles Sunday 0/7 equivalence and whitespace differences.
+    """
+    line_parts = crontab_line.split()
+    if len(line_parts) < 6:
+        return False
+    # Extract the 5-field schedule from the line
+    line_schedule = ' '.join(line_parts[:5])
+    return _normalize_cron(stored_schedule) == _normalize_cron(line_schedule)
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -96,13 +123,13 @@ class CreateCronJobTask(BaseTask):
                 if not entry or entry.startswith('#'):
                     continue
                 if self.command in entry:
-                    if self.schedule in entry:
+                    if _cron_schedule_matches(self.schedule, entry):
                         found = True
                         checks.append(ValidationCheck(
                             name="cron_entry_exact",
                             passed=True,
                             points=10,
-                            message=f"Cron job correctly configured with exact schedule"
+                            message="Cron job correctly configured"
                         ))
                         total_points += 10
                         break
@@ -111,7 +138,7 @@ class CreateCronJobTask(BaseTask):
                             name="cron_entry_partial",
                             passed=True,
                             points=5,
-                            message=f"Command found but schedule may differ (partial credit)"
+                            message=f"Command found but schedule is wrong (expected: {self.schedule})"
                         ))
                         total_points += 5
                         found = True
@@ -510,11 +537,11 @@ class CronExpressionTask(BaseTask):
                 if not line or line.startswith('#'):
                     continue
                 if self.command in line:
-                    if self.cron_expression in line:
+                    if _cron_schedule_matches(self.cron_expression, line):
                         checks.append(ValidationCheck("cron_exact", True, 12, "Correct cron expression"))
                         total_points = 12
                     else:
-                        checks.append(ValidationCheck("cron_partial", True, 6, "Command found but schedule differs"))
+                        checks.append(ValidationCheck("cron_partial", True, 6, f"Command found but schedule is wrong (expected: {self.cron_expression})"))
                         total_points = 6
                     break
             else:
