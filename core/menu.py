@@ -396,7 +396,7 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
         print("Scanning block devices...")
         all_devs = list_all_block_devices()
 
-        # Separate into safe picks and risky picks
+        # Safe = not the system disk, no active filesystem mounts (swap-only is fine)
         safe = [d for d in all_devs if not d['is_system'] and not d['mounted']]
         risky = [d for d in all_devs if d['is_system'] or d['mounted']]
 
@@ -406,18 +406,23 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
 
         print()
         if safe:
-            print(fmt.bold("Available disks (not mounted):"))
+            print(fmt.bold("Available disks:"))
             for i, d in enumerate(safe, 1):
-                parts_note = " (has partitions)" if d['has_partitions'] else " (empty)"
-                print(f"  {i}. {d['device']}  {d['size']}{parts_note}")
+                notes = []
+                if d['has_partitions']:
+                    notes.append("has partitions")
+                if d.get('has_swap'):
+                    notes.append("swap active")
+                note_str = f"  ({', '.join(notes)})" if notes else "  (empty)"
+                print(f"  {i}. {d['device']}  {d['size']}{note_str}")
         else:
-            print(fmt.warning("No clearly spare disks found."))
+            print(fmt.warning("No spare disks found."))
 
         if risky:
             print()
-            print(fmt.dim("System/mounted disks (shown for reference, do NOT select):"))
+            print(fmt.dim("Blocked (system disk or has active filesystem mounts):"))
             for d in risky:
-                flag = "SYSTEM DISK" if d['is_system'] else "mounted"
+                flag = "SYSTEM DISK" if d['is_system'] else "has active mounts"
                 print(fmt.dim(f"  {d['device']}  {d['size']}  [{flag}]"))
 
         print()

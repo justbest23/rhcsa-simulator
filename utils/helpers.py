@@ -293,16 +293,36 @@ def list_all_block_devices():
     if result.returncode != 0:
         return []
 
-    # Find which disk has / mounted (system disk)
-    root_result = subprocess.run(
-        ['lsblk', '-no', 'PKNAME,MOUNTPOINT'],
+    # Find which physical disk(s) back the / mountpoint.
+    # Walk lsblk tree: dm-* devices (LVM) list their underlying disk via PKNAME.
+    # We collect every device that is an ancestor of the / mountpoint.
+    tree_result = subprocess.run(
+        ['lsblk', '-no', 'NAME,PKNAME,MOUNTPOINT'],
         capture_output=True, text=True, timeout=10
     )
-    system_disks = set()
-    for line in root_result.stdout.splitlines():
+    # Build parent map: name -> pkname
+    parent = {}
+    root_devs = set()
+    for line in tree_result.stdout.splitlines():
         parts = line.split()
-        if len(parts) == 2 and parts[1] == '/':
-            system_disks.add(f"/dev/{parts[0]}")
+        if len(parts) >= 2:
+            name = parts[0]
+            pkname = parts[1] if parts[1] != name else None
+            mnt = parts[2] if len(parts) >= 3 else ''
+            parent[name] = pkname
+            if mnt == '/':
+                root_devs.add(name)
+
+    # Walk up the parent chain from each root device to find the physical disk
+    system_disks = set()
+    for dev in root_devs:
+        cur = dev
+        while cur:
+            nxt = parent.get(cur)
+            if not nxt:
+                system_disks.add(f"/dev/{cur}")
+                break
+            cur = nxt
 
     devices = []
     for line in result.stdout.strip().splitlines():
@@ -326,13 +346,17 @@ def list_all_block_devices():
             ['lsblk', '-no', 'MOUNTPOINT', device],
             capture_output=True, text=True, timeout=5
         )
-        mounts = [m for m in mount_result.stdout.strip().splitlines() if m.strip()]
+        all_mounts = [m.strip() for m in mount_result.stdout.strip().splitlines() if m.strip()]
+        # Only real filesystem paths count as "mounted" — [SWAP] does not
+        fs_mounts = [m for m in all_mounts if m.startswith('/')]
+        has_swap = any(m == '[SWAP]' for m in all_mounts)
 
         devices.append({
             'device': device,
             'size': size,
             'has_partitions': has_partitions,
-            'mounted': bool(mounts),
+            'mounted': bool(fs_mounts),
+            'has_swap': has_swap,
             'is_system': device in system_disks,
         })
 
