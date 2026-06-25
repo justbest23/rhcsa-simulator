@@ -312,84 +312,154 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
         input("Press Enter to return...")
 
     def setup_practice_disks(self):
-        """Set up or manage practice loop devices for LVM."""
+        """Set up or manage practice disks for LVM/partition tasks."""
         from utils.helpers import (
-            get_available_block_devices, get_loop_devices,
-            create_practice_devices, cleanup_practice_devices
+            get_loop_devices, create_practice_devices, cleanup_practice_devices,
+            get_practice_device_config, save_practice_device_config,
+            list_all_block_devices, confirm_action
         )
 
         fmt.clear_screen()
         fmt.print_header("PRACTICE DISK SETUP")
 
-        print("This tool creates virtual disks (loop devices) for LVM practice.")
-        print("No real disks required!")
+        # Show current config
+        cfg = get_practice_device_config()
+        loop_devices = get_loop_devices()
+
+        print(fmt.bold("Current Configuration:"))
+        if cfg:
+            mode_label = "Loop devices" if cfg['mode'] == 'loop' else "Real disk(s)"
+            print(f"  Mode: {mode_label}")
+            print(f"  Devices: {', '.join(cfg['devices']) if cfg['devices'] else 'none'}")
+        else:
+            print("  Not configured")
+        if loop_devices:
+            print(f"  Attached loop devices: {', '.join(loop_devices)}")
         print()
 
-        # Show current status
-        print(fmt.bold("Current Status:"))
-        try:
-            real_devices = get_available_block_devices()
-            loop_devices = get_loop_devices()
-
-            if real_devices:
-                print(f"  Real disks available: {', '.join(real_devices)}")
-            else:
-                print("  Real disks available: None")
-
-            if loop_devices:
-                print(f"  Practice disks (loop): {', '.join(loop_devices)}")
-            else:
-                print("  Practice disks (loop): None")
-        except Exception:
-            print("  (Could not detect devices - are you running as root?)")
-
-        print()
         print(fmt.bold("Options:"))
-        print("  1. Create practice disks (3 x 500MB — LVM and partition/swap practice)")
-        print("  2. Create custom practice disks")
-        print("  3. Clean up all practice disks")
-        print("  0. Return to menu")
+        print("  1. Create loop devices  (3 x 500MB virtual disks — no spare drive needed)")
+        print("  2. Use a real disk      (pick a spare drive already in your VM)")
+        print("  3. Custom loop devices  (choose count and size)")
+        print("  4. Clean up / reset     (remove LVM structures from practice devices)")
+        print("  0. Return")
         print()
 
-        choice = input("Select option [1]: ").strip() or '1'
+        choice = input("Select option: ").strip()
 
         if choice == '1':
             print()
-            print("Creating 3 x 500MB practice disks...")
+            print("Creating 3 x 500MB loop devices...")
             devices = create_practice_devices(count=3, size_mb=500)
             if devices:
-                print(fmt.success(f"Created devices: {', '.join(devices)}"))
-                print(fmt.info(f"  {devices[-1]} is available for swap partition practice"))
+                save_practice_device_config('loop', devices)
+                print(fmt.success(f"Ready: {', '.join(devices)}"))
+                print(fmt.info(f"  {devices[-1]} is reserved for swap/partition practice"))
             else:
-                print(fmt.error("Failed to create practice disks"))
+                print(fmt.error("Failed to create loop devices"))
 
         elif choice == '2':
+            self._select_real_disk(list_all_block_devices, save_practice_device_config)
+
+        elif choice == '3':
             try:
-                count = int(input("Number of disks [2]: ").strip() or '2')
+                count = int(input("Number of disks [3]: ").strip() or '3')
                 size = int(input("Size per disk in MB [500]: ").strip() or '500')
                 print()
-                print(f"Creating {count} x {size}MB practice disks...")
                 devices = create_practice_devices(count=count, size_mb=size)
                 if devices:
-                    print(fmt.success(f"Created devices: {', '.join(devices)}"))
+                    save_practice_device_config('loop', devices)
+                    print(fmt.success(f"Ready: {', '.join(devices)}"))
                 else:
-                    print(fmt.error("Failed to create practice disks"))
+                    print(fmt.error("Failed to create loop devices"))
             except ValueError:
                 print(fmt.error("Invalid input"))
 
-        elif choice == '3':
-            from utils.helpers import confirm_action
+        elif choice == '4':
             print()
-            print(fmt.warning("This will remove all LVM structures on practice disks!"))
-            if confirm_action("Are you sure?", default=False):
-                print("Cleaning up practice disks...")
+            mode_desc = "real disk(s)" if cfg and cfg['mode'] == 'real' else "loop devices"
+            print(fmt.warning(f"This removes all LVM/swap structures from practice {mode_desc}."))
+            if cfg and cfg['mode'] == 'real':
+                print(fmt.warning("Partition tables on real disks are NOT touched."))
+            if confirm_action("Continue?", default=False):
                 if cleanup_practice_devices():
-                    print(fmt.success("Practice disks cleaned up"))
+                    print(fmt.success("Practice devices cleaned up"))
                 else:
-                    print(fmt.error("Cleanup failed"))
+                    print(fmt.error("Cleanup failed — check manually"))
 
         print()
         input("Press Enter to return...")
+
+    def _select_real_disk(self, list_all_block_devices, save_practice_device_config):
+        """Interactive picker for selecting a real disk as practice device."""
+        print()
+        print("Scanning block devices...")
+        all_devs = list_all_block_devices()
+
+        # Separate into safe picks and risky picks
+        safe = [d for d in all_devs if not d['is_system'] and not d['mounted']]
+        risky = [d for d in all_devs if d['is_system'] or d['mounted']]
+
+        if not safe and not risky:
+            print(fmt.error("No block devices found."))
+            return
+
+        print()
+        if safe:
+            print(fmt.bold("Available disks (not mounted):"))
+            for i, d in enumerate(safe, 1):
+                parts_note = " (has partitions)" if d['has_partitions'] else " (empty)"
+                print(f"  {i}. {d['device']}  {d['size']}{parts_note}")
+        else:
+            print(fmt.warning("No clearly spare disks found."))
+
+        if risky:
+            print()
+            print(fmt.dim("System/mounted disks (shown for reference, do NOT select):"))
+            for d in risky:
+                flag = "SYSTEM DISK" if d['is_system'] else "mounted"
+                print(fmt.dim(f"  {d['device']}  {d['size']}  [{flag}]"))
+
+        print()
+        if not safe:
+            print(fmt.error("No safe disks to select."))
+            return
+
+        raw = input("Enter disk number (or device path like /dev/sdb): ").strip()
+        if not raw:
+            return
+
+        # Resolve selection
+        if raw.startswith('/dev/'):
+            chosen = raw
+        else:
+            try:
+                idx = int(raw) - 1
+                if not (0 <= idx < len(safe)):
+                    print(fmt.error("Invalid selection"))
+                    return
+                chosen = safe[idx]['device']
+            except ValueError:
+                print(fmt.error("Invalid input"))
+                return
+
+        # Safety check — don't allow system disk
+        chosen_info = next((d for d in all_devs if d['device'] == chosen), None)
+        if chosen_info and chosen_info['is_system']:
+            print(fmt.error(f"Cannot use {chosen} — it is the system disk."))
+            return
+
+        print()
+        print(fmt.warning(f"Selected: {chosen}"))
+        print(fmt.warning("LVM tasks will use this disk. Existing data on it may be overwritten."))
+        from utils.helpers import confirm_action
+        if not confirm_action("Are you sure?", default=False):
+            print("Cancelled.")
+            return
+
+        save_practice_device_config('real', [chosen])
+        print(fmt.success(f"Configured: practice tasks will use {chosen}"))
+        print(fmt.info("LVM tasks will run pvcreate/vgcreate on this disk directly."))
 
     def network_management(self):
         """Network backup and restore management."""

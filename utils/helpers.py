@@ -244,6 +244,102 @@ def clamp(value, min_val, max_val):
 
 
 # =============================================================================
+# Practice Device Configuration
+# =============================================================================
+
+PRACTICE_DEVICE_CONFIG = '/var/lib/rhcsa-simulator/practice_devices.conf'
+
+
+def get_practice_device_config():
+    """
+    Read the saved practice device configuration.
+    Returns dict with keys 'mode' ('loop' or 'real') and 'devices' (list).
+    Returns None if no config saved.
+    """
+    if not os.path.exists(PRACTICE_DEVICE_CONFIG):
+        return None
+    try:
+        import json
+        with open(PRACTICE_DEVICE_CONFIG) as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def save_practice_device_config(mode, devices):
+    """
+    Save the practice device selection to disk.
+    mode: 'loop' or 'real'
+    devices: list of device paths
+    """
+    import json
+    os.makedirs(os.path.dirname(PRACTICE_DEVICE_CONFIG), exist_ok=True)
+    with open(PRACTICE_DEVICE_CONFIG, 'w') as f:
+        json.dump({'mode': mode, 'devices': devices}, f)
+
+
+def list_all_block_devices():
+    """
+    Return info on all block devices, excluding CD-ROMs and floppies.
+    Does NOT filter out system disks — let the user decide.
+    Returns list of dicts: {device, size, has_partitions, mounted, is_system}.
+    """
+    import subprocess
+
+    result = subprocess.run(
+        ['lsblk', '-dpno', 'NAME,SIZE,TYPE'],
+        capture_output=True, text=True, timeout=10
+    )
+    if result.returncode != 0:
+        return []
+
+    # Find which disk has / mounted (system disk)
+    root_result = subprocess.run(
+        ['lsblk', '-no', 'PKNAME,MOUNTPOINT'],
+        capture_output=True, text=True, timeout=10
+    )
+    system_disks = set()
+    for line in root_result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[1] == '/':
+            system_disks.add(f"/dev/{parts[0]}")
+
+    devices = []
+    for line in result.stdout.strip().splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        device, size, dtype = parts[0], parts[1], parts[2]
+        if dtype != 'disk':
+            continue
+        if any(x in device for x in ['sr', 'fd', 'cdrom']):
+            continue
+
+        part_result = subprocess.run(
+            ['lsblk', '-no', 'NAME', device],
+            capture_output=True, text=True, timeout=5
+        )
+        children = [l.strip() for l in part_result.stdout.strip().splitlines() if l.strip()]
+        has_partitions = len(children) > 1
+
+        mount_result = subprocess.run(
+            ['lsblk', '-no', 'MOUNTPOINT', device],
+            capture_output=True, text=True, timeout=5
+        )
+        mounts = [m for m in mount_result.stdout.strip().splitlines() if m.strip()]
+
+        devices.append({
+            'device': device,
+            'size': size,
+            'has_partitions': has_partitions,
+            'mounted': bool(mounts),
+            'is_system': device in system_disks,
+        })
+
+    return devices
+
+
+# =============================================================================
 # LVM Practice Device Helpers
 # =============================================================================
 
@@ -359,14 +455,20 @@ def get_loop_devices():
 
 def get_swap_practice_device():
     """
-    Return the loop device to use for swap partition practice.
-    Uses losetup -j on disk2.img for precise, stable detection.
-    Falls back to the last available loop device if disk2.img isn't attached.
+    Return the device to use for swap partition practice.
+    - Real disk mode: returns the configured real disk (student partitions it with fdisk)
+    - Loop mode: returns the loop device backed by disk2.img (3rd practice disk)
     """
     import subprocess
     import os
 
-    # Prefer disk2.img — 3rd practice disk, reserved for partition/swap practice
+    cfg = get_practice_device_config()
+
+    if cfg and cfg['mode'] == 'real' and cfg.get('devices'):
+        # Real disk — student uses fdisk on it to create a swap partition
+        return cfg['devices'][-1]
+
+    # Loop mode: find disk2.img
     disk2_img = '/var/lib/rhcsa-simulator/loops/disk2.img'
     if os.path.exists(disk2_img):
         try:
@@ -379,7 +481,7 @@ def get_swap_practice_device():
         except Exception:
             pass
 
-    # Fallback: last loop device we own (avoids taking an LVM disk)
+    # Fallback: last loop device we own
     devices = get_loop_devices()
     if devices:
         return devices[-1]
@@ -446,39 +548,59 @@ def create_practice_devices(count=3, size_mb=500):
 
 def cleanup_practice_devices():
     """
-    Clean up loop devices created for LVM practice.
-    Removes LVM structures, detaches loops, and deletes files.
-
-    Returns:
-        bool: True if cleanup successful
+    Clean up practice devices based on the saved configuration.
+    - Loop mode: deactivate swap, remove LVM, detach loops, delete images.
+    - Real disk mode: remove LVM structures from configured disks (does NOT
+      wipe partition tables — user's data, user's responsibility).
+    Also removes the practice device config file.
     """
     import subprocess
     import os
 
     loop_dir = '/var/lib/rhcsa-simulator/loops'
+    cfg = get_practice_device_config()
 
     try:
-        # Collect all simulator loop devices (LVM disks + swap)
-        devices = get_loop_devices()
-        swap_dev = get_swap_practice_device()
-        if swap_dev and swap_dev not in devices:
-            devices.append(swap_dev)
+        if cfg and cfg['mode'] == 'real':
+            # Clean LVM off real disks only
+            for device in cfg.get('devices', []):
+                subprocess.run(['swapoff', device], capture_output=True, timeout=10)
+                # Remove LVM from device and all its partitions
+                part_result = subprocess.run(
+                    ['lsblk', '-no', 'NAME', device],
+                    capture_output=True, text=True, timeout=5
+                )
+                all_devs = [device] + [
+                    f"/dev/{n.strip()}"
+                    for n in part_result.stdout.strip().splitlines()
+                    if n.strip() and n.strip() != device.split('/')[-1]
+                ]
+                for dev in all_devs:
+                    subprocess.run(['swapoff', dev], capture_output=True, timeout=10)
+                    subprocess.run(['pvremove', '-ff', '-y', dev],
+                                   capture_output=True, timeout=10)
+        else:
+            # Loop mode cleanup
+            devices = get_loop_devices()
+            swap_dev = get_swap_practice_device()
+            if swap_dev and swap_dev not in devices:
+                devices.append(swap_dev)
 
-        for device in devices:
-            # Deactivate swap if active on this device
-            subprocess.run(['swapoff', device], capture_output=True, timeout=10)
-            # Remove any LVM structures
-            subprocess.run(['pvremove', '-ff', '-y', device],
-                         capture_output=True, timeout=10)
-            # Detach loop device
-            subprocess.run(['losetup', '-d', device],
-                         capture_output=True, timeout=10)
+            for device in devices:
+                subprocess.run(['swapoff', device], capture_output=True, timeout=10)
+                subprocess.run(['pvremove', '-ff', '-y', device],
+                               capture_output=True, timeout=10)
+                subprocess.run(['losetup', '-d', device],
+                               capture_output=True, timeout=10)
 
-        # Remove all image files (disk*.img and swap.img)
-        if os.path.exists(loop_dir):
-            for f in os.listdir(loop_dir):
-                if f.endswith('.img'):
-                    os.remove(os.path.join(loop_dir, f))
+            if os.path.exists(loop_dir):
+                for f in os.listdir(loop_dir):
+                    if f.endswith('.img'):
+                        os.remove(os.path.join(loop_dir, f))
+
+        # Remove config so next run starts fresh
+        if os.path.exists(PRACTICE_DEVICE_CONFIG):
+            os.remove(PRACTICE_DEVICE_CONFIG)
 
         return True
     except Exception as e:
@@ -497,49 +619,44 @@ def get_practice_device():
     """
     # Use DeviceManager for smart detection (skips system disks, caches result,
     # recognizes disks with existing practice PVs/VGs)
-    try:
-        from device import get_device_manager
-        dm = get_device_manager()
-        device = dm.get_practice_device()
-        if device:
-            return device
-    except Exception:
-        pass
+    # Check saved config first
+    cfg = get_practice_device_config()
+    if cfg and cfg.get('devices'):
+        if cfg['mode'] == 'loop':
+            # Re-attach loop devices if needed
+            loop_devices = get_loop_devices()
+            if loop_devices:
+                return loop_devices[0]
+            # Images may still exist but not attached — recreate
+            created = create_practice_devices(count=3, size_mb=500)
+            if created:
+                return created[0]
+        else:
+            # Real disk mode — return first configured device
+            return cfg['devices'][0]
 
-    # Fallback: try raw block device detection
-    real_devices = get_available_block_devices()
-    if real_devices:
-        return real_devices[0]
-
-    # Fall back to loop devices
+    # No config: fall back to loop devices if any exist
     loop_devices = get_loop_devices()
     if loop_devices:
         return loop_devices[0]
-
-    # Create loop devices if needed
-    created = create_practice_devices(count=2, size_mb=500)
-    if created:
-        return created[0]
 
     return None
 
 
 def get_all_practice_devices():
     """
-    Get all devices available for LVM practice.
-
-    Returns:
-        list: List of device paths
+    Get all devices configured for LVM/partition practice.
+    Respects the saved practice device config.
     """
-    devices = []
+    cfg = get_practice_device_config()
+    if cfg and cfg.get('devices'):
+        if cfg['mode'] == 'loop':
+            return get_loop_devices()
+        else:
+            return cfg['devices']
 
-    # Real devices first
-    devices.extend(get_available_block_devices())
-
-    # Then loop devices
-    devices.extend(get_loop_devices())
-
-    return devices
+    # No config — return whatever loop devices are attached
+    return get_loop_devices()
 
 
 def get_practice_lv():
