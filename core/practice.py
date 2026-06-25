@@ -135,9 +135,26 @@ class PracticeSession:
 
     def _run_practice_task(self, task, current, total):
         """Run a single practice task with ResultsDB tracking."""
+        import time
         attempt = 1
         db = get_results_db()
+        fault_injected = False
 
+        # Inject a real fault before showing the task (if the task supports it)
+        if getattr(task, 'has_fault_injection', False):
+            fmt.clear_screen()
+            print(fmt.bold("Injecting fault..."))
+            ok, msg = task.inject_fault()
+            if ok:
+                fault_injected = True
+                print(fmt.success(f"  Fault active: {msg}"))
+            else:
+                print(fmt.error(f"  Fault injection failed: {msg}"))
+                print(fmt.warning("  Proceeding in descriptive mode only."))
+            print()
+            time.sleep(1)
+
+        stop_requested = False
         while True:
             fmt.clear_screen()
             print(f"Practice Task {current}/{total}" + (f" (Attempt {attempt})" if attempt > 1 else ""))
@@ -235,13 +252,28 @@ class PracticeSession:
                     else:
                         break
                 elif choice == 'q':
-                    raise StopIteration
+                    stop_requested = True
+                    break
                 else:
                     break
             else:
                 print(fmt.success("\nGreat job!"))
                 input("Press Enter to continue...")
                 break
+
+        # Restore fault regardless of outcome
+        if fault_injected:
+            print()
+            print(fmt.dim("Restoring system..."))
+            ok, msg = task.restore_fault()
+            if ok:
+                print(fmt.dim(f"  {msg}"))
+            else:
+                print(fmt.error(f"  Restore error: {msg}"))
+            time.sleep(1)
+
+        if stop_requested:
+            raise StopIteration
 
         if current < total:
             if not confirm_action("Continue to next task?", default=True):

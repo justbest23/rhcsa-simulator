@@ -1217,6 +1217,17 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
         if not autofs_dirty:
             print(fmt.dim("  Autofs config is clean"))
 
+        # ── Step 10: Restore any active troubleshooting fault ────────────────
+        try:
+            from tasks.troubleshooting import restore_any_active_fault
+            had_fault, msg = restore_any_active_fault()
+            if had_fault:
+                print()
+                print(fmt.bold("Step 10: Active Fault Restore"))
+                print(fmt.success(f"  Restored: {msg}"))
+        except Exception as e:
+            pass
+
         # ── Done ─────────────────────────────────────────────────────────────
         print()
         print("=" * 50)

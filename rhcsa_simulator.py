@@ -247,6 +247,20 @@ def main():
         run_adaptive_mode()
         return 0
 
+    # Warn if a troubleshooting fault was left active (e.g. simulator crashed)
+    try:
+        from tasks.troubleshooting import load_fault_state
+        stale = load_fault_state()
+        if stale:
+            from utils import formatters as fmt
+            print(fmt.warning(
+                f"\n! Active fault detected from a previous session: {stale.get('task_id')}"
+            ))
+            print(fmt.warning("  Run System Reset to restore the system, or it will be"))
+            print(fmt.warning("  restored automatically when the next troubleshooting task ends.\n"))
+    except Exception:
+        pass
+
     # Interactive menu mode
     from core.menu import MenuSystem
     from core.exam import run_exam_mode
