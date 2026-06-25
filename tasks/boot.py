@@ -314,7 +314,17 @@ class AddKernelParameterTask(BaseTask):
 # ---------------------------------------------------------------------------
 @TaskRegistry.register("boot")
 class RemoveKernelParameterTask(BaseTask):
-    """Remove a kernel boot parameter from GRUB."""
+    """
+    Fault-injection: injects a kernel parameter via grubby so it is
+    guaranteed to be present; user must remove it.
+    Uses only params that are NOT on a clean RHEL 10 kernel cmdline
+    to avoid double-injecting parameters that are already there.
+    """
+
+    has_fault_injection = True
+
+    # These are NOT present on a default RHEL 10 kernel cmdline
+    _INJECTABLE_PARAMS = ['nofb', 'audit=0', 'biosdevname=0', 'nosplash']
 
     def __init__(self):
         super().__init__(
@@ -325,40 +335,51 @@ class RemoveKernelParameterTask(BaseTask):
         )
         self.requires_persistence = True
         self.requires_reboot = True
-        self.tags = ["grub", "kernel", "grubby", "boot-parameter"]
+        self.tags = ["grub", "kernel", "grubby", "boot-parameter", "fault-injection"]
         self.exam_tips = [
             "grubby --remove-args='<param>' --update-kernel=ALL is the fastest way.",
             "Be careful when editing GRUB_CMDLINE_LINUX not to break the quoting.",
+            "Verify removal: grubby --info=DEFAULT | grep args",
         ]
         self.parameter = None
 
     def generate(self, **params):
-        """Generate kernel parameter removal task."""
-        parameters = [
-            'quiet', 'rhgb', 'splash', 'nofb',
-            'audit=1', 'biosdevname=0',
-        ]
-        self.parameter = params.get('parameter', random.choice(parameters))
+        self.parameter = params.get('parameter', random.choice(self._INJECTABLE_PARAMS))
 
         self.description = (
             f"Configure kernel boot parameters:\n"
-            f"  - Remove '{self.parameter}' from the kernel command line\n"
+            f"  - The parameter '{self.parameter}' has been added to the kernel command line\n"
+            f"  - Remove it so it will not be present at next boot\n"
             f"  - You may use grubby --remove-args or edit /etc/default/grub\n"
-            f"  - If editing /etc/default/grub, regenerate the GRUB config\n"
-            f"  - Changes must persist across reboots"
+            f"  - If editing /etc/default/grub, regenerate the GRUB config afterwards"
         )
-
         self.hints = [
-            f"Method 1: grubby --remove-args='{self.parameter}' --update-kernel=ALL",
-            "Method 2: Edit /etc/default/grub and remove from GRUB_CMDLINE_LINUX",
-            "Run 'grub2-mkconfig -o /boot/grub2/grub.cfg' if using method 2",
+            f"Method 1 (faster): grubby --remove-args='{self.parameter}' --update-kernel=ALL",
+            "Method 2: Edit /etc/default/grub, remove from GRUB_CMDLINE_LINUX",
+            "  Then: grub2-mkconfig -o /boot/grub2/grub.cfg",
             "Verify: grubby --info=DEFAULT | grep args",
         ]
-
         return self
 
+    def inject_fault(self):
+        import subprocess as _sp
+        param = self.parameter
+        r = _sp.run(['grubby', '--args', param, '--update-kernel=ALL'], capture_output=True)
+        if r.returncode != 0:
+            return False, f"grubby failed: {r.stderr.decode().strip()}"
+        from tasks.troubleshooting import save_fault_state
+        save_fault_state(self.id, {'parameter': param})
+        return True, f"Added kernel parameter '{param}' via grubby"
+
+    def restore_fault(self):
+        import subprocess as _sp
+        param = self.parameter
+        _sp.run(['grubby', '--remove-args', param, '--update-kernel=ALL'], capture_output=True)
+        from tasks.troubleshooting import clear_fault_state
+        clear_fault_state()
+        return True, f"Removed kernel parameter '{param}'"
+
     def validate(self):
-        """Validate kernel parameter is removed."""
         checks = []
         total_points = 0
 
@@ -368,7 +389,7 @@ class RemoveKernelParameterTask(BaseTask):
         else:
             param_exists = validate_grub_parameter(self.parameter)
 
-        # Check 1: Parameter removed from GRUB_CMDLINE_LINUX (6 points)
+        # Check 1: Parameter removed (6 pts)
         if not param_exists:
             checks.append(ValidationCheck(
                 name="kernel_param_removed",
@@ -383,10 +404,10 @@ class RemoveKernelParameterTask(BaseTask):
                 passed=False,
                 points=0,
                 max_points=6,
-                message=f"Parameter '{self.parameter}' is still present in GRUB_CMDLINE_LINUX"
+                message=f"Parameter '{self.parameter}' is still in the kernel cmdline"
             ))
 
-        # Check 2: GRUB config regenerated (4 points)
+        # Check 2: GRUB config regenerated (4 pts)
         if is_grub_config_updated():
             checks.append(ValidationCheck(
                 name="grub_config_regenerated",
@@ -401,7 +422,7 @@ class RemoveKernelParameterTask(BaseTask):
                 passed=False,
                 points=0,
                 max_points=4,
-                message="GRUB configuration needs to be regenerated"
+                message="GRUB config not yet regenerated (run grub2-mkconfig or use grubby)"
             ))
 
         passed = total_points >= (self.points * 0.6)

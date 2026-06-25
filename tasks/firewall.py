@@ -82,7 +82,9 @@ _PORT_FORWARD_CONFIGS = [
 
 @TaskRegistry.register("firewall")
 class EnableFirewallTask(BaseTask):
-    """Enable and start firewalld."""
+    """Fault-injection: firewalld is stopped and disabled; user must re-enable it."""
+
+    has_fault_injection = True
 
     def __init__(self):
         super().__init__(
@@ -92,7 +94,7 @@ class EnableFirewallTask(BaseTask):
             points=5,
         )
         self.requires_persistence = True
-        self.tags = ['firewalld', 'enable', 'persistence']
+        self.tags = ['firewalld', 'enable', 'persistence', 'fault-injection']
         self.exam_tips = [
             "Use 'systemctl enable --now firewalld' to enable and start in one command.",
             "Verify with 'firewall-cmd --state' which should return 'running'.",
@@ -101,19 +103,34 @@ class EnableFirewallTask(BaseTask):
 
     def generate(self, **params):
         self.description = (
-            "Enable and start the firewalld service:\n"
-            "  - The firewalld service must be running\n"
-            "  - The firewalld service must be enabled to start at boot\n"
-            "  - Verify with: firewall-cmd --state"
+            "TROUBLESHOOTING: firewalld Is Stopped and Disabled\n"
+            "Symptom: The system firewall is not running and will not start at boot.\n\n"
+            "Tasks:\n"
+            "  1. Start the firewalld service\n"
+            "  2. Enable it to start automatically at boot\n"
+            "  3. Verify with: firewall-cmd --state"
         )
-
         self.hints = [
             "systemctl enable --now firewalld",
-            "systemctl is-active firewalld",
-            "systemctl is-enabled firewalld",
-            "firewall-cmd --state",
+            "firewall-cmd --state  (should return 'running')",
+            "systemctl is-enabled firewalld  (should return 'enabled')",
         ]
         return self
+
+    def inject_fault(self):
+        import subprocess as _sp
+        _sp.run(['systemctl', 'stop', 'firewalld'], capture_output=True)
+        _sp.run(['systemctl', 'disable', 'firewalld'], capture_output=True)
+        from tasks.troubleshooting import save_fault_state
+        save_fault_state(self.id, {'service': 'firewalld'})
+        return True, "Stopped and disabled firewalld"
+
+    def restore_fault(self):
+        import subprocess as _sp
+        _sp.run(['systemctl', 'enable', '--now', 'firewalld'], capture_output=True)
+        from tasks.troubleshooting import clear_fault_state
+        clear_fault_state()
+        return True, "Re-enabled and started firewalld"
 
     def validate(self):
         checks = []
@@ -789,7 +806,14 @@ class ConfigurePortForwardTask(BaseTask):
 
 @TaskRegistry.register("firewall")
 class FirewallReloadTask(BaseTask):
-    """Reload the firewall to apply permanent rules to the runtime."""
+    """
+    Fault-injection: adds 'tftp' to the permanent firewall config but NOT
+    the runtime, simulating a sysadmin who ran --permanent but forgot --reload.
+    The user must run firewall-cmd --reload to apply it.
+    """
+
+    has_fault_injection = True
+    _INJECT_SERVICE = 'tftp'
 
     def __init__(self):
         super().__init__(
@@ -799,71 +823,77 @@ class FirewallReloadTask(BaseTask):
             points=5,
         )
         self.requires_persistence = False
-        self.tags = ['firewalld', 'reload']
+        self.tags = ['firewalld', 'reload', 'fault-injection']
         self.exam_tips = [
-            "'firewall-cmd --reload' applies all --permanent rules to the running config.",
-            "This does NOT restart the service; existing connections are preserved.",
-            "After reload, verify with 'firewall-cmd --state'.",
+            "'firewall-cmd --reload' applies permanent rules to the running config instantly.",
+            "Without --reload, --permanent changes only take effect after the next reboot.",
+            "Always reload after making permanent changes so they are immediately active.",
         ]
 
     def generate(self, **params):
         self.description = (
-            "Reload the firewall configuration:\n"
-            "  - Ensure firewalld is running\n"
-            "  - Reload the firewall to apply any pending permanent rules\n"
-            "  - Verify the firewall state is 'running' after reload"
+            "TROUBLESHOOTING: Permanent Firewall Rule Not Active\n"
+            f"Symptom: The '{self._INJECT_SERVICE}' service was added to the permanent\n"
+            "firewall config, but it is NOT in the active runtime rules yet.\n"
+            "A reload was never run.\n\n"
+            "Tasks:\n"
+            "  1. Confirm the discrepancy between permanent and runtime rules\n"
+            "  2. Reload the firewall to apply all pending permanent rules\n"
+            "  3. Verify the service is now active in the runtime config"
         )
-
         self.hints = [
-            "firewall-cmd --reload",
-            "firewall-cmd --state",
+            "Compare: firewall-cmd --list-services  vs  firewall-cmd --permanent --list-services",
+            "Apply permanent rules to runtime: firewall-cmd --reload",
+            f"Verify: firewall-cmd --query-service={self._INJECT_SERVICE}",
         ]
         return self
 
+    def inject_fault(self):
+        import subprocess as _sp
+        svc = self._INJECT_SERVICE
+        # Ensure it's NOT in the runtime (remove if somehow already there)
+        _sp.run(['firewall-cmd', '--remove-service', svc], capture_output=True)
+        # Add only to permanent config — the "forgot to reload" scenario
+        _sp.run(['firewall-cmd', '--permanent', '--add-service', svc], capture_output=True)
+        from tasks.troubleshooting import save_fault_state
+        save_fault_state(self.id, {'service': svc})
+        return True, f"Added {svc} to permanent config only (runtime not updated)"
+
+    def restore_fault(self):
+        import subprocess as _sp
+        svc = self._INJECT_SERVICE
+        _sp.run(['firewall-cmd', '--permanent', '--remove-service', svc], capture_output=True)
+        _sp.run(['firewall-cmd', '--remove-service', svc], capture_output=True)
+        from tasks.troubleshooting import clear_fault_state
+        clear_fault_state()
+        return True, f"Removed {svc} from permanent and runtime firewall"
+
     def validate(self):
         checks = []
-        total_points = 0
+        score = 0
+        svc = self._INJECT_SERVICE
 
-        # Check 1: firewalld is active (3 pts)
-        result = execute_safe(['systemctl', 'is-active', 'firewalld'])
-        if result.success and result.stdout.strip() == 'active':
-            checks.append(ValidationCheck(
-                name="firewalld_running",
-                passed=True,
-                points=3,
-                message="firewalld is running",
-            ))
-            total_points += 3
+        # Check 1: service active in runtime (3 pts)
+        r = execute_safe(['firewall-cmd', '--query-service', svc])
+        if r.success and r.stdout.strip() == 'yes':
+            checks.append(ValidationCheck("service_in_runtime", True, 3,
+                message=f"'{svc}' is active in the runtime firewall (reload was run)"))
+            score += 3
         else:
-            checks.append(ValidationCheck(
-                name="firewalld_running",
-                passed=False,
-                points=0,
-                max_points=3,
-                message=f"firewalld is not running (got: {result.stdout.strip()})",
-            ))
+            checks.append(ValidationCheck("service_in_runtime", False, 0, max_points=3,
+                message=f"'{svc}' still not in runtime — run: firewall-cmd --reload"))
 
-        # Check 2: firewall-cmd --state returns running (2 pts)
-        result = execute_safe(['firewall-cmd', '--state'])
-        if result.success and 'running' in result.stdout.strip():
-            checks.append(ValidationCheck(
-                name="firewall_state_running",
-                passed=True,
-                points=2,
-                message="firewall-cmd --state reports 'running'",
-            ))
-            total_points += 2
+        # Check 2: firewall still running (2 pts)
+        r = execute_safe(['firewall-cmd', '--state'])
+        if r.success and 'running' in r.stdout:
+            checks.append(ValidationCheck("firewall_running", True, 2,
+                message="firewalld is running"))
+            score += 2
         else:
-            checks.append(ValidationCheck(
-                name="firewall_state_running",
-                passed=False,
-                points=0,
-                max_points=2,
-                message=f"firewall-cmd --state did not report 'running'",
-            ))
+            checks.append(ValidationCheck("firewall_running", False, 0, max_points=2,
+                message="firewalld is not running"))
 
-        passed = total_points >= (self.points * 0.6)
-        return ValidationResult(self.id, passed, total_points, self.points, checks)
+        return ValidationResult(self.id, score >= self.points * 0.6, score, self.points, checks)
 
 
 # ===== 9. TroubleshootFirewallTask (hard / 18pts) ==========================

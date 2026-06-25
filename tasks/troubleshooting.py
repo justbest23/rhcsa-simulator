@@ -72,8 +72,25 @@ def restore_any_active_fault():
         _restore_service(info, msgs)
     elif task_id.startswith('fault_sudoers'):
         _restore_sudoers_full(info, msgs)
-    elif task_id.startswith('fault_fstab'):
+    elif task_id.startswith('fault_fstab') or task_id == 'boot_fstab_validate_001':
         _restore_fstab(info, msgs)
+    elif task_id in ('time_ntp_001', 'time_set_001'):
+        subprocess.run(['systemctl', 'enable', '--now', 'chronyd'], capture_output=True)
+        subprocess.run(['timedatectl', 'set-ntp', 'true'], capture_output=True)
+        msgs.append("Re-enabled NTP / chronyd")
+    elif task_id == 'fw_enable_001':
+        subprocess.run(['systemctl', 'enable', '--now', 'firewalld'], capture_output=True)
+        msgs.append("Re-enabled firewalld")
+    elif task_id == 'fw_reload_001':
+        svc = info.get('service', 'tftp')
+        subprocess.run(['firewall-cmd', '--permanent', '--remove-service', svc], capture_output=True)
+        subprocess.run(['firewall-cmd', '--remove-service', svc], capture_output=True)
+        msgs.append(f"Removed injected firewall service '{svc}'")
+    elif task_id == 'boot_kernel_param_remove_001':
+        param = info.get('parameter', '')
+        if param:
+            subprocess.run(['grubby', '--remove-args', param, '--update-kernel=ALL'], capture_output=True)
+            msgs.append(f"Removed injected kernel parameter '{param}'")
     else:
         msgs.append(f"Unknown fault type: {task_id}")
 
