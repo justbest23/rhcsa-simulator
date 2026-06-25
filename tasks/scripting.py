@@ -879,19 +879,11 @@ class ScriptCommandSubstitutionTask(BaseTask):
             f"  - Store command output in a variable"
         )
 
-        if self.task_type == 'count_users':
-            example = 'USER_COUNT=$(wc -l < /etc/passwd)'
-        elif self.task_type == 'current_date':
-            example = 'BACKUP_FILE="backup_$(date +%Y%m%d).tar"'
-        else:
-            example = 'FREE_SPACE=$(df -h / | tail -1 | awk \'{print $4}\')'
-
         self.hints = [
-            "Modern syntax: VAR=$(command)",
+            "Modern syntax: VAR=$(command)  — preferred over backticks",
             "Legacy syntax: VAR=`command`",
-            f"Example: {example}",
-            'Use the variable: echo "Result: $VAR"',
-            "Nested: $(cat $(find /etc -name hosts))"
+            "Make the script executable: chmod +x " + self.script_path,
+            'Use the variable after assignment: echo "$VAR"',
         ]
 
         return self

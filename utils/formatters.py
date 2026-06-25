@@ -625,19 +625,25 @@ def print_timer_status(remaining_str, is_critical=False, is_warning=False):
 
 def page_output(text: str) -> None:
     """
-    Display text through less if it is taller than the terminal.
-    Preserves ANSI color codes (-R), exits immediately if content
-    fits on one screen (-F), and does not clear the screen on exit (-X).
-    Falls back to plain print if less is not available.
+    Display text through less (ANSI-color-aware).
+    Writes to a temp file so less can use stdin for keyboard navigation.
+    -R: show ANSI colors  -F: exit if fits on one screen  -X: no clear on exit
+    Falls back to plain print if less is unavailable.
     """
     import os
     import subprocess
+    import tempfile
+
     pager = os.environ.get('PAGER', 'less')
     try:
-        proc = subprocess.Popen(
-            [pager, '-R', '-F', '-X'],
-            stdin=subprocess.PIPE,
-        )
-        proc.communicate(input=text.encode('utf-8', errors='replace'))
+        with tempfile.NamedTemporaryFile(
+            mode='w', suffix='.txt', delete=False, encoding='utf-8'
+        ) as tf:
+            tf.write(text)
+            fname = tf.name
+        try:
+            subprocess.run([pager, '-R', '-F', '-X', fname])
+        finally:
+            os.unlink(fname)
     except (FileNotFoundError, OSError):
         print(text)

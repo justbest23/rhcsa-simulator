@@ -434,7 +434,45 @@ class RemoveKernelParameterTask(BaseTask):
 # ---------------------------------------------------------------------------
 @TaskRegistry.register("boot")
 class BootTroubleshootingTask(BaseTask):
-    """Composite boot troubleshooting scenario combining target + GRUB + parameter fixes."""
+    """
+    Fault-injection: sets an incorrect default target, wrong GRUB timeout,
+    and removes/adds a kernel param so the system is misconfigured.
+    User must diagnose and fix all three issues.
+    """
+
+    has_fault_injection = True
+
+    # Maps scenario → what to INJECT (the broken state)
+    # target=what we set wrong, timeout=wrong value, param=wrong param state
+    _SCENARIOS = [
+        {
+            'symptom': 'System is configured to boot to text mode but the requirement is a GUI (graphical.target)',
+            'correct_target': 'graphical.target',
+            'inject_target': 'multi-user.target',
+            'correct_timeout': random.choice([5, 10]),
+            'inject_timeout': 0,
+            'add_param': 'rhgb',        # ensure this IS in cmdline
+            'remove_param': None,
+        },
+        {
+            'symptom': 'System is configured to boot to a full GUI but should run as a text-mode server (multi-user.target)',
+            'correct_target': 'multi-user.target',
+            'inject_target': 'graphical.target',
+            'correct_timeout': random.choice([3, 5]),
+            'inject_timeout': 10,
+            'add_param': None,
+            'remove_param': 'rhgb',     # ensure rhgb is NOT in cmdline
+        },
+        {
+            'symptom': 'Boot timeout is set to 0 (no menu) and audit logging is disabled',
+            'correct_target': 'multi-user.target',
+            'inject_target': 'multi-user.target',
+            'correct_timeout': random.choice([5, 10]),
+            'inject_timeout': 0,
+            'add_param': 'audit=1',
+            'remove_param': None,
+        },
+    ]
 
     def __init__(self):
         super().__init__(
@@ -444,63 +482,116 @@ class BootTroubleshootingTask(BaseTask):
             points=15
         )
         self.requires_persistence = True
-        self.tags = ["troubleshooting", "grub", "systemd", "exam-scenario"]
+        self.tags = ["troubleshooting", "grub", "systemd", "exam-scenario", "fault-injection"]
         self.exam_tips = [
-            "Always verify ALL changes: systemctl get-default, grep /etc/default/grub, grubby --info=DEFAULT.",
-            "If asked to regenerate GRUB config, remember BIOS vs UEFI paths differ.",
+            "Verify ALL changes: systemctl get-default, grep TIMEOUT /etc/default/grub, grubby --info=DEFAULT",
+            "grub2-mkconfig regenerates the GRUB binary config from /etc/default/grub.",
+            "BIOS path: /boot/grub2/grub.cfg   EFI path: /boot/efi/EFI/redhat/grub.cfg",
         ]
+        self._scenario = None
         self.target = None
         self.timeout = None
         self.extra_param = None
 
     def generate(self, **params):
-        """Generate boot troubleshooting task."""
-        scenarios = [
-            {
-                'desc': 'System boots to graphical target but must boot to text mode',
-                'target': 'multi-user.target',
-                'timeout': random.choice([3, 5, 8]),
-                'extra_param': 'quiet',
-            },
-            {
-                'desc': 'System boots to text mode but must provide a GUI',
-                'target': 'graphical.target',
-                'timeout': random.choice([5, 10, 15]),
-                'extra_param': 'rhgb',
-            },
-            {
-                'desc': 'System boots with no timeout and auditing disabled',
-                'target': 'multi-user.target',
-                'timeout': random.choice([5, 10]),
-                'extra_param': 'audit=1',
-            },
-        ]
-
-        scenario = params.get('scenario', random.choice(scenarios))
-        self.target = scenario['target']
-        self.timeout = scenario['timeout']
-        self.extra_param = scenario.get('extra_param', 'quiet')
+        self._scenario = params.get('scenario', random.choice(self._SCENARIOS))
+        self.target = self._scenario['correct_target']
+        self.timeout = self._scenario['correct_timeout']
+        self.extra_param = self._scenario.get('add_param') or self._scenario.get('remove_param')
 
         self.description = (
-            f"Boot Troubleshooting Scenario:\n"
-            f"  Problem: {scenario['desc']}\n"
-            f"\n"
-            f"  Required fixes:\n"
-            f"  1. Set default target to: {self.target}\n"
-            f"  2. Set GRUB timeout to: {self.timeout} seconds\n"
-            f"  3. Ensure '{self.extra_param}' is in the kernel command line\n"
-            f"  4. Regenerate the GRUB configuration\n"
+            f"Boot Configuration Problem:\n"
+            f"  Symptom: {self._scenario['symptom']}\n\n"
+            f"  The system has been misconfigured. Diagnose and fix the boot\n"
+            f"  settings so the system boots correctly.\n\n"
+            f"  Required end state:\n"
+            f"  - Default target: {self.target}\n"
+            f"  - GRUB timeout: {self.timeout} seconds\n"
             f"  - All changes must persist across reboots"
         )
-
         self.hints = [
-            f"systemctl set-default {self.target}",
-            f"Edit /etc/default/grub: GRUB_TIMEOUT={self.timeout}",
-            f"Ensure '{self.extra_param}' appears in GRUB_CMDLINE_LINUX",
-            "Run grub2-mkconfig -o /boot/grub2/grub.cfg",
+            "Check current default target: systemctl get-default",
+            "Check GRUB settings: cat /etc/default/grub",
+            "Check kernel parameters: grubby --info=DEFAULT | grep args",
+            "After editing /etc/default/grub: run grub2-mkconfig",
         ]
-
         return self
+
+    def inject_fault(self):
+        import subprocess as _sp
+        s = self._scenario
+
+        # Save current state
+        cur_target = _sp.run(['systemctl', 'get-default'], capture_output=True, text=True).stdout.strip()
+        r = _sp.run(['grep', 'GRUB_TIMEOUT=', '/etc/default/grub'], capture_output=True, text=True)
+        cur_timeout_line = r.stdout.strip() if r.returncode == 0 else ''
+
+        # Set wrong target
+        _sp.run(['systemctl', 'set-default', s['inject_target']], capture_output=True)
+
+        # Set wrong timeout in /etc/default/grub
+        with open('/etc/default/grub') as f:
+            grub_content = f.read()
+        import re
+        grub_content = re.sub(r'GRUB_TIMEOUT=\S+', f"GRUB_TIMEOUT={s['inject_timeout']}", grub_content)
+        with open('/etc/default/grub', 'w') as f:
+            f.write(grub_content)
+
+        # Manipulate kernel parameter
+        if s.get('add_param'):
+            _sp.run(['grubby', '--args', s['add_param'], '--update-kernel=ALL'], capture_output=True)
+        if s.get('remove_param'):
+            _sp.run(['grubby', '--remove-args', s['remove_param'], '--update-kernel=ALL'], capture_output=True)
+
+        # Regenerate GRUB so the injected state is applied
+        grub_cfg = '/boot/efi/EFI/redhat/grub.cfg'
+        if not os.path.exists(grub_cfg):
+            grub_cfg = '/boot/grub2/grub.cfg'
+        _sp.run(['grub2-mkconfig', '-o', grub_cfg], capture_output=True)
+
+        from tasks.troubleshooting import save_fault_state
+        save_fault_state(self.id, {
+            'orig_target': cur_target,
+            'orig_timeout_line': cur_timeout_line,
+            'added_param': s.get('add_param'),
+            'removed_param': s.get('remove_param'),
+            'grub_cfg': grub_cfg,
+        })
+        return True, (f"Set target→{s['inject_target']}, timeout→{s['inject_timeout']}, "
+                      f"kernel param changes applied")
+
+    def restore_fault(self):
+        import subprocess as _sp
+        import re
+        from tasks.troubleshooting import load_fault_state, clear_fault_state
+
+        state = load_fault_state()
+        info = state.get('restore_info', {}) if state else {}
+        orig_target = info.get('orig_target', 'multi-user.target')
+        orig_timeout_line = info.get('orig_timeout_line', 'GRUB_TIMEOUT=5')
+        added_param = info.get('added_param')
+        removed_param = info.get('removed_param')
+        grub_cfg = info.get('grub_cfg', '/boot/grub2/grub.cfg')
+
+        _sp.run(['systemctl', 'set-default', orig_target], capture_output=True)
+
+        with open('/etc/default/grub') as f:
+            content = f.read()
+        if orig_timeout_line:
+            content = re.sub(r'GRUB_TIMEOUT=\S+', orig_timeout_line.replace('GRUB_TIMEOUT=', 'GRUB_TIMEOUT=').split('=', 1)[1], content)
+            # simpler: just restore the whole line
+            content = re.sub(r'GRUB_TIMEOUT=\S+', orig_timeout_line, content)
+        with open('/etc/default/grub', 'w') as f:
+            f.write(content)
+
+        if added_param:
+            _sp.run(['grubby', '--remove-args', added_param, '--update-kernel=ALL'], capture_output=True)
+        if removed_param:
+            _sp.run(['grubby', '--args', removed_param, '--update-kernel=ALL'], capture_output=True)
+
+        _sp.run(['grub2-mkconfig', '-o', grub_cfg], capture_output=True)
+        clear_fault_state()
+        return True, "Restored original boot configuration"
 
     def validate(self):
         """Validate boot troubleshooting solution."""

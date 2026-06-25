@@ -103,6 +103,44 @@ def restore_any_active_fault():
         if pv:
             subprocess.run(['pvremove', '-ff', '-y', pv], capture_output=True)
         msgs.append(f"Cleaned up practice LVM ({vg}/{lv}) and {mp}")
+    elif task_id == 'lvm_vg_extend_001':
+        vg = info.get('vg', 'vg_practice')
+        for dev in filter(None, [info.get('base_dev'), info.get('new_dev')]):
+            pass
+        subprocess.run(['vgchange', '-an', vg], capture_output=True)
+        subprocess.run(['vgremove', '-ff', vg], capture_output=True)
+        for dev in filter(None, [info.get('base_dev'), info.get('new_dev')]):
+            subprocess.run(['pvremove', '-ff', '-y', dev], capture_output=True)
+        msgs.append(f"Cleaned up VG {vg}")
+    elif task_id == 'journalctl_persistent_journal_001':
+        import shutil as _shutil
+        backup = info.get('backup', '/var/lib/rhcsa-simulator/journald.conf.bak')
+        if os.path.exists(backup):
+            _shutil.copy2(backup, '/etc/systemd/journald.conf')
+            os.remove(backup)
+        subprocess.run(['systemctl', 'restart', 'systemd-journald'], capture_output=True)
+        msgs.append("Restored journald.conf")
+    elif task_id == 'boot_troubleshoot_001':
+        orig_target = info.get('orig_target', 'multi-user.target')
+        subprocess.run(['systemctl', 'set-default', orig_target], capture_output=True)
+        added_param = info.get('added_param')
+        removed_param = info.get('removed_param')
+        if added_param:
+            subprocess.run(['grubby', '--remove-args', added_param, '--update-kernel=ALL'], capture_output=True)
+        if removed_param:
+            subprocess.run(['grubby', '--args', removed_param, '--update-kernel=ALL'], capture_output=True)
+        grub_cfg = info.get('grub_cfg', '/boot/grub2/grub.cfg')
+        subprocess.run(['grub2-mkconfig', '-o', grub_cfg], capture_output=True)
+        msgs.append(f"Restored boot config (target={orig_target})")
+    elif task_id == 'net_full_setup_001':
+        iface = info.get('iface', 'dummy0')
+        conn = info.get('conn', 'practice-net')
+        orig_hostname = info.get('orig_hostname', '')
+        subprocess.run(['nmcli', 'con', 'delete', conn], capture_output=True)
+        subprocess.run(['ip', 'link', 'delete', iface], capture_output=True)
+        if orig_hostname:
+            subprocess.run(['hostnamectl', 'set-hostname', orig_hostname], capture_output=True)
+        msgs.append(f"Cleaned up {iface} and {conn}")
     else:
         msgs.append(f"Unknown fault type: {task_id}")
 
@@ -254,20 +292,20 @@ class SELinuxHttpdContextFaultTask(TroubleshootingTask):
     def generate(self, **params):
         self.description = (
             "TROUBLESHOOTING: Apache Serving 403 Forbidden\n"
-            "=" * 50 + "\n\n"
-            "Symptom: httpd is running but returns 403 Forbidden for all requests.\n"
-            "The web content exists in /var/www/html but cannot be served.\n\n"
+            + "=" * 50 + "\n\n"
+            "Symptom: httpd is running but clients receive 403 Forbidden\n"
+            "for all requests. Web content exists but cannot be served.\n\n"
             "Tasks:\n"
-            "  1. Identify why httpd cannot read /var/www/html\n"
-            "  2. Fix the SELinux issue\n"
-            "  3. Verify httpd can serve content (curl http://localhost)\n"
-            "  4. Ensure the fix survives a relabel (restorecon)"
+            "  1. Diagnose why httpd cannot read the web content\n"
+            "  2. Fix the root cause\n"
+            "  3. Verify: curl http://localhost returns the page content\n"
+            "  4. Ensure the fix is permanent (survives relabeling)"
         )
         self.hints = [
-            "Check SELinux denials: ausearch -m AVC -ts recent | audit2why",
-            "Inspect the context: ls -lZ /var/www/html",
-            "The correct context type is httpd_sys_content_t",
-            "Fix: restorecon -Rv /var/www/html",
+            "Check service status: systemctl status httpd",
+            "Look for access denials: ausearch -m AVC -ts recent",
+            "Inspect file permissions and security context: ls -laZ /var/www/html",
+            "Verify context is correct after any fix with: ls -lZ /var/www/html",
         ]
         return self
 
@@ -364,7 +402,7 @@ class SELinuxHttpdBooleanFaultTask(TroubleshootingTask):
     def generate(self, **params):
         self.description = (
             "TROUBLESHOOTING: Apache Cannot Connect to Backend\n"
-            "=" * 50 + "\n\n"
+            + "=" * 50 + "\n\n"
             "Symptom: httpd is running but cannot make outgoing network connections\n"
             "to a backend service (proxy, database, API). Requests time out.\n\n"
             "Tasks:\n"
@@ -465,7 +503,7 @@ class FirewallHttpBlockedFaultTask(TroubleshootingTask):
     def generate(self, **params):
         self.description = (
             "TROUBLESHOOTING: Web Server Unreachable from Network\n"
-            "=" * 50 + "\n\n"
+            + "=" * 50 + "\n\n"
             "Symptom: httpd is running and serving locally (curl localhost works),\n"
             "but the web server is not reachable from external clients on port 80.\n\n"
             "Tasks:\n"
@@ -560,7 +598,7 @@ class SshdBadConfigFaultTask(TroubleshootingTask):
     def generate(self, **params):
         self.description = (
             "TROUBLESHOOTING: sshd Will Not Restart\n"
-            "=" * 50 + "\n\n"
+            + "=" * 50 + "\n\n"
             "Symptom: Attempting to restart sshd fails with a config parse error.\n"
             "Current sessions still work, but sshd cannot be reloaded or restarted.\n\n"
             "Tasks:\n"
@@ -649,7 +687,7 @@ class HttpdDisabledFaultTask(TroubleshootingTask):
     def generate(self, **params):
         self.description = (
             "TROUBLESHOOTING: Web Service Not Running at Boot\n"
-            "=" * 50 + "\n\n"
+            + "=" * 50 + "\n\n"
             "Symptom: After a reboot, httpd is not running. The service was\n"
             "previously configured but is now stopped and disabled.\n\n"
             "Tasks:\n"
@@ -738,7 +776,7 @@ class SudoersWrongPermsFaultTask(TroubleshootingTask):
     def generate(self, **params):
         self.description = (
             f"TROUBLESHOOTING: sudo Privileges Not Working\n"
-            "=" * 50 + "\n\n"
+            + "=" * 50 + "\n\n"
             f"Symptom: User '{self.PRACTICE_USER}' has a sudoers file in\n"
             f"/etc/sudoers.d/ but sudo still says they are not in the sudoers file.\n\n"
             "Tasks:\n"
@@ -844,7 +882,7 @@ class BadFstabFaultTask(TroubleshootingTask):
     def generate(self, **params):
         self.description = (
             "TROUBLESHOOTING: Bad /etc/fstab Entry\n"
-            "=" * 50 + "\n\n"
+            + "=" * 50 + "\n\n"
             "Symptom: After adding a filesystem to /etc/fstab, running 'mount -a'\n"
             "produces errors. The bad entry will cause an emergency mode boot.\n\n"
             "Tasks:\n"

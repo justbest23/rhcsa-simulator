@@ -40,31 +40,27 @@ class ConfigureRepoTask(BaseTask):
 
     def generate(self, **params):
         """Generate a repository configuration task with randomized parameters."""
+        # RHCSA exam-style repos — recognisable to candidates, won't break dnf
         repo_configs = [
             {
-                'repo_id': 'localrepo',
-                'repo_name': 'Local Repository',
-                'base_url': 'file:///repo/BaseOS',
+                'repo_id': 'BaseOS',
+                'repo_name': 'Red Hat Enterprise Linux 10 - BaseOS',
+                'base_url': 'http://content.example.com/rhel10.0/x86_64/dvd/BaseOS/',
             },
             {
-                'repo_id': 'internalmirror',
-                'repo_name': 'Internal Mirror Repository',
-                'base_url': 'http://mirror.internal.example.com/rhel9/BaseOS/x86_64/os',
+                'repo_id': 'AppStream',
+                'repo_name': 'Red Hat Enterprise Linux 10 - AppStream',
+                'base_url': 'http://content.example.com/rhel10.0/x86_64/dvd/AppStream/',
             },
             {
-                'repo_id': 'customrepo',
-                'repo_name': 'Custom Packages Repository',
-                'base_url': 'http://content.example.com/rhel9/custom',
+                'repo_id': 'extras',
+                'repo_name': 'RHEL 10 Extras',
+                'base_url': 'http://content.example.com/rhel10.0/x86_64/extras/',
             },
             {
-                'repo_id': 'examrepo',
-                'repo_name': 'Exam Content Repository',
-                'base_url': 'http://repo.lab.example.com/rhel9/packages',
-            },
-            {
-                'repo_id': 'backuprepo',
-                'repo_name': 'Backup Software Repository',
-                'base_url': 'ftp://ftp.example.com/pub/rhel9/extras',
+                'repo_id': 'supplementary',
+                'repo_name': 'RHEL 10 Supplementary',
+                'base_url': 'http://content.example.com/rhel10.0/x86_64/supplementary/',
             },
         ]
 
@@ -75,21 +71,19 @@ class ConfigureRepoTask(BaseTask):
         self.gpgcheck = params.get('gpgcheck', random.choice([0, 0, 0, 1]))
 
         self.description = (
-            f"Configure a new DNF repository:\n"
+            f"Configure a DNF repository:\n"
             f"  - Repository ID: {self.repo_id}\n"
             f"  - Repository name: {self.repo_name}\n"
             f"  - Base URL: {self.base_url}\n"
-            f"  - GPG check: {'enabled' if self.gpgcheck else 'disabled'}\n"
-            f"  - The repository must be enabled\n"
+            f"  - GPG check: {'enabled (gpgcheck=1)' if self.gpgcheck else 'disabled (gpgcheck=0)'}\n"
+            f"  - Repository must be enabled\n"
             f"  - Create the file: /etc/yum.repos.d/{self.repo_id}.repo"
         )
 
         self.hints = [
-            f"Create file /etc/yum.repos.d/{self.repo_id}.repo",
-            f"File contents should be:\n[{self.repo_id}]\nname={self.repo_name}\n"
-            f"baseurl={self.base_url}\nenabled=1\ngpgcheck={self.gpgcheck}",
+            f"Repo files go in /etc/yum.repos.d/ and must end in .repo",
+            f"Every repo file needs: [repoid], name=, baseurl=, enabled=, gpgcheck=",
             "Verify with: dnf repolist",
-            "Alternative: dnf config-manager --add-repo <url>",
         ]
 
         return self

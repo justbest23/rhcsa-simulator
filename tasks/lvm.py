@@ -483,7 +483,13 @@ class LVMFullWorkflowTask(BaseTask):
 
 @TaskRegistry.register("lvm")
 class ExtendVGTask(BaseTask):
-    """Extend a volume group by adding a new physical volume."""
+    """
+    Fault-injection: creates vg_practice on loop0 at start, uses loop1
+    (or sda) as the device to add. User must pvcreate + vgextend.
+    """
+
+    has_fault_injection = True
+    _VG = 'vg_practice'
 
     def __init__(self):
         super().__init__(
@@ -493,45 +499,89 @@ class ExtendVGTask(BaseTask):
             points=10
         )
         self.task_order = 40
-        self.tags = ['v10-new', 'lvm-extend']
+        self.tags = ['v10-new', 'lvm-extend', 'fault-injection']
         self.exam_tips = [
-            "First create PV on new device with 'pvcreate'",
-            "Then extend VG with 'vgextend <vg_name> <new_device>'",
-            "Verify increased VG size with 'vgs' command",
-            "Free space in VG can then be used to extend existing LVs",
+            "pvcreate initializes a disk/device as a physical volume.",
+            "vgextend <vg> <device> adds a PV to an existing VG.",
+            "vgs shows VG size — verify it increased after vgextend.",
+            "Free space in the VG can then be used with lvcreate or lvextend.",
         ]
         self.requires_persistence = True
-        self.vg_name = None
-        self.new_device = None
+        self.vg_name = self._VG
+        self.base_device = None   # device the VG is built on (injected)
+        self.new_device = None    # device user must add
 
     def generate(self, **params):
-        existing_vg = get_practice_vg()
-        self.vg_name = params.get('vg_name', existing_vg or 'vg_practice')
+        from utils.helpers import get_loop_devices, list_all_block_devices
+        loops = get_loop_devices()
 
-        # Get a secondary device if available
-        devices = get_all_practice_devices()
-        if len(devices) > 1:
-            self.new_device = devices[1]
+        # Use loop0 for the existing VG, loop1 (or sda) as the device to add
+        if len(loops) >= 2:
+            self.base_device = loops[0]
+            self.new_device = loops[1]
+        elif len(loops) == 1:
+            self.base_device = loops[0]
+            # Try to find sda as the second device
+            all_devs = list_all_block_devices()
+            candidates = [d for d in all_devs if 'sda' in d and d != self.base_device]
+            self.new_device = candidates[0] if candidates else '/dev/sdb'
         else:
-            self.new_device = params.get('device', '/dev/vdc')
+            self.base_device = '/dev/vdb'
+            self.new_device = '/dev/vdc'
 
+        self.vg_name = params.get('vg_name', self._VG)
         self.description = (
             f"Extend a volume group:\n"
-            f"  - Volume group: {self.vg_name}\n"
-            f"  - Add new device: {self.new_device}\n"
-            f"  - Create PV on the new device first\n"
-            f"  - Verify VG has increased in size"
+            f"  - Volume group: {self.vg_name}  (already exists)\n"
+            f"  - Add new physical volume from: {self.new_device}\n"
+            f"  - Initialize the new device as a PV first\n"
+            f"  - Extend the VG to include the new PV\n"
+            f"  - Verify the VG size has increased"
         )
-
         self.hints = [
-            f"Create PV on new device: pvcreate {self.new_device}",
+            f"Confirm VG exists: vgs {self.vg_name}",
+            f"Initialize PV: pvcreate {self.new_device}",
             f"Extend VG: vgextend {self.vg_name} {self.new_device}",
             f"Verify: vgs {self.vg_name}",
-            "Check VG size before and after with 'vgs'",
-            "New PV must exist before extending VG"
         ]
-
         return self
+
+    def inject_fault(self):
+        import subprocess as _sp
+        vg = self.vg_name
+        dev = self.base_device
+
+        r = _sp.run(['pvcreate', '-ff', '-y', dev], capture_output=True, text=True)
+        if r.returncode != 0:
+            return False, f"pvcreate {dev} failed: {r.stderr.strip()}"
+
+        r = _sp.run(['vgcreate', vg, dev], capture_output=True, text=True)
+        if r.returncode != 0:
+            return False, f"vgcreate {vg} failed: {r.stderr.strip()}"
+
+        from tasks.troubleshooting import save_fault_state
+        save_fault_state(self.id, {'vg': vg, 'base_dev': dev, 'new_dev': self.new_device})
+        return True, f"Created {vg} on {dev}; user must add {self.new_device}"
+
+    def restore_fault(self):
+        import subprocess as _sp
+        from tasks.troubleshooting import load_fault_state, clear_fault_state
+
+        state = load_fault_state()
+        info = state.get('restore_info', {}) if state else {}
+        vg = info.get('vg', self.vg_name)
+        base_dev = info.get('base_dev', self.base_device)
+        new_dev = info.get('new_dev', self.new_device)
+
+        # Remove any LVs first
+        _sp.run(['lvremove', '-ff', vg], capture_output=True)
+        _sp.run(['vgchange', '-an', vg], capture_output=True)
+        _sp.run(['vgremove', '-ff', vg], capture_output=True)
+        for dev in filter(None, [base_dev, new_dev]):
+            _sp.run(['pvremove', '-ff', '-y', dev], capture_output=True)
+
+        clear_fault_state()
+        return True, f"Removed {vg} and cleaned up PVs"
 
     def validate(self):
         checks = []

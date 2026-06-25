@@ -54,7 +54,37 @@ class PracticeSession:
             return
 
         label = " [no-reboot mode]" if self.skip_reboot else ""
-        print(fmt.info(f"\nStarting {len(tasks)}-task practice session{label}"))
+
+        # Preview tasks before setting anything up — let user reshuffle if needed
+        while True:
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                print(fmt.bold(f"\nTask Preview — {len(tasks)}-task session{label}"))
+                print("=" * 60)
+                for i, t in enumerate(tasks, 1):
+                    needs_setup = getattr(t, 'has_fault_injection', False)
+                    setup_tag = fmt.dim("  [auto-setup]") if needs_setup else ""
+                    print(f"  {i:2d}. {fmt.bold(t.description.splitlines()[0][:55])}"
+                          f"  ({t.points}pts){setup_tag}")
+                print()
+                print("S - Start session  R - Reshuffle tasks  Q - Back to menu")
+            fmt.page_output(buf.getvalue())
+
+            choice = input("Choice [S]: ").strip().lower() or 's'
+            if choice == 'q':
+                return
+            if choice == 'r':
+                tasks = TaskRegistry.get_practice_tasks(
+                    self.category, self.difficulty, self.task_count,
+                    skip_reboot=self.skip_reboot,
+                )
+                if not tasks:
+                    print(fmt.error("No tasks available."))
+                    return
+                continue
+            break  # 's' or Enter
+
+        print(fmt.info(f"\nStarting session…"))
 
         # Practice each task
         try:
