@@ -991,25 +991,32 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
         except Exception as e:
             print(fmt.error(f"  Error reading /etc/fstab: {e}"))
 
-        # ── Step 4: Practice repos ───────────────────────────────────────────
+        # ── Step 4: Non-default repos ────────────────────────────────────────
         print()
-        print(fmt.bold("Step 4: Practice Repos (/etc/yum.repos.d/)"))
-        _practice_repo_ids = {
-            'localrepo', 'internalmirror', 'customrepo', 'examrepo', 'backuprepo',
-        }
-        repo_files_to_remove = []
+        print(fmt.bold("Step 4: Non-Default Repos (/etc/yum.repos.d/)"))
+        # Keep only files managed by subscription-manager or clearly RHEL system repos
+        _keep_repo_patterns = [
+            'redhat.repo',          # subscription-manager managed
+        ]
+        def _is_system_repo(fname):
+            if fname in _keep_repo_patterns:
+                return True
+            # rhel-* repos managed by sub-manager
+            if fname.startswith('rhel-') or fname.startswith('redhat-'):
+                return True
+            return False
+
         repo_dir = '/etc/yum.repos.d'
+        repo_files_to_remove = []
         try:
-            for fname in os.listdir(repo_dir):
-                if fname.endswith('.repo'):
-                    repo_id = fname[:-5]
-                    if repo_id in _practice_repo_ids:
-                        repo_files_to_remove.append(os.path.join(repo_dir, fname))
+            for fname in sorted(os.listdir(repo_dir)):
+                if fname.endswith('.repo') and not _is_system_repo(fname):
+                    repo_files_to_remove.append(os.path.join(repo_dir, fname))
         except Exception:
             pass
 
         if repo_files_to_remove:
-            print("  Practice repo files found:")
+            print("  Non-default repo files found:")
             for rf in repo_files_to_remove:
                 print(f"    {rf}")
             if confirm_action("  Remove these repo files?", default=True):
@@ -1018,9 +1025,9 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
                         os.remove(rf)
                     except OSError as e:
                         print(fmt.error(f"  Could not remove {rf}: {e}"))
-                print(fmt.success("  Practice repos removed"))
+                print(fmt.success("  Non-default repos removed"))
         else:
-            print(fmt.dim("  No practice repos found"))
+            print(fmt.dim("  No non-default repos found"))
 
         # ── Step 5: Root crontab ─────────────────────────────────────────────
         print()
@@ -1116,6 +1123,86 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
                 print(fmt.dim("  No .sh scripts in /usr/local/bin"))
         except Exception as e:
             print(fmt.error(f"  Error: {e}"))
+
+        # ── Step 9: Autofs cleanup ───────────────────────────────────────────
+        print()
+        print(fmt.bold("Step 9: Autofs Cleanup"))
+        autofs_dirty = False
+
+        # auto.master — remove any uncommented non-system lines
+        auto_master = '/etc/auto.master'
+        _auto_master_defaults = {'+dir:/etc/auto.master.d', '+auto.master'}
+        try:
+            with open(auto_master) as f:
+                master_lines = f.readlines()
+            practice_master, clean_master = [], []
+            for line in master_lines:
+                s = line.strip()
+                if not s or s.startswith('#') or s in _auto_master_defaults:
+                    clean_master.append(line)
+                else:
+                    practice_master.append(line.rstrip())
+            if practice_master:
+                autofs_dirty = True
+                print("  Non-default entries in /etc/auto.master:")
+                for pl in practice_master:
+                    print(f"    {pl}")
+                if confirm_action("  Remove these entries?", default=True):
+                    with open(auto_master, 'w') as f:
+                        f.writelines(clean_master)
+                    print(fmt.success("  /etc/auto.master cleaned"))
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            print(fmt.error(f"  Could not read {auto_master}: {e}"))
+
+        # /etc/auto.master.d/ — remove any .autofs drop-in files
+        master_d = '/etc/auto.master.d'
+        try:
+            drop_ins = [
+                os.path.join(master_d, f)
+                for f in os.listdir(master_d)
+                if f.endswith('.autofs')
+            ]
+            if drop_ins:
+                autofs_dirty = True
+                print("  Drop-in autofs files found:")
+                for di in drop_ins:
+                    print(f"    {di}")
+                if confirm_action("  Remove these files?", default=True):
+                    for di in drop_ins:
+                        try:
+                            os.remove(di)
+                        except OSError as e:
+                            print(fmt.error(f"  Could not remove {di}: {e}"))
+                    print(fmt.success("  Drop-in files removed"))
+        except FileNotFoundError:
+            pass
+
+        # /etc/auto.* map files (other than auto.master and auto.misc)
+        try:
+            extra_maps = [
+                f'/etc/{f}'
+                for f in os.listdir('/etc')
+                if f.startswith('auto.') and f not in ('auto.master', 'auto.misc')
+            ]
+            if extra_maps:
+                autofs_dirty = True
+                print("  Extra autofs map files found:")
+                for em in extra_maps:
+                    print(f"    {em}")
+                if confirm_action("  Remove these map files?", default=True):
+                    for em in extra_maps:
+                        try:
+                            os.remove(em)
+                        except OSError as e:
+                            print(fmt.error(f"  Could not remove {em}: {e}"))
+                    print(fmt.success("  Extra map files removed"))
+        except Exception as e:
+            print(fmt.error(f"  Error scanning /etc/auto.*: {e}"))
+
+        if not autofs_dirty:
+            print(fmt.dim("  Autofs config is clean"))
 
         # ── Done ─────────────────────────────────────────────────────────────
         print()
