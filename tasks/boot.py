@@ -575,7 +575,19 @@ class BootTroubleshootingTask(BaseTask):
 # ---------------------------------------------------------------------------
 @TaskRegistry.register("boot")
 class ValidateFstabTask(BaseTask):
-    """Validate and correct /etc/fstab so the system boots cleanly."""
+    """
+    Fault-injection fstab task.
+
+    inject_fault() adds two broken entries:
+      1. A non-existent UUID — must be removed entirely.
+      2. A /backup entry missing 'nofail' — must have nofail added so a
+         missing device doesn't hang the boot sequence.
+    """
+
+    BAD_UUID_MARKER  = 'RHCSA-FAULT-FSTAB-BADUID'
+    NOFAIL_MARKER    = 'RHCSA-FAULT-FSTAB-NOFAIL'
+    NOFAIL_MOUNTPOINT = '/backup'
+    has_fault_injection = True
 
     def __init__(self):
         super().__init__(
@@ -585,160 +597,134 @@ class ValidateFstabTask(BaseTask):
             points=12
         )
         self.requires_persistence = True
-        self.tags = ["fstab", "boot", "troubleshooting", "exam-scenario"]
+        self.tags = ["fstab", "boot", "troubleshooting", "fault-injection"]
         self.exam_tips = [
             "A broken fstab WILL prevent boot and cost you the entire exam.",
             "Always run 'findmnt --verify' and 'mount -a' BEFORE rebooting.",
-            "Use 'nofail' mount option for non-critical filesystems.",
+            "'nofail' lets the system boot even when an optional device is absent.",
         ]
-        self.nofail_mount = None
 
     def generate(self, **params):
-        """Generate fstab validation task."""
-        mount_points = [
-            '/data', '/backup', '/shared', '/opt/appdata',
-            '/srv/content', '/mnt/external',
-        ]
-        self.nofail_mount = params.get('nofail_mount', random.choice(mount_points))
-
         self.description = (
-            f"Validate and ensure the /etc/fstab configuration is correct:\n"
-            f"\n"
-            f"  1. Run 'findmnt --verify' to check for fstab syntax errors\n"
-            f"  2. Ensure there are no invalid entries that would block boot\n"
-            f"  3. Run 'mount -a' to verify all entries can be mounted\n"
-            f"  4. If there is an entry for {self.nofail_mount}, ensure it uses\n"
-            f"     the 'nofail' mount option so a missing device won't block boot\n"
-            f"\n"
-            f"  IMPORTANT: A broken fstab can prevent system boot!"
+            "TROUBLESHOOTING: /etc/fstab Has Boot-Blocking Errors\n"
+            "=" * 50 + "\n\n"
+            "Two problems have been injected into /etc/fstab:\n\n"
+            "  Problem 1 — An entry references a UUID that does not exist.\n"
+            "    Symptom: 'mount -a' fails; system may drop to emergency shell.\n"
+            "    Fix: identify and remove the bad entry.\n\n"
+            f"  Problem 2 — {self.NOFAIL_MOUNTPOINT} is in fstab without 'nofail'.\n"
+            "    Symptom: if the device is absent at boot, boot hangs.\n"
+            "    Fix: add 'nofail' to its mount options.\n\n"
+            "Tasks:\n"
+            "  1. Run 'findmnt --verify' to identify the bad entries\n"
+            "  2. Remove the non-existent UUID entry\n"
+            f"  3. Add 'nofail' to the {self.NOFAIL_MOUNTPOINT} entry\n"
+            "  4. Verify 'mount -a' completes without errors"
         )
-
         self.hints = [
-            "'findmnt --verify' checks fstab syntax without mounting anything",
-            "'findmnt --verify --verbose' shows detailed validation output",
-            "'mount -a' attempts to mount all fstab entries",
-            "Add 'nofail' option to prevent boot failure from missing devices",
-            "Check that all device paths or UUIDs in fstab actually exist",
+            "'findmnt --verify' shows which entries are invalid",
+            "Remove the bad UUID line entirely — it references a device that doesn't exist",
+            f"Edit the {self.NOFAIL_MOUNTPOINT} line: change 'defaults' to 'defaults,nofail'",
+            "'mount -a' should return exit code 0 when fstab is clean",
         ]
-
         return self
 
-    def validate(self):
-        """Validate fstab is correct and bootable."""
-        checks = []
-        total_points = 0
+    def inject_fault(self):
+        import subprocess as _sp
+        os.makedirs(self.NOFAIL_MOUNTPOINT, exist_ok=True)
 
-        # Check 1: fstab file exists (2 points)
-        if os.path.exists('/etc/fstab'):
-            checks.append(ValidationCheck(
-                name="fstab_exists",
-                passed=True,
-                points=2,
-                message="/etc/fstab exists"
-            ))
-            total_points += 2
-        else:
-            checks.append(ValidationCheck(
-                name="fstab_exists",
-                passed=False,
-                points=0,
-                max_points=2,
-                message="/etc/fstab not found - critical error!"
-            ))
-            return ValidationResult(self.id, False, 0, self.points, checks)
+        entries = (
+            f"UUID=00000000-dead-beef-0000-badbadbad00 /mnt/nonexistent xfs defaults 0 2"
+            f"  # {self.BAD_UUID_MARKER}\n"
+            f"/dev/sdZ99 {self.NOFAIL_MOUNTPOINT} xfs defaults 0 0"
+            f"  # {self.NOFAIL_MARKER}\n"
+        )
+        with open('/etc/fstab', 'a') as f:
+            f.write(entries)
 
-        # Check 2: findmnt --verify passes (4 points)
-        result = execute_safe(['findmnt', '--verify'])
-        if result.success:
-            checks.append(ValidationCheck(
-                name="fstab_syntax_valid",
-                passed=True,
-                points=4,
-                message="fstab syntax is valid (findmnt --verify passed)"
-            ))
-            total_points += 4
-        else:
-            checks.append(ValidationCheck(
-                name="fstab_syntax_valid",
-                passed=False,
-                points=0,
-                max_points=4,
-                message=f"fstab has errors: {result.stderr or result.stdout}"
-            ))
+        from tasks.troubleshooting import save_fault_state
+        save_fault_state(self.id, {
+            'bad_uuid_marker': self.BAD_UUID_MARKER,
+            'nofail_marker': self.NOFAIL_MARKER,
+        })
+        return True, "Added bad UUID entry and nofail-missing /backup entry to /etc/fstab"
 
-        # Check 3: mount -a succeeds (4 points)
-        result = execute_safe(['mount', '-a'])
-        if result.success:
-            checks.append(ValidationCheck(
-                name="mount_all_succeeds",
-                passed=True,
-                points=4,
-                message="All fstab entries can be mounted (mount -a passed)"
-            ))
-            total_points += 4
-        else:
-            checks.append(ValidationCheck(
-                name="mount_all_succeeds",
-                passed=False,
-                points=0,
-                max_points=4,
-                message=f"mount -a failed: {result.stderr}"
-            ))
-
-        # Check 4: nofail option on non-critical mount (2 points)
+    def restore_fault(self):
         try:
-            with open('/etc/fstab', 'r') as f:
-                fstab_content = f.read()
-            # Look for the mount point line and check for nofail
-            nofail_ok = False
-            mount_found = False
-            for line in fstab_content.splitlines():
-                stripped = line.strip()
-                if stripped.startswith('#') or not stripped:
-                    continue
-                parts = stripped.split()
-                if len(parts) >= 4 and parts[1] == self.nofail_mount:
-                    mount_found = True
-                    if 'nofail' in parts[3]:
-                        nofail_ok = True
-                    break
-
-            if mount_found and nofail_ok:
-                checks.append(ValidationCheck(
-                    name="nofail_option",
-                    passed=True,
-                    points=2,
-                    message=f"'{self.nofail_mount}' has nofail option set"
-                ))
-                total_points += 2
-            elif mount_found:
-                checks.append(ValidationCheck(
-                    name="nofail_option",
-                    passed=False,
-                    points=0,
-                    max_points=2,
-                    message=f"'{self.nofail_mount}' is in fstab but lacks the 'nofail' option"
-                ))
-            else:
-                # Mount point not in fstab - award points (not blocking boot)
-                checks.append(ValidationCheck(
-                    name="nofail_option",
-                    passed=True,
-                    points=2,
-                    message=f"'{self.nofail_mount}' is not in fstab (no boot risk)"
-                ))
-                total_points += 2
+            with open('/etc/fstab') as f:
+                lines = f.readlines()
+            cleaned = [l for l in lines
+                       if self.BAD_UUID_MARKER not in l and self.NOFAIL_MARKER not in l]
+            with open('/etc/fstab', 'w') as f:
+                f.writelines(cleaned)
+            try:
+                os.rmdir(self.NOFAIL_MOUNTPOINT)
+            except OSError:
+                pass
+            from tasks.troubleshooting import clear_fault_state
+            clear_fault_state()
+            return True, "Removed injected fstab entries"
         except Exception as e:
-            checks.append(ValidationCheck(
-                name="nofail_option",
-                passed=False,
-                points=0,
-                max_points=2,
-                message=f"Could not read /etc/fstab: {e}"
-            ))
+            return False, f"Restore error: {e}"
 
-        passed = total_points >= (self.points * 0.6)
-        return ValidationResult(self.id, passed, total_points, self.points, checks)
+    def validate(self):
+        checks = []
+        score = 0
+
+        with open('/etc/fstab') as f:
+            fstab_lines = f.readlines()
+        fstab_text = ''.join(fstab_lines)
+
+        # Check 1: bad UUID entry removed (4 pts)
+        if self.BAD_UUID_MARKER not in fstab_text:
+            checks.append(ValidationCheck("bad_entry_removed", True, 4,
+                message="Non-existent UUID entry has been removed"))
+            score += 4
+        else:
+            checks.append(ValidationCheck("bad_entry_removed", False, 0, max_points=4,
+                message="Bad UUID entry still in /etc/fstab — will cause boot failure"))
+
+        # Check 2: findmnt --verify passes (2 pts)
+        r = execute_safe(['findmnt', '--verify'])
+        if r.returncode == 0:
+            checks.append(ValidationCheck("fstab_valid", True, 2,
+                message="findmnt --verify reports no errors"))
+            score += 2
+        else:
+            checks.append(ValidationCheck("fstab_valid", False, 0, max_points=2,
+                message=f"findmnt --verify still reports errors"))
+
+        # Check 3: mount -a succeeds (2 pts)
+        r = execute_safe(['mount', '-a'])
+        if r.returncode == 0:
+            checks.append(ValidationCheck("mount_a_clean", True, 2,
+                message="mount -a completes without errors"))
+            score += 2
+        else:
+            checks.append(ValidationCheck("mount_a_clean", False, 0, max_points=2,
+                message=f"mount -a still fails: {r.stderr.strip()[:80]}"))
+
+        # Check 4: /backup entry has nofail (4 pts)
+        nofail_line = next(
+            (l for l in fstab_lines if self.NOFAIL_MARKER in l), None
+        )
+        if nofail_line is None:
+            # User removed the line entirely — also acceptable, award partial
+            checks.append(ValidationCheck("nofail_added", False, 2, max_points=4,
+                message=f"{self.NOFAIL_MOUNTPOINT} entry was removed (ok) but adding nofail is the preferred fix"))
+            score += 2
+        else:
+            parts = nofail_line.split()
+            options = parts[3] if len(parts) >= 4 else ''
+            if 'nofail' in options:
+                checks.append(ValidationCheck("nofail_added", True, 4,
+                    message=f"{self.NOFAIL_MOUNTPOINT} entry has 'nofail' — safe for missing device"))
+                score += 4
+            else:
+                checks.append(ValidationCheck("nofail_added", False, 0, max_points=4,
+                    message=f"{self.NOFAIL_MOUNTPOINT} entry still lacks 'nofail' — will block boot if device absent"))
+
+        return ValidationResult(self.id, score >= self.points * 0.6, score, self.points, checks)
 
 
 # ---------------------------------------------------------------------------
