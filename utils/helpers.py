@@ -291,7 +291,7 @@ def wipe_disk(device):
 
     # 1. Find all partitions on this disk
     part_result = subprocess.run(
-        ['lsblk', '-no', 'NAME', device],
+        ['lsblk', '-rno', 'NAME', device],
         capture_output=True, text=True, timeout=10
     )
     all_parts = []
@@ -352,7 +352,7 @@ def wipe_disk(device):
     except Exception as e:
         msgs.append(f"Warning: could not zero partition table on {device}: {e}")
 
-    # 6. Tell kernel to re-read
+    # 7. Tell kernel to re-read
     subprocess.run(['partprobe', device], capture_output=True, timeout=10)
     subprocess.run(['udevadm', 'settle'], capture_output=True, timeout=15)
 
@@ -379,7 +379,7 @@ def list_all_block_devices():
     # Walk lsblk tree: dm-* devices (LVM) list their underlying disk via PKNAME.
     # We collect every device that is an ancestor of the / mountpoint.
     tree_result = subprocess.run(
-        ['lsblk', '-no', 'NAME,PKNAME,MOUNTPOINT'],
+        ['lsblk', '-rno', 'NAME,PKNAME,MOUNTPOINT'],  # -r = raw, no tree chars
         capture_output=True, text=True, timeout=10
     )
     # Build parent map: name -> pkname
@@ -418,14 +418,14 @@ def list_all_block_devices():
             continue
 
         part_result = subprocess.run(
-            ['lsblk', '-no', 'NAME', device],
+            ['lsblk', '-rno', 'NAME', device],
             capture_output=True, text=True, timeout=5
         )
         children = [l.strip() for l in part_result.stdout.strip().splitlines() if l.strip()]
         has_partitions = len(children) > 1
 
         mount_result = subprocess.run(
-            ['lsblk', '-no', 'MOUNTPOINT', device],
+            ['lsblk', '-rno', 'MOUNTPOINT', device],
             capture_output=True, text=True, timeout=5
         )
         all_mounts = [m.strip() for m in mount_result.stdout.strip().splitlines() if m.strip()]
@@ -694,9 +694,21 @@ def cleanup_practice_devices():
                     subprocess.run(['swapoff', part_dev], capture_output=True, timeout=10)
                     if mnt.startswith('/'):
                         subprocess.run(['umount', '-f', part_dev], capture_output=True, timeout=10)
-                    subprocess.run(['pvremove', '-ff', '-y', part_dev],
-                                   capture_output=True, timeout=10)
                 subprocess.run(['swapoff', device], capture_output=True, timeout=10)
+                # Deactivate any VGs on this loop device before pvremove
+                all_devs = [f'/dev/{ln.split()[0]}' for ln in part_result.stdout.splitlines() if ln.split()]
+                vg_res = subprocess.run(
+                    ['pvs', '--noheadings', '-o', 'vg_name'] + all_devs,
+                    capture_output=True, text=True, timeout=10
+                )
+                for vg in {v.strip() for v in vg_res.stdout.splitlines() if v.strip()}:
+                    subprocess.run(['vgchange', '-an', vg], capture_output=True, timeout=10)
+                    subprocess.run(['vgremove', '-ff', '-y', vg], capture_output=True, timeout=10)
+                for line in part_result.stdout.splitlines():
+                    p = line.split()
+                    if p:
+                        subprocess.run(['pvremove', '-ff', '-y', f'/dev/{p[0]}'],
+                                       capture_output=True, timeout=10)
                 subprocess.run(['pvremove', '-ff', '-y', device],
                                capture_output=True, timeout=10)
                 subprocess.run(['losetup', '-d', device],

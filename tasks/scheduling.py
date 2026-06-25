@@ -21,8 +21,10 @@ def _normalize_cron(expression):
     """
     parts = expression.split()
     if len(parts) >= 5:
-        # Normalize day-of-week field (index 4): replace 7 with 0
-        dow = parts[4].replace('7', '0')
+        # Normalize day-of-week: 7 and 0 both mean Sunday.
+        # Split on , and - to avoid corrupting values like 17, */7, 1-7.
+        import re
+        dow = re.sub(r'(?<![0-9])7(?![0-9])', '0', parts[4])
         parts[4] = dow
     return ' '.join(parts)
 

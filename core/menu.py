@@ -936,6 +936,14 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
         # ── Step 3: /etc/fstab cleanup ───────────────────────────────────────
         print()
         print(fmt.bold("Step 3: /etc/fstab Cleanup"))
+        # Build device-specific patterns from the practice device config so we
+        # never accidentally nuke fstab entries for legitimate non-practice disks.
+        from utils.helpers import get_practice_device_config
+        _practice_cfg = get_practice_device_config()
+        _practice_devs = []
+        if _practice_cfg and _practice_cfg.get('mode') == 'real':
+            _practice_devs = _practice_cfg.get('devices', [])
+
         _fstab_patterns = [
             re.compile(r'/var/lib/rhcsa-simulator/loops/'),
             re.compile(r'/dev/loop\d+'),
@@ -944,8 +952,8 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
             re.compile(r'\s/swapfile\b'),
             re.compile(r'\s/var/swap\b'),
             re.compile(r'\s/opt/swap\S*'),
-            re.compile(r'/dev/sd[a-z]\d'),   # any sda1, sdb2, etc.
-        ]
+            re.compile(r'RHCSA-FAULT'),   # injected by fault tasks
+        ] + [re.compile(re.escape(dev)) for dev in _practice_devs]
 
         # Also flag any UUID entries that resolve to non-system block devices
         def _is_practice_uuid(token):
@@ -1226,7 +1234,9 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
                 print(fmt.bold("Step 10: Active Fault Restore"))
                 print(fmt.success(f"  Restored: {msg}"))
         except Exception as e:
-            pass
+            print()
+            print(fmt.error(f"Step 10: Fault restore failed — {e}"))
+            print(fmt.warning("  Check /var/lib/rhcsa-simulator/active_fault.json manually"))
 
         # ── Done ─────────────────────────────────────────────────────────────
         print()

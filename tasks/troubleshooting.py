@@ -71,7 +71,7 @@ def restore_any_active_fault():
     elif task_id.startswith('fault_service'):
         _restore_service(info, msgs)
     elif task_id.startswith('fault_sudoers'):
-        _restore_sudoers(info, msgs)
+        _restore_sudoers_full(info, msgs)
     elif task_id.startswith('fault_fstab'):
         _restore_fstab(info, msgs)
     else:
@@ -150,6 +150,23 @@ def _restore_sudoers(info, msgs):
     if path and os.path.exists(path):
         os.chmod(path, int(original_perms, 8))
         msgs.append(f"Restored {path} permissions to {original_perms}")
+
+
+_SUDOERS_PRACTICE_USER = 'sudopractice'
+_SUDOERS_PRACTICE_FILE = '/etc/sudoers.d/sudopractice'
+
+
+def _restore_sudoers_full(info, msgs):
+    """Full crash-recovery restore: remove the practice sudoers file and user."""
+    path = info.get('path', _SUDOERS_PRACTICE_FILE)
+    user = info.get('user', _SUDOERS_PRACTICE_USER)
+    if os.path.exists(path):
+        os.remove(path)
+        msgs.append(f"Removed {path}")
+    r = _run(['id', user])
+    if r.returncode == 0:
+        _run(['userdel', user])
+        msgs.append(f"Removed practice user {user}")
 
 
 def _restore_fstab(info, msgs):
@@ -480,7 +497,7 @@ class FirewallHttpBlockedFaultTask(TroubleshootingTask):
 
         # Check 3: httpd listening (2 pts)
         r = execute_safe(['ss', '-tlnp'])
-        if r.success and ':80 ' in r.stdout or ':80\n' in r.stdout:
+        if r.success and (':80 ' in r.stdout or ':80\n' in r.stdout):
             checks.append(ValidationCheck("httpd_listening", True, 2, message="httpd listening on port 80"))
             score += 2
         else:
@@ -722,6 +739,7 @@ class SudoersWrongPermsFaultTask(TroubleshootingTask):
 
         save_fault_state(self.id, {
             'path': self.SUDOERS_FILE,
+            'user': self.PRACTICE_USER,
             'original_perms': '0440',
         })
         return True, f"Created {self.SUDOERS_FILE} with permissions 0777 (sudo will ignore)"
