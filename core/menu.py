@@ -391,12 +391,13 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
         input("Press Enter to return...")
 
     def _select_real_disk(self, list_all_block_devices, save_practice_device_config):
-        """Interactive picker for selecting a real disk as practice device."""
+        """Interactive picker for selecting real disks as practice devices."""
+        from utils.helpers import wipe_disk
+
         print()
         print("Scanning block devices...")
         all_devs = list_all_block_devices()
 
-        # Safe = not the system disk, no active filesystem mounts (swap-only is fine)
         safe = [d for d in all_devs if not d['is_system'] and not d['mounted']]
         risky = [d for d in all_devs if d['is_system'] or d['mounted']]
 
@@ -410,9 +411,9 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
             for i, d in enumerate(safe, 1):
                 notes = []
                 if d['has_partitions']:
-                    notes.append("has partitions")
+                    notes.append("has partitions — will be wiped")
                 if d.get('has_swap'):
-                    notes.append("swap active")
+                    notes.append("swap active — will be deactivated")
                 note_str = f"  ({', '.join(notes)})" if notes else "  (empty)"
                 print(f"  {i}. {d['device']}  {d['size']}{note_str}")
         else:
@@ -420,51 +421,84 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
 
         if risky:
             print()
-            print(fmt.dim("Blocked (system disk or has active filesystem mounts):"))
+            print(fmt.dim("Blocked (system disk or has active mounts — cannot select):"))
             for d in risky:
                 flag = "SYSTEM DISK" if d['is_system'] else "has active mounts"
-                print(fmt.dim(f"  {d['device']}  {d['size']}  [{flag}]"))
+                print(fmt.dim(f"      {d['device']}  {d['size']}  [{flag}]"))
 
-        print()
         if not safe:
-            print(fmt.error("No safe disks to select."))
             return
 
-        raw = input("Enter disk number (or device path like /dev/sdb): ").strip()
+        print()
+        print("Enter one or more numbers separated by spaces (e.g. '1 2'),")
+        print("or full device paths (e.g. '/dev/sda /dev/sdb'):")
+        raw = input("> ").strip()
         if not raw:
             return
 
-        # Resolve selection
-        if raw.startswith('/dev/'):
-            chosen = raw
-        else:
-            try:
-                idx = int(raw) - 1
-                if not (0 <= idx < len(safe)):
-                    print(fmt.error("Invalid selection"))
+        # Resolve selections
+        chosen = []
+        system_names = {d['device'] for d in all_devs if d['is_system']}
+        for token in raw.split():
+            if token.startswith('/dev/'):
+                dev = token
+            else:
+                try:
+                    idx = int(token) - 1
+                    if not (0 <= idx < len(safe)):
+                        print(fmt.error(f"Invalid number: {token}"))
+                        return
+                    dev = safe[idx]['device']
+                except ValueError:
+                    print(fmt.error(f"Invalid input: {token}"))
                     return
-                chosen = safe[idx]['device']
-            except ValueError:
-                print(fmt.error("Invalid input"))
+            if dev in system_names:
+                print(fmt.error(f"BLOCKED: {dev} is the system disk. Aborting."))
                 return
+            if dev not in chosen:
+                chosen.append(dev)
 
-        # Safety check — don't allow system disk
-        chosen_info = next((d for d in all_devs if d['device'] == chosen), None)
-        if chosen_info and chosen_info['is_system']:
-            print(fmt.error(f"Cannot use {chosen} — it is the system disk."))
+        if not chosen:
             return
 
         print()
-        print(fmt.warning(f"Selected: {chosen}"))
-        print(fmt.warning("LVM tasks will use this disk. Existing data on it may be overwritten."))
-        from utils.helpers import confirm_action
-        if not confirm_action("Are you sure?", default=False):
+        print(fmt.error("!" * 60))
+        print(fmt.error("  WARNING — DESTRUCTIVE OPERATION — THIS CANNOT BE UNDONE"))
+        print(fmt.error("!" * 60))
+        print()
+        print("The following disks will be COMPLETELY WIPED:")
+        for dev in chosen:
+            info = next((d for d in all_devs if d['device'] == dev), {})
+            print(fmt.error(f"    {dev}  {info.get('size', '?')}"))
+        print()
+        print("  • ALL PARTITIONS will be deleted")
+        print("  • ALL DATA will be permanently destroyed")
+        print("  • Partition tables will be zeroed out")
+        print("  • Disks will be left as raw unpartitioned block devices")
+        print()
+
+        confirm1 = input("Type YES (all caps) to continue: ").strip()
+        if confirm1 != 'YES':
             print("Cancelled.")
             return
 
-        save_practice_device_config('real', [chosen])
-        print(fmt.success(f"Configured: practice tasks will use {chosen}"))
-        print(fmt.info("LVM tasks will run pvcreate/vgcreate on this disk directly."))
+        expected = ' '.join(chosen)
+        confirm2 = input(f"Type the device path(s) exactly to confirm [{expected}]: ").strip()
+        if confirm2 != expected:
+            print("Confirmation did not match. Cancelled.")
+            return
+
+        print()
+        for dev in chosen:
+            print(f"Wiping {dev}...")
+            ok, msgs = wipe_disk(dev)
+            for msg in msgs:
+                print(f"  {msg}")
+            print()
+
+        save_practice_device_config('real', chosen)
+        print(fmt.success(f"Done. Practice disks: {', '.join(chosen)}"))
+        print(fmt.info("Disks are raw and ready. LVM/partition tasks will use them directly."))
 
     def network_management(self):
         """Network backup and restore management."""

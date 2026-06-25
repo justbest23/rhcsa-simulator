@@ -278,6 +278,76 @@ def save_practice_device_config(mode, devices):
         json.dump({'mode': mode, 'devices': devices}, f)
 
 
+def wipe_disk(device):
+    """
+    Completely wipe a disk: deactivate swap/LVM on all partitions,
+    remove filesystem signatures, zero out the partition table, and
+    tell the kernel to re-read the disk. Leaves a completely raw device.
+    Returns (success, list_of_messages).
+    """
+    import subprocess
+
+    msgs = []
+
+    # 1. Find all partitions on this disk
+    part_result = subprocess.run(
+        ['lsblk', '-no', 'NAME', device],
+        capture_output=True, text=True, timeout=10
+    )
+    all_parts = []
+    for line in part_result.stdout.strip().splitlines():
+        name = line.strip()
+        if not name:
+            continue
+        path = f"/dev/{name}" if not name.startswith('/') else name
+        if path != device:
+            all_parts.append(path)
+
+    # 2. Deactivate swap and LVM on partitions and the disk itself
+    for dev in all_parts + [device]:
+        subprocess.run(['swapoff', dev], capture_output=True, timeout=10)
+        subprocess.run(['pvremove', '-ff', '-y', dev], capture_output=True, timeout=10)
+        # Unmount if somehow mounted
+        subprocess.run(['umount', '-f', dev], capture_output=True, timeout=10)
+
+    # 3. Deactivate any VGs that might now have missing PVs
+    subprocess.run(['vgscan', '--cache'], capture_output=True, timeout=10)
+
+    # 4. Remove all filesystem/LVM/swap signatures from disk and partitions
+    for dev in all_parts + [device]:
+        subprocess.run(['wipefs', '-a', dev], capture_output=True, timeout=10)
+
+    # 5. Zero out the first and last few MB to destroy partition tables (MBR + GPT)
+    try:
+        size_result = subprocess.run(
+            ['blockdev', '--getsize64', device],
+            capture_output=True, text=True, timeout=10
+        )
+        disk_bytes = int(size_result.stdout.strip())
+        # Zero first 2MB (MBR + GPT header)
+        subprocess.run(
+            ['dd', 'if=/dev/zero', f'of={device}', 'bs=1M', 'count=2', 'oflag=direct'],
+            capture_output=True, timeout=30
+        )
+        # Zero last 1MB (GPT backup header)
+        skip_mb = disk_bytes // (1024 * 1024) - 1
+        subprocess.run(
+            ['dd', 'if=/dev/zero', f'of={device}', 'bs=1M', 'count=1',
+             f'seek={skip_mb}', 'oflag=direct'],
+            capture_output=True, timeout=30
+        )
+        msgs.append(f"Partition table wiped on {device}")
+    except Exception as e:
+        msgs.append(f"Warning: could not zero partition table on {device}: {e}")
+
+    # 6. Tell kernel to re-read
+    subprocess.run(['partprobe', device], capture_output=True, timeout=10)
+    subprocess.run(['udevadm', 'settle'], capture_output=True, timeout=15)
+
+    msgs.append(f"{device} is now a clean raw device")
+    return True, msgs
+
+
 def list_all_block_devices():
     """
     Return info on all block devices, excluding CD-ROMs and floppies.
@@ -586,23 +656,9 @@ def cleanup_practice_devices():
 
     try:
         if cfg and cfg['mode'] == 'real':
-            # Clean LVM off real disks only
+            # Wipe all practice disks completely (partition table + data)
             for device in cfg.get('devices', []):
-                subprocess.run(['swapoff', device], capture_output=True, timeout=10)
-                # Remove LVM from device and all its partitions
-                part_result = subprocess.run(
-                    ['lsblk', '-no', 'NAME', device],
-                    capture_output=True, text=True, timeout=5
-                )
-                all_devs = [device] + [
-                    f"/dev/{n.strip()}"
-                    for n in part_result.stdout.strip().splitlines()
-                    if n.strip() and n.strip() != device.split('/')[-1]
-                ]
-                for dev in all_devs:
-                    subprocess.run(['swapoff', dev], capture_output=True, timeout=10)
-                    subprocess.run(['pvremove', '-ff', '-y', dev],
-                                   capture_output=True, timeout=10)
+                wipe_disk(device)
         else:
             # Loop mode cleanup
             devices = get_loop_devices()
