@@ -85,10 +85,10 @@ cp -r "$SCRIPT_DIR"/* "$INSTALL_DIR/"
 
 # Set permissions
 echo "Setting permissions..."
-chmod 755 "$INSTALL_DIR/rhcsa_simulator.py"
 chmod -R 644 "$INSTALL_DIR"/*.py
 chmod -R 755 "$INSTALL_DIR"/{config,core,tasks,validators,utils}
 chmod -R 755 "$INSTALL_DIR"/data
+chmod 755 "$INSTALL_DIR/rhcsa_simulator.py"
 
 # Create symlink
 echo "Creating symlink..."
