@@ -303,21 +303,33 @@ def wipe_disk(device):
         if path != device:
             all_parts.append(path)
 
-    # 2. Deactivate swap and LVM on partitions and the disk itself
+    # 2. Deactivate swap and unmount filesystems on all partitions first
     for dev in all_parts + [device]:
         subprocess.run(['swapoff', dev], capture_output=True, timeout=10)
-        subprocess.run(['pvremove', '-ff', '-y', dev], capture_output=True, timeout=10)
-        # Unmount if somehow mounted
         subprocess.run(['umount', '-f', dev], capture_output=True, timeout=10)
 
-    # 3. Deactivate any VGs that might now have missing PVs
+    # 3. Deactivate any LVM VGs that live on this disk before pvremove
+    #    (pvremove fails with "PV used by VG" if the VG is still active)
+    vgs_result = subprocess.run(
+        ['pvs', '--noheadings', '-o', 'vg_name'] + all_parts + [device],
+        capture_output=True, text=True, timeout=10
+    )
+    active_vgs = {v.strip() for v in vgs_result.stdout.splitlines() if v.strip()}
+    for vg in active_vgs:
+        subprocess.run(['vgchange', '-an', vg], capture_output=True, timeout=10)
+        subprocess.run(['vgremove', '-ff', '-y', vg], capture_output=True, timeout=10)
+
+    for dev in all_parts + [device]:
+        subprocess.run(['pvremove', '-ff', '-y', dev], capture_output=True, timeout=10)
+
+    # 4. Rescan so the kernel drops stale VG references
     subprocess.run(['vgscan', '--cache'], capture_output=True, timeout=10)
 
-    # 4. Remove all filesystem/LVM/swap signatures from disk and partitions
+    # 5. Remove all filesystem/LVM/swap signatures from disk and partitions
     for dev in all_parts + [device]:
         subprocess.run(['wipefs', '-a', dev], capture_output=True, timeout=10)
 
-    # 5. Zero out the first and last few MB to destroy partition tables (MBR + GPT)
+    # 6. Zero out the first and last few MB to destroy partition tables (MBR + GPT)
     try:
         size_result = subprocess.run(
             ['blockdev', '--getsize64', device],

@@ -1129,6 +1129,16 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
         print(fmt.bold("Step 9: Autofs Cleanup"))
         autofs_dirty = False
 
+        # Stop autofs first so active mounts are cleanly torn down before
+        # we modify or remove any map files — otherwise removal fails (EBUSY)
+        autofs_active = subprocess.run(
+            ['systemctl', 'is-active', '--quiet', 'autofs'],
+            capture_output=True
+        ).returncode == 0
+        if autofs_active:
+            print("  Stopping autofs service to unmount active maps...")
+            subprocess.run(['systemctl', 'stop', 'autofs'], capture_output=True)
+
         # auto.master — remove any uncommented non-system lines
         auto_master = '/etc/auto.master'
         _auto_master_defaults = {'+dir:/etc/auto.master.d', '+auto.master'}
