@@ -852,6 +852,17 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
         print(fmt.bold("Step 1: Practice Disks (loop devices / LVM)"))
         loop_devices = get_loop_devices()
         if loop_devices:
+            # Unmount any loop partitions (e.g. loop1p1 mounted at /mnt/...)
+            lsblk = subprocess.run(
+                ['lsblk', '-no', 'NAME,MOUNTPOINT'],
+                capture_output=True, text=True
+            )
+            for line in lsblk.stdout.splitlines():
+                parts = line.split()
+                if len(parts) == 2:
+                    name, mnt = parts
+                    if 'loop' in name and 'p' in name and mnt.startswith('/'):
+                        subprocess.run(['umount', '-f', f'/dev/{name}'], capture_output=True)
             print(f"  Found: {', '.join(loop_devices)}")
             if confirm_action("  Remove all LVM structures and practice disks?", default=True):
                 if cleanup_practice_devices():
@@ -859,7 +870,27 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
                 else:
                     print(fmt.error("  Cleanup had errors — check manually"))
         else:
-            print(fmt.dim("  No practice disks found"))
+            print(fmt.dim("  No loop practice disks found"))
+
+        # ── Step 1b: Real practice disks (wipe partitions) ───────────────────
+        from utils.helpers import list_all_block_devices, wipe_disk
+        real_practice = [
+            d for d in list_all_block_devices()
+            if not d['is_system'] and d['has_partitions'] and not d['mounted']
+        ]
+        if real_practice:
+            print()
+            print(fmt.bold("Step 1b: Real Disk Partitions"))
+            for d in real_practice:
+                swap_note = " (has swap)" if d.get('has_swap') else ""
+                print(f"  {d['device']}  {d['size']}{swap_note} — has partitions")
+            print(fmt.warning("  Wiping will destroy ALL partitions and data on these disks."))
+            if confirm_action("  Wipe all partitions and LVM from these disks?", default=True):
+                for d in real_practice:
+                    print(f"  Wiping {d['device']}...")
+                    ok, msgs = wipe_disk(d['device'])
+                    for msg in msgs:
+                        print(f"    {msg}")
 
         # ── Step 2: Active swap (files + loop-device partitions) ─────────────
         print()
@@ -872,17 +903,20 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
                     if len(parts) < 2:
                         continue
                     device, stype = parts[0], parts[1]
-                    # Remove swap files (any path) and loop-device swap partitions
+                    # Skip the real system swap (nvme/rhel-swap)
+                    is_system = '/dev/nvme' in device or 'rhel' in device or 'dm-' in device
+                    if is_system:
+                        continue
                     if stype == 'file':
                         swap_entries.append((device, 'file'))
-                    elif stype == 'partition' and '/loop' in device:
-                        swap_entries.append((device, 'loop'))
+                    elif stype == 'partition':
+                        swap_entries.append((device, 'partition'))
         except Exception:
             pass
 
         if swap_entries:
             for device, stype in swap_entries:
-                label = 'swap file' if stype == 'file' else 'loop swap'
+                label = 'swap file' if stype == 'file' else 'swap partition'
                 print(f"  Active {label}: {device}")
             if confirm_action("  Deactivate and remove these swap entries?", default=True):
                 for device, stype in swap_entries:
@@ -903,11 +937,27 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
         print(fmt.bold("Step 3: /etc/fstab Cleanup"))
         _fstab_patterns = [
             re.compile(r'/var/lib/rhcsa-simulator/loops/'),
-            re.compile(r'/dev/loop\d+\s'),
+            re.compile(r'/dev/loop\d+'),
             re.compile(r'\s/tmp/swap\S*'),
             re.compile(r'\s/root/swapfile'),
+            re.compile(r'\s/swapfile\b'),
+            re.compile(r'\s/var/swap\b'),
             re.compile(r'\s/opt/swap\S*'),
+            re.compile(r'/dev/sd[a-z]\d'),   # any sda1, sdb2, etc.
         ]
+
+        # Also flag any UUID entries that resolve to non-system block devices
+        def _is_practice_uuid(token):
+            if not token.startswith('UUID='):
+                return False
+            uuid = token[5:]
+            r = subprocess.run(['blkid', '-U', uuid], capture_output=True, text=True)
+            if r.returncode != 0:
+                return False  # unresolvable UUID — leave it alone
+            dev = r.stdout.strip()
+            # If it resolves to nvme or known LVM, it's system
+            return not any(x in dev for x in ['nvme', 'rhel', 'dm-'])
+
         try:
             with open('/etc/fstab', 'r') as f:
                 fstab_lines = f.readlines()
@@ -918,7 +968,12 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
                 if not stripped or stripped.startswith('#'):
                     clean_lines.append(line)
                     continue
-                if any(p.search(line) for p in _fstab_patterns):
+                fields = stripped.split()
+                is_practice = any(p.search(line) for p in _fstab_patterns)
+                # Also catch UUID-based practice swap/mount entries
+                if not is_practice and fields:
+                    is_practice = _is_practice_uuid(fields[0])
+                if is_practice:
                     practice_lines.append(line.rstrip())
                 else:
                     clean_lines.append(line)
