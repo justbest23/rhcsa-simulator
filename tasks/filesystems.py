@@ -341,9 +341,8 @@ class PersistentMountTask(BaseTask):
         return ValidationResult(self.id, passed, total_points, self.points, checks)
 
 
-@TaskRegistry.register("filesystems")
 class ConfigureSwapTask(BaseTask):
-    """Configure swap space."""
+    """Swap configuration — lives in tasks/swap.py; kept here only to avoid import errors."""
 
     def __init__(self):
         super().__init__(
@@ -583,9 +582,8 @@ class ExtendFilesystemTask(BaseTask):
         return ValidationResult(self.id, passed, total_points, self.points, checks)
 
 
-@TaskRegistry.register("filesystems")
 class CreateSwapFileTask(BaseTask):
-    """Create a swap file (not partition)."""
+    """Swap file task — lives in tasks/swap.py; kept here only to avoid import errors."""
 
     def __init__(self):
         super().__init__(
