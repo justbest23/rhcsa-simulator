@@ -853,8 +853,9 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
         loop_devices = get_loop_devices()
         if loop_devices:
             # Unmount any loop partitions (e.g. loop1p1 mounted at /mnt/...)
+            # Use -rno (raw) to avoid tree-drawing characters that break split()
             lsblk = subprocess.run(
-                ['lsblk', '-no', 'NAME,MOUNTPOINT'],
+                ['lsblk', '-rno', 'NAME,MOUNTPOINT'],
                 capture_output=True, text=True
             )
             for line in lsblk.stdout.splitlines():
@@ -1194,7 +1195,9 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
             extra_maps = [
                 f'/etc/{f}'
                 for f in os.listdir('/etc')
-                if f.startswith('auto.') and f not in ('auto.master', 'auto.misc')
+                if f.startswith('auto.')
+                and f not in ('auto.master', 'auto.misc', 'auto.master.d')
+                and os.path.isfile(f'/etc/{f}')
             ]
             if extra_maps:
                 autofs_dirty = True

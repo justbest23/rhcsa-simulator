@@ -679,6 +679,23 @@ def cleanup_practice_devices():
                 devices.append(swap_dev)
 
             for device in devices:
+                # Unmount and deactivate partitions first, then the whole loop
+                part_result = subprocess.run(
+                    ['lsblk', '-rno', 'NAME,MOUNTPOINT', device],
+                    capture_output=True, text=True, timeout=10
+                )
+                for line in part_result.stdout.splitlines():
+                    parts = line.split()
+                    name = parts[0]
+                    mnt = parts[1] if len(parts) > 1 else ''
+                    part_dev = f'/dev/{name}'
+                    if part_dev == device:
+                        continue
+                    subprocess.run(['swapoff', part_dev], capture_output=True, timeout=10)
+                    if mnt.startswith('/'):
+                        subprocess.run(['umount', '-f', part_dev], capture_output=True, timeout=10)
+                    subprocess.run(['pvremove', '-ff', '-y', part_dev],
+                                   capture_output=True, timeout=10)
                 subprocess.run(['swapoff', device], capture_output=True, timeout=10)
                 subprocess.run(['pvremove', '-ff', '-y', device],
                                capture_output=True, timeout=10)
