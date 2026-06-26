@@ -262,6 +262,10 @@ class PersistentJournalTask(BaseTask):
         conf = '/etc/systemd/journald.conf'
         backup = '/var/lib/rhcsa-simulator/journald.conf.bak'
         os.makedirs(os.path.dirname(backup), exist_ok=True)
+        if not os.path.exists(conf):
+            os.makedirs(os.path.dirname(conf), exist_ok=True)
+            with open(conf, 'w') as f:
+                f.write('[Journal]\n# Storage=auto\n')
         shutil.copy2(conf, backup)
 
         # Remove /var/log/journal to break persistence

@@ -360,6 +360,8 @@ class ExtendLVTask(BaseTask):
 class LVMFullWorkflowTask(BaseTask):
     """Complete LVM workflow: Create PV, VG, LV, format, and mount."""
 
+    exclusive_resource = 'physical_disk'
+
     def __init__(self):
         super().__init__(
             id="lvm_full_workflow_001",
@@ -411,13 +413,11 @@ class LVMFullWorkflowTask(BaseTask):
         )
 
         self.hints = [
-            f"Step 1: pvcreate {self.device}",
-            f"Step 2: vgcreate {self.vg_name} {self.device}",
-            f"Step 3: lvcreate -L {self.lv_size_mb}M -n {self.lv_name} {self.vg_name}",
-            f"Step 4: mkfs.{self.fstype} /dev/{self.vg_name}/{self.lv_name}",
-            f"Step 5: mkdir -p {self.mount_point} && mount /dev/{self.vg_name}/{self.lv_name} {self.mount_point}",
-            f"Step 6: Add to /etc/fstab with UUID (get with blkid)",
-            "Full path: /dev/mapper/{vg_name}-{lv_name}"
+            f"The LVM stack is: physical volume → volume group → logical volume → filesystem → mount",
+            f"pvcreate initializes {self.device} as a PV; vgcreate builds a VG on top of it",
+            f"lvcreate -L <size>M -n <name> <vg> creates a logical volume",
+            f"Format with mkfs.{self.fstype}, then mount and add to /etc/fstab using UUID",
+            f"Test persistence: mount -a (should not error after fstab edit)",
         ]
 
         return self

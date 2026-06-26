@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 class RootPasswordResetTask(BaseTask):
     """Reset root password using the rd.break boot procedure."""
 
+    exam_eligible = False
+
     def __init__(self):
         super().__init__(
             id="boot_recovery_root_pw_reset_001",

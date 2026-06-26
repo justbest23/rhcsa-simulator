@@ -4,6 +4,7 @@ Covers modes, contexts, booleans, ports, troubleshooting, AVC analysis,
 user mappings, service diagnostics, and filesystem relabeling.
 """
 
+import os
 import random
 import logging
 from tasks.base import BaseTask
@@ -462,6 +463,8 @@ class SetSELinuxPortTask(BaseTask):
 class TroubleshootSELinuxDenialTask(BaseTask):
     """Troubleshoot and fix an SELinux denial using audit2why / sealert."""
 
+    has_fault_injection = True
+
     def __init__(self):
         super().__init__(
             id="selinux_denial_001",
@@ -517,10 +520,9 @@ class TroubleshootSELinuxDenialTask(BaseTask):
                 f"  4. Verify the service can access the directory"
             )
             self.hints = [
-                "ausearch -m avc -ts recent | audit2why",
-                "sealert -a /var/log/audit/audit.log",
-                f"semanage fcontext -a -t {self.expected_context} '{self.directory}(/.*)?'",
-                f"restorecon -Rv {self.directory}",
+                "Check the audit log: ausearch -m avc -ts recent | audit2why",
+                f"The directory needs the correct SELinux type for {self.service} to access it",
+                "Use semanage fcontext to make the change persistent, then apply it",
             ]
         else:  # boolean
             self.description = (
@@ -541,6 +543,33 @@ class TroubleshootSELinuxDenialTask(BaseTask):
             ]
 
         return self
+
+    def inject_fault(self):
+        import subprocess as _sp
+        if self.fix_type == 'fcontext' and self.directory:
+            os.makedirs(self.directory, exist_ok=True)
+            test_file = os.path.join(self.directory, 'index.html')
+            if not os.path.exists(test_file):
+                with open(test_file, 'w') as f:
+                    f.write('<html><body>Test</body></html>\n')
+            _sp.run(['chcon', '-Rt', 'tmp_t', self.directory], capture_output=True)
+            from tasks.troubleshooting import save_fault_state
+            save_fault_state(self.id, {'directory': self.directory, 'fix_type': self.fix_type})
+            return True, f"Created {self.directory} with wrong SELinux context (tmp_t)"
+        return True, "No directory setup needed for boolean fix type"
+
+    def restore_fault(self):
+        import subprocess as _sp
+        import shutil
+        from tasks.troubleshooting import load_fault_state, clear_fault_state
+        state = load_fault_state()
+        info = state.get('restore_info', {}) if state else {}
+        directory = info.get('directory', self.directory)
+        if directory and os.path.exists(directory):
+            _sp.run(['restorecon', '-Rv', directory], capture_output=True)
+            shutil.rmtree(directory, ignore_errors=True)
+        clear_fault_state()
+        return True, f"Removed {directory}"
 
     def validate(self):
         checks = []

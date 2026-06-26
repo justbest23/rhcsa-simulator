@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 class CreateFilesystemTask(BaseTask):
     """Create a filesystem on a device."""
 
+    exclusive_resource = 'physical_disk'
+
     def __init__(self):
         super().__init__(
             id="fs_create_001",
@@ -101,6 +103,8 @@ class CreateFilesystemTask(BaseTask):
 @TaskRegistry.register("filesystems")
 class MountFilesystemTask(BaseTask):
     """Mount a filesystem at a specific mount point."""
+
+    exclusive_resource = 'physical_disk'
 
     def __init__(self):
         super().__init__(
@@ -195,6 +199,8 @@ class MountFilesystemTask(BaseTask):
 @TaskRegistry.register("filesystems")
 class PersistentMountTask(BaseTask):
     """Configure persistent mount in /etc/fstab using UUID."""
+
+    exclusive_resource = 'physical_disk'
 
     def __init__(self):
         super().__init__(
@@ -344,6 +350,8 @@ class PersistentMountTask(BaseTask):
 class ConfigureSwapTask(BaseTask):
     """Swap configuration — lives in tasks/swap.py; kept here only to avoid import errors."""
 
+    exclusive_resource = 'physical_disk'
+
     def __init__(self):
         super().__init__(
             id="fs_swap_001",
@@ -467,7 +475,7 @@ class ExtendFilesystemTask(BaseTask):
             difficulty="exam",
             points=10
         )
-        self.tags = ['v10-new', 'filesystem', 'resize', 'xfs', 'ext4', 'fault-injection']
+        self.tags = ['v10-new', 'filesystem', 'resize', 'ext4', 'fault-injection']
         self.exam_tips = [
             "For XFS: use 'xfs_growfs <mount_point>' (must be mounted)",
             "For ext4: use 'resize2fs <device>' (can be done online for growth)",
@@ -481,7 +489,7 @@ class ExtendFilesystemTask(BaseTask):
 
     def generate(self, **params):
         self.device = f'/dev/mapper/{self._VG}-{self._LV}'
-        self.fstype = params.get('fstype', random.choice(['xfs', 'ext4']))
+        self.fstype = params.get('fstype', 'ext4')
         self.expected_size_mb = params.get('size', random.choice([250, 300, 350]))
 
         grow_cmd = f'xfs_growfs {self._MP}' if self.fstype == 'xfs' else f'resize2fs {self.device}'
@@ -505,6 +513,10 @@ class ExtendFilesystemTask(BaseTask):
         import os
         import subprocess as _sp
         from utils.helpers import get_loop_devices
+
+        check = _sp.run(['vgs', '--noheadings', '-o', 'vg_name'], capture_output=True, text=True)
+        if self._VG in (check.stdout or ''):
+            return True, f"{self._VG} already set up"
 
         loops = get_loop_devices()
         if not loops:
@@ -565,6 +577,7 @@ class ExtendFilesystemTask(BaseTask):
         _sp.run(['vgremove', '-ff', vg], capture_output=True)
         if pv:
             _sp.run(['pvremove', '-ff', '-y', pv], capture_output=True)
+            _sp.run(['wipefs', '-a', pv], capture_output=True)
 
         clear_fault_state()
         return True, f"Removed {vg}/{lv} and cleaned up {mp}"
