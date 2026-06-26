@@ -100,6 +100,33 @@ class EnableFirewallTask(BaseTask):
             "Verify with 'firewall-cmd --state' which should return 'running'.",
             "If firewalld is masked, unmask it first: 'systemctl unmask firewalld'.",
         ]
+        # firewalld ships active+enabled on RHEL, so without breaking it first
+        # this task would pass without the candidate doing anything.
+        self.has_fault_injection = True
+        self._fault_info = None
+
+    def inject_fault(self):
+        from tasks.troubleshooting import save_fault_state, _run
+        act = _run(['systemctl', 'is-active', 'firewalld'])
+        was_active = act.stdout.strip() == 'active'
+        en = _run(['systemctl', 'is-enabled', 'firewalld'])
+        was_enabled = 'enabled' in (en.stdout or '')
+        _run(['systemctl', 'stop', 'firewalld'])
+        _run(['systemctl', 'disable', 'firewalld'])
+        self._fault_info = {
+            'service': 'firewalld',
+            'was_active': was_active,
+            'was_enabled': was_enabled,
+        }
+        save_fault_state(self.id, self._fault_info)
+        return True, "Stopped and disabled firewalld"
+
+    def restore_fault(self):
+        from tasks.troubleshooting import _restore_service, clear_fault_state
+        msgs = []
+        _restore_service(self._fault_info or {'service': 'firewalld'}, msgs)
+        clear_fault_state()
+        return True, '; '.join(msgs)
 
     def generate(self, **params):
         self.description = (

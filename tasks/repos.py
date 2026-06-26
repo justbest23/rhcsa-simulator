@@ -62,6 +62,16 @@ class ConfigureRepoTask(BaseTask):
                 'repo_name': 'RHEL 10 Supplementary',
                 'base_url': 'http://content.example.com/rhel10.0/x86_64/supplementary/',
             },
+            {
+                'repo_id': 'internalmirror',
+                'repo_name': 'Internal Mirror Repository',
+                'base_url': 'http://mirror.internal.example.com/rhel10/BaseOS/x86_64/os',
+            },
+            {
+                'repo_id': 'examrepo',
+                'repo_name': 'Exam Content Repository',
+                'base_url': 'http://repo.lab.example.com/rhel10/packages',
+            },
         ]
 
         config = params.get('config', random.choice(repo_configs))
@@ -219,25 +229,25 @@ class ConfigureRepoGPGTask(BaseTask):
             {
                 'repo_id': 'securerepo',
                 'repo_name': 'Secure Package Repository',
-                'base_url': 'http://content.example.com/rhel9/secure',
-                'gpg_key_url': 'http://content.example.com/rhel9/RPM-GPG-KEY-secure',
+                'base_url': 'http://content.example.com/rhel10/secure',
+                'gpg_key_url': 'http://content.example.com/rhel10/RPM-GPG-KEY-secure',
             },
             {
                 'repo_id': 'vendorrepo',
                 'repo_name': 'Vendor Software Repository',
-                'base_url': 'https://packages.vendor.example.com/rhel9/x86_64',
+                'base_url': 'https://packages.vendor.example.com/rhel10/x86_64',
                 'gpg_key_url': 'https://packages.vendor.example.com/RPM-GPG-KEY-vendor',
             },
             {
                 'repo_id': 'signedrepo',
                 'repo_name': 'Signed Packages Repository',
-                'base_url': 'http://repo.lab.example.com/rhel9/signed',
+                'base_url': 'http://repo.lab.example.com/rhel10/signed',
                 'gpg_key_url': 'file:///etc/pki/rpm-gpg/RPM-GPG-KEY-lab',
             },
             {
                 'repo_id': 'productrepo',
                 'repo_name': 'Product Repository',
-                'base_url': 'http://mirror.internal.example.com/products/rhel9',
+                'base_url': 'http://mirror.internal.example.com/products/rhel10',
                 'gpg_key_url': 'http://mirror.internal.example.com/RPM-GPG-KEY-product',
             },
         ]
@@ -413,8 +423,8 @@ class EnableDisableRepoTask(BaseTask):
         """Generate enable/disable repository task."""
         repos = [
             'epel', 'crb', 'baseos', 'appstream',
-            'rhel-9-for-x86_64-baseos-rpms',
-            'rhel-9-for-x86_64-appstream-rpms',
+            'rhel-10-for-x86_64-baseos-rpms',
+            'rhel-10-for-x86_64-appstream-rpms',
         ]
         self.repo_name = params.get('repo', random.choice(repos))
         self.action = params.get('action', random.choice(['enable', 'disable']))
@@ -514,7 +524,7 @@ class ConfigureBaseOSAppStreamTask(BaseTask):
             "You need BOTH BaseOS and AppStream repos configured",
             "Without these repos, you cannot install packages for other tasks",
             "Configure repos FIRST on the exam before attempting other tasks",
-            "Common format: http://content.example.com/rhel9.0/x86_64/dvd/BaseOS",
+            "Common format: http://content.example.com/rhel10.0/x86_64/dvd/BaseOS",
         ]
         self.server_url = None
         self.baseos_url = None
@@ -525,10 +535,10 @@ class ConfigureBaseOSAppStreamTask(BaseTask):
     def generate(self, **params):
         """Generate BaseOS + AppStream repository configuration task."""
         servers = [
-            'http://content.example.com/rhel9.0/x86_64/dvd',
-            'http://repo.lab.example.com/rhel9/x86_64',
-            'http://mirror.internal.example.com/rhel9',
-            'http://classroom.example.com/content/rhel9.0/x86_64/dvd',
+            'http://content.example.com/rhel10.0/x86_64/dvd',
+            'http://repo.lab.example.com/rhel10/x86_64',
+            'http://mirror.internal.example.com/rhel10',
+            'http://classroom.example.com/content/rhel10.0/x86_64/dvd',
             'file:///repo',
         ]
 
@@ -756,29 +766,29 @@ class TroubleshootBrokenRepoTask(BaseTask):
             {
                 'repo_id': 'broken-baseos',
                 'break_type': 'wrong_url',
-                'correct_url': 'http://content.example.com/rhel9/BaseOS',
-                'broken_url': 'http://content.example.com/rhel8/BaseOS',
+                'correct_url': 'http://content.example.com/rhel10/BaseOS',
+                'broken_url': 'http://content.example.com/rhel9/BaseOS',
                 'desc': 'The BaseOS URL points to the wrong RHEL version',
             },
             {
                 'repo_id': 'broken-appstream',
                 'break_type': 'missing_baseurl',
-                'correct_url': 'http://content.example.com/rhel9/AppStream',
+                'correct_url': 'http://content.example.com/rhel10/AppStream',
                 'broken_url': '',
                 'desc': 'The AppStream repository has no baseurl configured',
             },
             {
                 'repo_id': 'broken-custom',
                 'break_type': 'disabled',
-                'correct_url': 'http://repo.lab.example.com/rhel9/custom',
-                'broken_url': 'http://repo.lab.example.com/rhel9/custom',
+                'correct_url': 'http://repo.lab.example.com/rhel10/custom',
+                'broken_url': 'http://repo.lab.example.com/rhel10/custom',
                 'desc': 'The custom repository exists but is disabled (enabled=0)',
             },
             {
                 'repo_id': 'broken-extras',
                 'break_type': 'bad_gpgkey',
-                'correct_url': 'http://mirror.internal.example.com/rhel9/extras',
-                'broken_url': 'http://mirror.internal.example.com/rhel9/extras',
+                'correct_url': 'http://mirror.internal.example.com/rhel10/extras',
+                'broken_url': 'http://mirror.internal.example.com/rhel10/extras',
                 'desc': 'The extras repository has an invalid GPG key path',
             },
             {
@@ -969,7 +979,7 @@ class AddThirdPartyRepoTask(BaseTask):
             {
                 'repo_id': 'elrepo',
                 'repo_name': 'ELRepo Repository',
-                'base_url': 'https://elrepo.org/linux/elrepo/el9/x86_64/',
+                'base_url': 'https://elrepo.org/linux/elrepo/el10/x86_64/',
                 'gpgcheck': 1,
                 'gpg_key_url': 'https://www.elrepo.org/RPM-GPG-KEY-elrepo.org',
             },

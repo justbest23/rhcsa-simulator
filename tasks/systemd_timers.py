@@ -735,7 +735,7 @@ class EnableTimerTask(BaseTask):
         self.timer_name = None
 
     def generate(self, **params):
-        # Pick a well-known timer that typically ships with RHEL 9
+        # Pick a well-known timer that typically ships with RHEL 10
         well_known_timers = [
             'fstrim',
             'logrotate',

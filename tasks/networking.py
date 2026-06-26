@@ -28,19 +28,59 @@ logger = logging.getLogger(__name__)
 # Helper utilities
 # ---------------------------------------------------------------------------
 
+# A dedicated, isolated dummy interface used by every task that *modifies*
+# network settings. Reconfiguring the candidate's real/primary NIC (ens160,
+# eth0, ...) would drop their live connection, so practice always happens on
+# this throwaway interface instead.
+PRACTICE_INTERFACE = 'dummy0'
+PRACTICE_CONNECTION = 'dummy0'
+# RFC 5737 documentation range — a harmless placeholder so the interface comes
+# up with an address (tasks that assign a *specific* IP still have to change it).
+_PRACTICE_BASE_IP = '192.0.2.10/24'
+
+
+def _ensure_practice_interface():
+    """
+    Make sure the isolated 'dummy0' practice interface exists and is up.
+
+    Idempotent and best-effort: on systems without root / iproute2 / NM the
+    calls fail silently and the interface name is still returned so task
+    generation never raises.
+    """
+    import subprocess
+
+    def _run(cmd):
+        try:
+            return subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        except Exception:
+            return None
+
+    show = _run(['ip', 'link', 'show', PRACTICE_INTERFACE])
+    if show is None or show.returncode != 0:
+        _run(['ip', 'link', 'add', PRACTICE_INTERFACE, 'type', 'dummy'])
+    _run(['ip', 'link', 'set', PRACTICE_INTERFACE, 'up'])
+
+    # Bind a NetworkManager profile so nmcli con mod/up behaves like a real NIC.
+    shown = _run(['nmcli', '-t', '-f', 'NAME', 'con', 'show'])
+    names = shown.stdout.splitlines() if shown and shown.stdout else []
+    if PRACTICE_CONNECTION not in names:
+        _run(['nmcli', 'con', 'add', 'type', 'dummy',
+              'con-name', PRACTICE_CONNECTION, 'ifname', PRACTICE_INTERFACE,
+              'ipv4.method', 'manual', 'ipv4.addresses', _PRACTICE_BASE_IP])
+        _run(['nmcli', 'con', 'up', PRACTICE_CONNECTION])
+    return PRACTICE_INTERFACE
+
+
 def _get_practice_interface():
-    """Get an interface suitable for practice (prefers non-primary)."""
-    try:
-        from device.network_manager import (
-            get_practice_interface, get_primary_interface,
-            get_connection_for_interface
-        )
-        iface = get_practice_interface()
-        if iface:
-            return iface
-    except Exception:
-        pass
-    return 'eth0'
+    """
+    Return an isolated dummy interface for practice tasks.
+
+    IMPORTANT: this NEVER returns the primary/live interface. The previous
+    implementation fell back to the primary NIC when no spare interface
+    existed, which meant a static-IP task could clobber the candidate's live
+    connection. A dedicated 'dummy0' interface is created on demand instead.
+    """
+    return _ensure_practice_interface()
 
 
 def _get_primary_interface():
@@ -87,7 +127,7 @@ def _random_hostname():
     names = [
         'server1.example.com', 'server2.example.com',
         'node1.lab.example.com', 'node2.lab.example.com',
-        'rhel9.lab.local', 'workstation.test.net',
+        'rhel10.lab.local', 'workstation.test.net',
         'app01.prod.example.com', 'db01.corp.example.com',
         'web01.example.com', 'mail.example.com',
     ]

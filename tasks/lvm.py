@@ -373,7 +373,7 @@ class LVMFullWorkflowTask(BaseTask):
             "Complete LVM workflow: pvcreate → vgcreate → lvcreate → mkfs → mount → fstab",
             "Use UUID in /etc/fstab for persistent mounting (get with blkid)",
             "Test fstab with 'mount -a' before rebooting",
-            "XFS is default filesystem in RHEL 9, but ext4 also commonly used",
+            "XFS is default filesystem in RHEL 10, but ext4 also commonly used",
             "This is a common multi-step exam task worth significant points",
         ]
         self.requires_persistence = True

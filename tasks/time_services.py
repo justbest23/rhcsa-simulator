@@ -14,6 +14,44 @@ from validators.file_validators import validate_file_exists, validate_file_conta
 logger = logging.getLogger(__name__)
 
 
+# ── Fault injection for time-sync tasks ──────────────────────────────────────
+# On a fresh RHEL system chronyd is already active+enabled and NTP is already
+# on, so a "make NTP work" task would otherwise pass without the candidate doing
+# anything. These helpers break that default state so real work is required.
+
+def _inject_time_sync_fault(task_id):
+    """Stop/disable chronyd and turn NTP off, saving prior state for restore."""
+    from tasks.troubleshooting import save_fault_state, _run
+
+    act = _run(['systemctl', 'is-active', 'chronyd'])
+    was_active = act.stdout.strip() == 'active'
+    en = _run(['systemctl', 'is-enabled', 'chronyd'])
+    was_enabled = 'enabled' in (en.stdout or '')
+    ntp = _run(['timedatectl', 'show', '--property=NTP'])
+    ntp_was_on = 'yes' in (ntp.stdout or '').lower()
+
+    _run(['timedatectl', 'set-ntp', 'false'])
+    _run(['systemctl', 'stop', 'chronyd'])
+    _run(['systemctl', 'disable', 'chronyd'])
+
+    info = {
+        'chronyd_was_active': was_active,
+        'chronyd_was_enabled': was_enabled,
+        'ntp_was_on': ntp_was_on,
+    }
+    save_fault_state(task_id, info)
+    return info, "Stopped/disabled chronyd and turned NTP off"
+
+
+def _restore_time_sync_fault(info):
+    """Restore chronyd/NTP to the state captured by _inject_time_sync_fault."""
+    from tasks.troubleshooting import _restore_time_sync, clear_fault_state
+    msgs = []
+    _restore_time_sync(info or {}, msgs)
+    clear_fault_state()
+    return '; '.join(msgs)
+
+
 @TaskRegistry.register("time_services")
 class ConfigureTimezoneTask(BaseTask):
     """Set system timezone."""
@@ -101,6 +139,8 @@ class ConfigureChronydTask(BaseTask):
             difficulty="medium",
             points=12
         )
+        self.has_fault_injection = True
+        self._fault_info = None
         self.ntp_server = None
 
     def generate(self, **params):
@@ -130,6 +170,13 @@ class ConfigureChronydTask(BaseTask):
         ]
 
         return self
+
+    def inject_fault(self):
+        self._fault_info, msg = _inject_time_sync_fault(self.id)
+        return True, msg
+
+    def restore_fault(self):
+        return True, _restore_time_sync_fault(self._fault_info)
 
     def validate(self):
         """Validate chrony configuration."""
@@ -236,6 +283,8 @@ class EnableNTPSyncTask(BaseTask):
             difficulty="easy",
             points=6
         )
+        self.has_fault_injection = True
+        self._fault_info = None
         self.exam_tips = [
             "'timedatectl set-ntp true' enables NTP and starts chronyd automatically.",
             "'systemctl enable --now chronyd' is the lower-level equivalent.",
@@ -260,21 +309,11 @@ class EnableNTPSyncTask(BaseTask):
         return self
 
     def inject_fault(self):
-        import subprocess as _sp
-        _sp.run(['timedatectl', 'set-ntp', 'false'], capture_output=True)
-        _sp.run(['systemctl', 'stop', 'chronyd'], capture_output=True)
-        _sp.run(['systemctl', 'disable', 'chronyd'], capture_output=True)
-        from tasks.troubleshooting import save_fault_state
-        save_fault_state(self.id, {'service': 'chronyd'})
-        return True, "Disabled NTP and stopped chronyd"
+        self._fault_info, msg = _inject_time_sync_fault(self.id)
+        return True, msg
 
     def restore_fault(self):
-        import subprocess as _sp
-        _sp.run(['systemctl', 'enable', '--now', 'chronyd'], capture_output=True)
-        _sp.run(['timedatectl', 'set-ntp', 'true'], capture_output=True)
-        from tasks.troubleshooting import clear_fault_state
-        clear_fault_state()
-        return True, "Re-enabled chronyd and NTP"
+        return True, _restore_time_sync_fault(self._fault_info)
 
     def validate(self):
         checks = []

@@ -74,13 +74,10 @@ def restore_any_active_fault():
         _restore_sudoers_full(info, msgs)
     elif task_id.startswith('fault_fstab') or task_id == 'boot_fstab_validate_001':
         _restore_fstab(info, msgs)
-    elif task_id in ('time_ntp_001', 'time_set_001'):
-        subprocess.run(['systemctl', 'enable', '--now', 'chronyd'], capture_output=True)
-        subprocess.run(['timedatectl', 'set-ntp', 'true'], capture_output=True)
-        msgs.append("Re-enabled NTP / chronyd")
-    elif task_id == 'fw_enable_001':
-        subprocess.run(['systemctl', 'enable', '--now', 'firewalld'], capture_output=True)
-        msgs.append("Re-enabled firewalld")
+    elif task_id.startswith('time_ntp') or task_id.startswith('time_chrony') or task_id == 'time_set_001':
+        _restore_time_sync(info, msgs)
+    elif task_id.startswith('fw_enable') or task_id == 'fw_enable_001':
+        _restore_service(info, msgs)
     elif task_id == 'fw_reload_001':
         svc = info.get('service', 'tftp')
         subprocess.run(['firewall-cmd', '--permanent', '--remove-service', svc], capture_output=True)
@@ -105,8 +102,6 @@ def restore_any_active_fault():
         msgs.append(f"Cleaned up practice LVM ({vg}/{lv}) and {mp}")
     elif task_id == 'lvm_vg_extend_001':
         vg = info.get('vg', 'vg_practice')
-        for dev in filter(None, [info.get('base_dev'), info.get('new_dev')]):
-            pass
         subprocess.run(['vgchange', '-an', vg], capture_output=True)
         subprocess.run(['vgremove', '-ff', vg], capture_output=True)
         for dev in filter(None, [info.get('base_dev'), info.get('new_dev')]):
@@ -236,6 +231,17 @@ def _restore_sudoers_full(info, msgs):
         msgs.append(f"Removed practice user {user}")
 
 
+def _restore_time_sync(info, msgs):
+    """Restore chronyd/NTP state broken by the time-sync fault injectors."""
+    if info.get('chronyd_was_enabled', True):
+        _run(['systemctl', 'enable', 'chronyd'])
+    if info.get('chronyd_was_active', True):
+        _run(['systemctl', 'start', 'chronyd'])
+    if info.get('ntp_was_on', True):
+        _run(['timedatectl', 'set-ntp', 'true'])
+    msgs.append("Restored chronyd/NTP state")
+
+
 def _restore_fstab(info, msgs):
     marker = info.get('marker', '')
     if marker:
@@ -293,8 +299,8 @@ class SELinuxHttpdContextFaultTask(TroubleshootingTask):
         self.description = (
             "TROUBLESHOOTING: Apache Serving 403 Forbidden\n"
             + "=" * 50 + "\n\n"
-            "Symptom: httpd is running but clients receive 403 Forbidden\n"
-            "for all requests. Web content exists but cannot be served.\n\n"
+            "Symptom: httpd is running but returns 403 Forbidden for all requests.\n"
+            "The web content exists in /var/www/html but cannot be served.\n\n"
             "Tasks:\n"
             "  1. Diagnose why httpd cannot read the web content\n"
             "  2. Fix the root cause\n"
@@ -302,10 +308,10 @@ class SELinuxHttpdContextFaultTask(TroubleshootingTask):
             "  4. Ensure the fix is permanent (survives relabeling)"
         )
         self.hints = [
-            "Check service status: systemctl status httpd",
-            "Look for access denials: ausearch -m AVC -ts recent",
-            "Inspect file permissions and security context: ls -laZ /var/www/html",
-            "Verify context is correct after any fix with: ls -lZ /var/www/html",
+            "Check SELinux denials: ausearch -m AVC -ts recent | audit2why",
+            "Inspect the context with ls -lZ and compare to a working web root",
+            "Web content is normally labelled with the httpd_sys_content_t type",
+            "Restore the default file context recursively so it survives a relabel",
         ]
         return self
 
@@ -413,8 +419,8 @@ class SELinuxHttpdBooleanFaultTask(TroubleshootingTask):
         self.hints = [
             "Check denials: ausearch -m AVC -ts recent | audit2why",
             "List relevant booleans: getsebool -a | grep httpd",
-            f"Fix: setsebool -P {self.boolean_name} on",
-            "Verify: getsebool httpd_can_network_connect",
+            "audit2why names the boolean to enable — set it persistently (-P)",
+            "Verify with getsebool once you have enabled it",
         ]
         return self
 
@@ -513,8 +519,8 @@ class FirewallHttpBlockedFaultTask(TroubleshootingTask):
         )
         self.hints = [
             "Check active rules: firewall-cmd --list-all",
-            "Add service: firewall-cmd --zone=public --add-service=http --permanent",
-            "Reload to activate: firewall-cmd --reload",
+            "Add the http service to the active zone and make the change permanent",
+            "Reload to activate permanent changes: firewall-cmd --reload",
             "Verify: firewall-cmd --query-service=http",
         ]
         return self
@@ -697,7 +703,7 @@ class HttpdDisabledFaultTask(TroubleshootingTask):
         )
         self.hints = [
             "Check service state: systemctl status httpd",
-            "Start + enable: systemctl enable --now httpd",
+            "Start the service now AND enable it so it comes back at boot",
             "Verify: systemctl is-active httpd && systemctl is-enabled httpd",
         ]
         return self
@@ -787,7 +793,7 @@ class SudoersWrongPermsFaultTask(TroubleshootingTask):
         self.hints = [
             "Check file permissions: ls -l /etc/sudoers.d/",
             "sudo ignores files with world-writable or group-writable permissions",
-            f"Fix: chmod 440 {self.SUDOERS_FILE}",
+            "Restore the restrictive permissions sudo requires on a sudoers file",
             f"Verify: sudo -l -U {self.PRACTICE_USER}",
         ]
         return self

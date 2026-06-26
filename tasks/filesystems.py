@@ -33,7 +33,7 @@ class CreateFilesystemTask(BaseTask):
         self.tags = ['v10-new', 'filesystem', 'mkfs']
         self.exam_tips = [
             "Use 'lsblk -f' or 'blkid' to verify filesystem type after creation",
-            "XFS is the default filesystem in RHEL 9 - know both mkfs.xfs and mkfs.ext4",
+            "XFS is the default filesystem in RHEL 10 - know both mkfs.xfs and mkfs.ext4",
             "Always verify the device path before formatting to avoid data loss",
         ]
         self.device = None
