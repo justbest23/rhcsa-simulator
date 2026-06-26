@@ -66,7 +66,9 @@ def _ensure_practice_interface():
     if PRACTICE_CONNECTION not in names:
         _run(['nmcli', 'con', 'add', 'type', 'dummy',
               'con-name', PRACTICE_CONNECTION, 'ifname', PRACTICE_INTERFACE,
-              'ipv4.method', 'manual', 'ipv4.addresses', _PRACTICE_BASE_IP])
+              'ipv4.method', 'manual', 'ipv4.addresses', _PRACTICE_BASE_IP,
+              'ipv4.never-default', 'yes', 'ipv6.never-default', 'yes',
+              'connection.autoconnect', 'no'])
         _run(['nmcli', 'con', 'up', PRACTICE_CONNECTION])
     return PRACTICE_INTERFACE
 

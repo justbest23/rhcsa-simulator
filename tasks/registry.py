@@ -211,7 +211,18 @@ class TaskRegistry:
             if not trimmed:
                 break
 
+        def _exam_eligible(task):
+            """Return True if the task may appear in an exam."""
+            if task is None:
+                return False
+            if getattr(task, 'exam_eligible', True) is False:
+                return False
+            if getattr(task, 'requires_reboot', False):
+                return False
+            return True
+
         # Generate tasks per domain — enforce one task per category to avoid duplicates
+        used_exclusive_resources = set()
         for domain_num, needed in domain_counts.items():
             domain_cats = [
                 cat for cat, dom in settings.CATEGORY_TO_DOMAIN.items()
@@ -235,7 +246,16 @@ class TaskRegistry:
                 task = cls.get_random_task(category=cat, difficulty="exam")
                 if not task:
                     task = cls.get_random_task(category=cat)
+                if not _exam_eligible(task):
+                    task = None
+                if task:
+                    res = getattr(task, 'exclusive_resource', None)
+                    if res and res in used_exclusive_resources:
+                        task = None
                 if task and task.id not in exclude_ids:
+                    res = getattr(task, 'exclusive_resource', None)
+                    if res:
+                        used_exclusive_resources.add(res)
                     tasks.append(task)
                     exclude_ids.append(task.id)
                     used_cats.add(cat)
@@ -244,7 +264,16 @@ class TaskRegistry:
         # If we couldn't fill all slots, add random tasks (allowing category repeats as last resort)
         while len(tasks) < count:
             task = cls.get_random_task(difficulty="exam")
+            if not _exam_eligible(task):
+                task = None
+            if task:
+                res = getattr(task, 'exclusive_resource', None)
+                if res and res in used_exclusive_resources:
+                    task = None
             if task and task.id not in exclude_ids:
+                res = getattr(task, 'exclusive_resource', None)
+                if res:
+                    used_exclusive_resources.add(res)
                 tasks.append(task)
                 exclude_ids.append(task.id)
 

@@ -737,22 +737,23 @@ class ValidateFstabTask(BaseTask):
 
     def inject_fault(self):
         import subprocess as _sp
+
+        with open('/etc/fstab') as f:
+            current = f.read()
+        if 'UUID=00000000-dead-beef-0000-badbadbad00' in current:
+            return True, "fstab fault already active"
+
         os.makedirs(self.NOFAIL_MOUNTPOINT, exist_ok=True)
 
         entries = (
-            f"UUID=00000000-dead-beef-0000-badbadbad00 /mnt/nonexistent xfs defaults 0 2"
-            f"  # {self.BAD_UUID_MARKER}\n"
-            f"/dev/sdZ99 {self.NOFAIL_MOUNTPOINT} xfs defaults 0 0"
-            f"  # {self.NOFAIL_MARKER}\n"
+            "UUID=00000000-dead-beef-0000-badbadbad00 /mnt/nonexistent xfs defaults 0 2\n"
+            f"/dev/sdZ99 {self.NOFAIL_MOUNTPOINT} xfs defaults 0 0\n"
         )
         with open('/etc/fstab', 'a') as f:
             f.write(entries)
 
         from tasks.troubleshooting import save_fault_state
-        save_fault_state(self.id, {
-            'bad_uuid_marker': self.BAD_UUID_MARKER,
-            'nofail_marker': self.NOFAIL_MARKER,
-        })
+        save_fault_state(self.id, {})
         return True, "Added bad UUID entry and nofail-missing /backup entry to /etc/fstab"
 
     def restore_fault(self):
@@ -760,7 +761,8 @@ class ValidateFstabTask(BaseTask):
             with open('/etc/fstab') as f:
                 lines = f.readlines()
             cleaned = [l for l in lines
-                       if self.BAD_UUID_MARKER not in l and self.NOFAIL_MARKER not in l]
+                       if 'UUID=00000000-dead-beef-0000-badbadbad00' not in l
+                       and '/dev/sdZ99' not in l]
             with open('/etc/fstab', 'w') as f:
                 f.writelines(cleaned)
             try:
@@ -782,7 +784,7 @@ class ValidateFstabTask(BaseTask):
         fstab_text = ''.join(fstab_lines)
 
         # Check 1: bad UUID entry removed (4 pts)
-        if self.BAD_UUID_MARKER not in fstab_text:
+        if 'UUID=00000000-dead-beef-0000-badbadbad00' not in fstab_text:
             checks.append(ValidationCheck("bad_entry_removed", True, 4,
                 message="Non-existent UUID entry has been removed"))
             score += 4
@@ -812,7 +814,7 @@ class ValidateFstabTask(BaseTask):
 
         # Check 4: /backup entry has nofail (4 pts)
         nofail_line = next(
-            (l for l in fstab_lines if self.NOFAIL_MARKER in l), None
+            (l for l in fstab_lines if '/dev/sdZ99' in l), None
         )
         if nofail_line is None:
             # User removed the line entirely — also acceptable, award partial
