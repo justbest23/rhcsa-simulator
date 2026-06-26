@@ -167,14 +167,11 @@ class QueryPackageInfoTask(BaseTask):
         self.description = (
             f"Query detailed package information:\n"
             f"  - Package: {self.package_name}\n"
-            f"  - Save package info (name, version, release, summary) to: {self.output_file}\n"
-            f"  - Use rpm or dnf info"
+            f"  - Save package info (name, version, release, summary) to: {self.output_file}"
         )
         self.hints = [
-            f"RPM query: rpm -qi {self.package_name}",
-            f"DNF info: dnf info {self.package_name}",
-            f"Save: rpm -qi {self.package_name} > {self.output_file}",
-            f"List files: rpm -ql {self.package_name}",
+            "rpm and dnf both have commands to query installed package details",
+            f"Redirect the output to {self.output_file}",
         ]
         return self
 

@@ -505,18 +505,15 @@ class SecureFileTransferTask(BaseTask):
 
         self.description = (
             f"Securely transfer a file using scp (push direction):\n\n"
-            f"  1. Copy '{self.src_file}' TO '{self.dest_path}' on localhost\n"
-            f"     Command: scp {self.src_file} root@localhost:{self.dest_path}\n"
+            f"  1. Copy '{self.src_file}' to '{self.dest_path}' on localhost using scp\n"
             f"  2. Verify the destination file exists and is not empty\n\n"
             f"scp uses SSH for secure transport. Knowing scp is required for RHCSA."
         )
 
         self.hints = [
-            "Ensure sshd is running: systemctl start sshd",
-            f"Transfer: scp {self.src_file} root@localhost:{self.dest_path}",
+            "Ensure sshd is running before attempting the transfer",
+            "scp syntax: scp <source> <user>@<host>:<destination>",
             f"Verify: ls -l {self.dest_path}",
-            "If prompted for a password, use your root credentials",
-            "Alternatively: cp {0} {1} (bypasses SSH but tests same concept locally)".format(self.src_file, self.dest_path),
         ]
 
         return self

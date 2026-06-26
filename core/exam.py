@@ -43,6 +43,7 @@ class ExamSession:
         self.tasks = []
         self.exam_id = generate_id("exam")
         self.timer = None
+        self._injected_tasks = []
 
     def start(self):
         """Start the exam session."""
@@ -64,6 +65,9 @@ class ExamSession:
 
         print(fmt.success(f"Generated {len(self.tasks)} tasks across {self._count_domains()} domains"))
 
+        # Inject faults / set up environments for tasks that require it
+        self._inject_exam_faults()
+
         self._display_tasks()
 
         # Start timer
@@ -80,6 +84,37 @@ class ExamSession:
 
         print("\nComplete the tasks on your system, then return here to validate your work.")
         print("=" * 60)
+
+    def _inject_exam_faults(self):
+        """Inject faults / create practice environments for all tasks that need it."""
+        import time
+        fault_tasks = [t for t in self.tasks if getattr(t, 'has_fault_injection', False)]
+        if not fault_tasks:
+            return
+        print(fmt.bold("\nPreparing exam environment..."))
+        for task in fault_tasks:
+            try:
+                ok, msg = task.inject_fault()
+                if ok:
+                    print(fmt.success(f"  ✓ {task.id}: {msg}"))
+                    self._injected_tasks.append(task)
+                else:
+                    print(fmt.warning(f"  ✗ {task.id}: {msg} (task will be descriptive only)"))
+            except Exception as e:
+                print(fmt.warning(f"  ✗ {task.id}: setup error ({e})"))
+        time.sleep(1)
+        print()
+
+    def _restore_exam_faults(self):
+        """Restore any environments that were set up for the exam."""
+        if not self._injected_tasks:
+            return
+        print(fmt.dim("\nCleaning up exam environment..."))
+        for task in self._injected_tasks:
+            try:
+                task.restore_fault()
+            except Exception:
+                pass
 
     def _count_domains(self):
         """Count unique domains in generated tasks."""
@@ -196,6 +231,9 @@ class ExamSession:
             total_score, max_score, percentage, passed,
             duration, validation_results, reboot_result
         )
+
+        # Restore any fault-injected environments now that scoring is done
+        self._restore_exam_faults()
 
         # Save to ResultsDB
         db = get_results_db()

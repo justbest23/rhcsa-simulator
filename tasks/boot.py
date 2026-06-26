@@ -719,25 +719,19 @@ class ValidateFstabTask(BaseTask):
     def generate(self, **params):
         self.description = (
             "TROUBLESHOOTING: /etc/fstab Has Boot-Blocking Errors\n"
-            "=" * 50 + "\n\n"
-            "Two problems have been injected into /etc/fstab:\n\n"
-            "  Problem 1 — An entry references a UUID that does not exist.\n"
-            "    Symptom: 'mount -a' fails; system may drop to emergency shell.\n"
-            "    Fix: identify and remove the bad entry.\n\n"
-            f"  Problem 2 — {self.NOFAIL_MOUNTPOINT} is in fstab without 'nofail'.\n"
-            "    Symptom: if the device is absent at boot, boot hangs.\n"
-            "    Fix: add 'nofail' to its mount options.\n\n"
-            "Tasks:\n"
-            "  1. Run 'findmnt --verify' to identify the bad entries\n"
-            "  2. Remove the non-existent UUID entry\n"
-            f"  3. Add 'nofail' to the {self.NOFAIL_MOUNTPOINT} entry\n"
-            "  4. Verify 'mount -a' completes without errors"
+            + "=" * 50 + "\n\n"
+            "/etc/fstab contains entries that will prevent a clean boot.\n\n"
+            "Symptoms:\n"
+            "  - 'mount -a' fails or produces errors\n"
+            "  - System may drop to emergency shell on next reboot\n\n"
+            "Your job: fix /etc/fstab so the system can boot cleanly and\n"
+            "  'mount -a' exits without errors."
         )
         self.hints = [
-            "'findmnt --verify' shows which entries are invalid",
-            "Remove the bad UUID line entirely — it references a device that doesn't exist",
-            f"Edit the {self.NOFAIL_MOUNTPOINT} line: change 'defaults' to 'defaults,nofail'",
-            "'mount -a' should return exit code 0 when fstab is clean",
+            "Start with: findmnt --verify",
+            "An entry may reference a block device or UUID that doesn't exist",
+            f"Check the {self.NOFAIL_MOUNTPOINT} entry — what happens if that device is missing at boot?",
+            "Test your fix: mount -a (should exit 0 with no errors)",
         ]
         return self
 

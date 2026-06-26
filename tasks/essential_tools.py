@@ -836,12 +836,10 @@ class FindByPermissionsTask(BaseTask):
         )
 
         self.hints = [
-            f"Command: find {self.search_path} {self.perm_flag} > {self.output_file} 2>/dev/null",
-            "SUID bit: -perm -4000",
-            "SGID bit: -perm -2000",
-            "World writable: -perm -0002",
-            "The - before permission means 'at least these bits'",
-            "2>/dev/null redirects errors (permission denied) to nowhere"
+            "Use 'find' with the -perm flag to match special permission bits",
+            "SUID bit: -perm -4000  |  SGID bit: -perm -2000  |  world-writable: -perm -0002",
+            "The leading '-' means 'at least these bits set'",
+            f"Redirect output to {self.output_file} and suppress errors with 2>/dev/null",
         ]
 
         return self
