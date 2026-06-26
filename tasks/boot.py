@@ -719,7 +719,7 @@ class ValidateFstabTask(BaseTask):
     def generate(self, **params):
         self.description = (
             "TROUBLESHOOTING: /etc/fstab Has Boot-Blocking Errors\n"
-            "=" * 50 + "\n\n"
+            + "=" * 50 + "\n\n"
             "Two problems have been injected into /etc/fstab:\n\n"
             "  Problem 1 — An entry references a UUID that does not exist.\n"
             "    Symptom: 'mount -a' fails; system may drop to emergency shell.\n"
