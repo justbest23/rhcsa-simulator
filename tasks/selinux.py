@@ -157,10 +157,10 @@ class SetSELinuxContextTask(BaseTask):
         )
 
         self.hints = [
-            f"mkdir -p {self.directory}",
-            f"semanage fcontext -a -t {self.context_type} '{self.directory}(/.*)?'",
-            f"restorecon -Rv {self.directory}",
-            f"Verify: ls -Zd {self.directory}",
+            f"Create the directory first if it doesn't exist",
+            "semanage fcontext sets a persistent policy rule; restorecon applies it to disk",
+            f"Pattern for directories: 'semanage fcontext -a -t TYPE PATH(/.*)?'",
+            f"Verify the context landed: ls -Zd {self.directory}",
         ]
 
         return self
@@ -753,11 +753,9 @@ class SELinuxAVCAnalysisTask(BaseTask):
         )
 
         self.hints = [
-            "ausearch -m avc -ts recent",
-            "ausearch -m avc -ts recent | audit2why",
-            f"The correct type for {service_name} content is {self.correct_type}",
-            f"semanage fcontext -a -t {self.correct_type} '{self.target_dir}(/.*)?'",
-            f"restorecon -Rv {self.target_dir}",
+            "ausearch -m avc -ts recent | audit2why  — shows the cause and suggests a fix",
+            f"Look up what SELinux type {service_name} expects for its content directories",
+            "Use semanage fcontext to make context changes persistent, then restorecon to apply",
         ]
 
         return self
@@ -1163,12 +1161,11 @@ class DiagnoseSELinuxServiceTask(BaseTask):
             "sestatus  -- verify SELinux is enforcing",
         ]
         if self.directory and self.context_type:
-            self.hints.append(f"semanage fcontext -a -t {self.context_type} '{self.directory}(/.*)?'")
-            self.hints.append(f"restorecon -Rv {self.directory}")
+            self.hints.append(f"File context fix: semanage fcontext then restorecon to apply")
         if self.boolean_name:
-            self.hints.append(f"setsebool -P {self.boolean_name} on")
+            self.hints.append("Boolean fix: setsebool -P <boolean> on/off")
         if self.port and self.port_type:
-            self.hints.append(f"semanage port -a -t {self.port_type} -p tcp {self.port}")
+            self.hints.append(f"Port fix: semanage port -a -t <type> -p <protocol> <port>")
 
         return self
 
