@@ -382,11 +382,12 @@ class SetSystemDateTask(BaseTask):
 
     def inject_fault(self):
         import subprocess as _sp
-        _sp.run(['timedatectl', 'set-ntp', 'false'], capture_output=True)
-        _sp.run(['systemctl', 'stop', 'chronyd'], capture_output=True)
+        # Start from NTP-enabled state so the user must disable it to set time.
+        _sp.run(['timedatectl', 'set-ntp', 'true'], capture_output=True)
+        _sp.run(['systemctl', 'enable', '--now', 'chronyd'], capture_output=True)
         from tasks.troubleshooting import save_fault_state
         save_fault_state(self.id, {'service': 'chronyd'})
-        return True, "Disabled NTP so manual time-setting is possible"
+        return True, "NTP is active — disable it, then set the clock to the target time"
 
     def restore_fault(self):
         import subprocess as _sp
@@ -397,31 +398,41 @@ class SetSystemDateTask(BaseTask):
         return True, "Re-enabled NTP sync"
 
     def validate(self):
+        import datetime
         checks = []
         score = 0
 
-        # Check 1: NTP was disabled first (user ran set-ntp false) — now should be off
-        # OR they re-enabled it: either state shows they engaged with the task.
-        # We award points for knowing to disable NTP before setting time manually.
+        # Check 1: NTP disabled (prerequisite the user must do)
         r = execute_safe(['timedatectl', 'show', '--property=NTP'])
-        ntp_off = r.success and 'NTP=no' in r.stdout
-        if ntp_off:
-            checks.append(ValidationCheck("ntp_disabled", True, 3,
-                message="NTP is disabled — manual time can be set with timedatectl set-time"))
-            score += 3
+        if r.success and 'NTP=no' in r.stdout:
+            checks.append(ValidationCheck("ntp_disabled", True, 2,
+                message="NTP is disabled — manual time setting is possible"))
+            score += 2
         else:
-            checks.append(ValidationCheck("ntp_disabled", False, 0, max_points=3,
-                message="NTP must be disabled before setting time manually: timedatectl set-ntp false"))
+            checks.append(ValidationCheck("ntp_disabled", False, 0, max_points=2,
+                message="NTP is still active: run 'timedatectl set-ntp false' first"))
 
-        # Check 2: chronyd is stopped (consistent with NTP disabled for manual set)
-        r = execute_safe(['systemctl', 'is-active', 'chronyd'])
-        if r.success and r.stdout.strip() != 'active':
-            checks.append(ValidationCheck("chrony_stopped", True, 3,
-                message="chronyd is stopped — system clock is under manual control"))
-            score += 3
-        else:
-            checks.append(ValidationCheck("chrony_stopped", False, 0, max_points=3,
-                message="chronyd is still running — stop it before setting time manually"))
+        # Check 2: System time is approximately the target (within 5 minutes)
+        try:
+            target_dt = datetime.datetime.strptime(self.target_time, '%Y-%m-%d %H:%M:%S')
+            r2 = execute_safe(['date', '+%s'])
+            if r2.success:
+                current_ts = int(r2.stdout.strip())
+                target_ts = int(target_dt.timestamp())
+                delta = abs(current_ts - target_ts)
+                if delta <= 300:
+                    checks.append(ValidationCheck("time_set", True, 4,
+                        message=f"System time matches target ({self.target_time})"))
+                    score += 4
+                else:
+                    checks.append(ValidationCheck("time_set", False, 0, max_points=4,
+                        message=f"System time is off by {delta}s — run: timedatectl set-time '{self.target_time}'"))
+            else:
+                checks.append(ValidationCheck("time_set", False, 0, max_points=4,
+                    message="Could not read system time"))
+        except Exception:
+            checks.append(ValidationCheck("time_set", False, 0, max_points=4,
+                message="Time validation error"))
 
         return ValidationResult(self.id, score >= self.points * 0.7, score, self.points, checks)
 
