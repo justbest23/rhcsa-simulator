@@ -292,6 +292,8 @@ class StartProcessWithPriorityTask(BaseTask):
 class FindProcessByUserTask(BaseTask):
     """Find and manage processes owned by a specific user."""
 
+    has_fault_injection = True
+
     def __init__(self):
         super().__init__(
             id="proc_find_user_001",
@@ -334,6 +336,27 @@ class FindProcessByUserTask(BaseTask):
         ]
 
         return self
+
+    def inject_fault(self):
+        import subprocess as _sp
+        if self.action != 'kill':
+            return True, "No setup needed for list/count action"
+        # Ensure the user exists
+        _sp.run(['useradd', '-r', '-s', '/sbin/nologin', '-M', self.username],
+                capture_output=True)
+        # Start several background sleep processes as that user
+        for _ in range(3):
+            _sp.Popen(['runuser', '-u', self.username, '--', 'sleep', '600'])
+        from tasks.troubleshooting import save_fault_state
+        save_fault_state(self.id, {'username': self.username})
+        return True, f"Started 3 background processes as '{self.username}'"
+
+    def restore_fault(self):
+        import subprocess as _sp
+        from tasks.troubleshooting import clear_fault_state
+        _sp.run(['pkill', '-u', self.username], capture_output=True)
+        clear_fault_state()
+        return True, f"Killed remaining '{self.username}' processes"
 
     def validate(self):
         """Validate process management by user."""
