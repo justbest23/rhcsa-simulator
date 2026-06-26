@@ -539,10 +539,10 @@ class ExtendVGTask(BaseTask):
             f"  - Verify the VG size has increased"
         )
         self.hints = [
-            f"Confirm VG exists: vgs {self.vg_name}",
-            f"Initialize PV: pvcreate {self.new_device}",
-            f"Extend VG: vgextend {self.vg_name} {self.new_device}",
-            f"Verify: vgs {self.vg_name}",
+            "Confirm the VG exists before extending: vgs",
+            "A new device must be initialized as a PV before it can join a VG",
+            f"Add the new PV to the existing VG using vgextend",
+            "Verify the VG grew: vgs (check the VSize column)",
         ]
         return self
 
