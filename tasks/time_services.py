@@ -14,6 +14,44 @@ from validators.file_validators import validate_file_exists, validate_file_conta
 logger = logging.getLogger(__name__)
 
 
+# ── Fault injection for time-sync tasks ──────────────────────────────────────
+# On a fresh RHEL system chronyd is already active+enabled and NTP is already
+# on, so a "make NTP work" task would otherwise pass without the candidate doing
+# anything. These helpers break that default state so real work is required.
+
+def _inject_time_sync_fault(task_id):
+    """Stop/disable chronyd and turn NTP off, saving prior state for restore."""
+    from tasks.troubleshooting import save_fault_state, _run
+
+    act = _run(['systemctl', 'is-active', 'chronyd'])
+    was_active = act.stdout.strip() == 'active'
+    en = _run(['systemctl', 'is-enabled', 'chronyd'])
+    was_enabled = 'enabled' in (en.stdout or '')
+    ntp = _run(['timedatectl', 'show', '--property=NTP'])
+    ntp_was_on = 'yes' in (ntp.stdout or '').lower()
+
+    _run(['timedatectl', 'set-ntp', 'false'])
+    _run(['systemctl', 'stop', 'chronyd'])
+    _run(['systemctl', 'disable', 'chronyd'])
+
+    info = {
+        'chronyd_was_active': was_active,
+        'chronyd_was_enabled': was_enabled,
+        'ntp_was_on': ntp_was_on,
+    }
+    save_fault_state(task_id, info)
+    return info, "Stopped/disabled chronyd and turned NTP off"
+
+
+def _restore_time_sync_fault(info):
+    """Restore chronyd/NTP to the state captured by _inject_time_sync_fault."""
+    from tasks.troubleshooting import _restore_time_sync, clear_fault_state
+    msgs = []
+    _restore_time_sync(info or {}, msgs)
+    clear_fault_state()
+    return '; '.join(msgs)
+
+
 @TaskRegistry.register("time_services")
 class ConfigureTimezoneTask(BaseTask):
     """Set system timezone."""
@@ -101,6 +139,8 @@ class ConfigureChronydTask(BaseTask):
             difficulty="medium",
             points=12
         )
+        self.has_fault_injection = True
+        self._fault_info = None
         self.ntp_server = None
 
     def generate(self, **params):
@@ -130,6 +170,13 @@ class ConfigureChronydTask(BaseTask):
         ]
 
         return self
+
+    def inject_fault(self):
+        self._fault_info, msg = _inject_time_sync_fault(self.id)
+        return True, msg
+
+    def restore_fault(self):
+        return True, _restore_time_sync_fault(self._fault_info)
 
     def validate(self):
         """Validate chrony configuration."""
@@ -225,7 +272,9 @@ class ConfigureChronydTask(BaseTask):
 
 @TaskRegistry.register("time_services")
 class EnableNTPSyncTask(BaseTask):
-    """Enable NTP time synchronization."""
+    """Fault-injection: chronyd is stopped/disabled; user must re-enable it."""
+
+    has_fault_injection = True
 
     def __init__(self):
         super().__init__(
@@ -234,86 +283,70 @@ class EnableNTPSyncTask(BaseTask):
             difficulty="easy",
             points=6
         )
-
-    def generate(self, **params):
-        """Generate NTP enable task."""
-        self.description = (
-            f"Enable NTP time synchronization:\n"
-            f"  - Enable automatic time sync\n"
-            f"  - Ensure chronyd service is running\n"
-            f"  - Verify NTP is active"
-        )
-
-        self.hints = [
-            "Enable NTP: timedatectl set-ntp true",
-            "Check status: timedatectl",
-            "This requires chronyd (or ntpd) to be installed",
-            "Start chronyd: systemctl start chronyd"
+        self.has_fault_injection = True
+        self._fault_info = None
+        self.exam_tips = [
+            "'timedatectl set-ntp true' enables NTP and starts chronyd automatically.",
+            "'systemctl enable --now chronyd' is the lower-level equivalent.",
+            "Verify sync with: timedatectl status  (look for 'NTP service: active')",
         ]
 
+    def generate(self, **params):
+        self.description = (
+            "TROUBLESHOOTING: NTP Time Sync Disabled\n"
+            "Symptom: The system clock is not synchronizing with time servers.\n"
+            "chronyd has been stopped and disabled.\n\n"
+            "Tasks:\n"
+            "  1. Re-enable automatic NTP time synchronization\n"
+            "  2. Ensure the chronyd service is running\n"
+            "  3. Verify NTP sync is active"
+        )
+        self.hints = [
+            "Enable NTP: timedatectl set-ntp true",
+            "Or: systemctl enable --now chronyd",
+            "Verify: timedatectl  (look for 'NTP service: active')",
+        ]
         return self
 
+    def inject_fault(self):
+        self._fault_info, msg = _inject_time_sync_fault(self.id)
+        return True, msg
+
+    def restore_fault(self):
+        return True, _restore_time_sync_fault(self._fault_info)
+
     def validate(self):
-        """Validate NTP is enabled."""
         checks = []
-        total_points = 0
+        score = 0
 
-        # Check 1: NTP enabled
-        result = execute_safe(['timedatectl', 'show', '--property=NTP'])
-        if result.success and 'yes' in result.stdout.lower():
-            checks.append(ValidationCheck(
-                name="ntp_enabled",
-                passed=True,
-                points=3,
-                message="NTP is enabled"
-            ))
-            total_points += 3
+        r = execute_safe(['timedatectl', 'show', '--property=NTP'])
+        if r.success and 'NTP=yes' in r.stdout:
+            checks.append(ValidationCheck("ntp_enabled", True, 3, message="NTP is enabled"))
+            score += 3
         else:
-            checks.append(ValidationCheck(
-                name="ntp_enabled",
-                passed=False,
-                points=0,
-                max_points=3,
-                message="NTP is not enabled"
-            ))
+            checks.append(ValidationCheck("ntp_enabled", False, 0, max_points=3,
+                                          message="NTP is not enabled (timedatectl set-ntp true)"))
 
-        # Check 2: Time service running
-        result = execute_safe(['systemctl', 'is-active', 'chronyd'])
-        if result.success and result.stdout.strip() == 'active':
-            checks.append(ValidationCheck(
-                name="service_running",
-                passed=True,
-                points=3,
-                message="Time service is running"
-            ))
-            total_points += 3
+        r = execute_safe(['systemctl', 'is-active', 'chronyd'])
+        svc_ok = r.success and r.stdout.strip() == 'active'
+        if not svc_ok:
+            r2 = execute_safe(['systemctl', 'is-active', 'ntpd'])
+            svc_ok = r2.success and r2.stdout.strip() == 'active'
+        if svc_ok:
+            checks.append(ValidationCheck("service_running", True, 3, message="Time service is running"))
+            score += 3
         else:
-            # Try ntpd
-            result2 = execute_safe(['systemctl', 'is-active', 'ntpd'])
-            if result2.success and result2.stdout.strip() == 'active':
-                checks.append(ValidationCheck(
-                    name="service_running",
-                    passed=True,
-                    points=3,
-                    message="ntpd service is running"
-                ))
-                total_points += 3
-            else:
-                checks.append(ValidationCheck(
-                    name="service_running",
-                    passed=False,
-                    points=0,
-                    max_points=3,
-                    message="No time service running"
-                ))
+            checks.append(ValidationCheck("service_running", False, 0, max_points=3,
+                                          message="No time service running (systemctl start chronyd)"))
 
-        passed = total_points >= (self.points * 0.7)
-        return ValidationResult(self.id, passed, total_points, self.points, checks)
+        return ValidationResult(self.id, score >= self.points * 0.7, score, self.points, checks)
 
 
 @TaskRegistry.register("time_services")
 class SetSystemDateTask(BaseTask):
-    """Set system date and time manually."""
+    """Set system date and time manually (requires disabling NTP first)."""
+
+    has_fault_injection = True
 
     def __init__(self):
         super().__init__(
@@ -323,48 +356,74 @@ class SetSystemDateTask(BaseTask):
             points=6
         )
         self.target_time = None
+        self.exam_tips = [
+            "timedatectl set-ntp false MUST come before set-time or it will be rejected.",
+            "After setting time manually, re-enable NTP: timedatectl set-ntp true",
+            "The format is: timedatectl set-time 'YYYY-MM-DD HH:MM:SS'",
+        ]
 
     def generate(self, **params):
-        """Generate set time task."""
-        # Use a specific time for testing
         self.target_time = params.get('time', '2025-06-15 14:30:00')
 
         self.description = (
-            f"Set system date and time:\n"
-            f"  - Set to: {self.target_time}\n"
-            f"  - Disable NTP first (required)\n"
-            f"  - Use timedatectl command"
+            f"Set the system clock manually:\n"
+            f"  1. Disable NTP synchronization (required before manual set)\n"
+            f"  2. Set the system time to: {self.target_time}\n"
+            f"  3. Verify the time was applied\n"
+            f"  (Re-enabling NTP afterwards is good practice but not validated here)"
         )
-
         self.hints = [
             "Disable NTP first: timedatectl set-ntp false",
             f"Set time: timedatectl set-time '{self.target_time}'",
-            "Format: YYYY-MM-DD HH:MM:SS",
-            "Verify: timedatectl or date",
-            "Re-enable NTP after: timedatectl set-ntp true"
+            "Verify: timedatectl  or  date",
+            "Re-enable after: timedatectl set-ntp true",
         ]
-
         return self
 
+    def inject_fault(self):
+        import subprocess as _sp
+        _sp.run(['timedatectl', 'set-ntp', 'false'], capture_output=True)
+        _sp.run(['systemctl', 'stop', 'chronyd'], capture_output=True)
+        from tasks.troubleshooting import save_fault_state
+        save_fault_state(self.id, {'service': 'chronyd'})
+        return True, "Disabled NTP so manual time-setting is possible"
+
+    def restore_fault(self):
+        import subprocess as _sp
+        _sp.run(['timedatectl', 'set-ntp', 'true'], capture_output=True)
+        _sp.run(['systemctl', 'enable', '--now', 'chronyd'], capture_output=True)
+        from tasks.troubleshooting import clear_fault_state
+        clear_fault_state()
+        return True, "Re-enabled NTP sync"
+
     def validate(self):
-        """Validate time setting (just checks NTP is disabled since we can't persist time)."""
         checks = []
-        total_points = 0
+        score = 0
 
-        # For this task, we just verify NTP can be disabled
-        result = execute_safe(['timedatectl', 'show', '--property=NTP'])
+        # Check 1: NTP was disabled first (user ran set-ntp false) — now should be off
+        # OR they re-enabled it: either state shows they engaged with the task.
+        # We award points for knowing to disable NTP before setting time manually.
+        r = execute_safe(['timedatectl', 'show', '--property=NTP'])
+        ntp_off = r.success and 'NTP=no' in r.stdout
+        if ntp_off:
+            checks.append(ValidationCheck("ntp_disabled", True, 3,
+                message="NTP is disabled — manual time can be set with timedatectl set-time"))
+            score += 3
+        else:
+            checks.append(ValidationCheck("ntp_disabled", False, 0, max_points=3,
+                message="NTP must be disabled before setting time manually: timedatectl set-ntp false"))
 
-        # This is a learning task - validate that user understands the process
-        checks.append(ValidationCheck(
-            name="time_task",
-            passed=True,
-            points=6,
-            message="Time setting task - verify manually with 'timedatectl'"
-        ))
-        total_points += 6
+        # Check 2: chronyd is stopped (consistent with NTP disabled for manual set)
+        r = execute_safe(['systemctl', 'is-active', 'chronyd'])
+        if r.success and r.stdout.strip() != 'active':
+            checks.append(ValidationCheck("chrony_stopped", True, 3,
+                message="chronyd is stopped — system clock is under manual control"))
+            score += 3
+        else:
+            checks.append(ValidationCheck("chrony_stopped", False, 0, max_points=3,
+                message="chronyd is still running — stop it before setting time manually"))
 
-        passed = True
-        return ValidationResult(self.id, passed, total_points, self.points, checks)
+        return ValidationResult(self.id, score >= self.points * 0.7, score, self.points, checks)
 
 
 @TaskRegistry.register("time_services")

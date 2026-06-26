@@ -378,7 +378,7 @@ class DowngradePackageTask(BaseTask):
         ]
 
     def generate(self, **params):
-        packages = ['vim-enhanced', 'wget', 'tmux', 'bash-completion']
+        packages = ['vim-enhanced', 'wget', 'bash-completion', 'nano', 'man-db']
         self.package_name = params.get('package', random.choice(packages))
 
         self.description = (
