@@ -28,19 +28,59 @@ logger = logging.getLogger(__name__)
 # Helper utilities
 # ---------------------------------------------------------------------------
 
+# A dedicated, isolated dummy interface used by every task that *modifies*
+# network settings. Reconfiguring the candidate's real/primary NIC (ens160,
+# eth0, ...) would drop their live connection, so practice always happens on
+# this throwaway interface instead.
+PRACTICE_INTERFACE = 'dummy0'
+PRACTICE_CONNECTION = 'dummy0'
+# RFC 5737 documentation range — a harmless placeholder so the interface comes
+# up with an address (tasks that assign a *specific* IP still have to change it).
+_PRACTICE_BASE_IP = '192.0.2.10/24'
+
+
+def _ensure_practice_interface():
+    """
+    Make sure the isolated 'dummy0' practice interface exists and is up.
+
+    Idempotent and best-effort: on systems without root / iproute2 / NM the
+    calls fail silently and the interface name is still returned so task
+    generation never raises.
+    """
+    import subprocess
+
+    def _run(cmd):
+        try:
+            return subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        except Exception:
+            return None
+
+    show = _run(['ip', 'link', 'show', PRACTICE_INTERFACE])
+    if show is None or show.returncode != 0:
+        _run(['ip', 'link', 'add', PRACTICE_INTERFACE, 'type', 'dummy'])
+    _run(['ip', 'link', 'set', PRACTICE_INTERFACE, 'up'])
+
+    # Bind a NetworkManager profile so nmcli con mod/up behaves like a real NIC.
+    shown = _run(['nmcli', '-t', '-f', 'NAME', 'con', 'show'])
+    names = shown.stdout.splitlines() if shown and shown.stdout else []
+    if PRACTICE_CONNECTION not in names:
+        _run(['nmcli', 'con', 'add', 'type', 'dummy',
+              'con-name', PRACTICE_CONNECTION, 'ifname', PRACTICE_INTERFACE,
+              'ipv4.method', 'manual', 'ipv4.addresses', _PRACTICE_BASE_IP])
+        _run(['nmcli', 'con', 'up', PRACTICE_CONNECTION])
+    return PRACTICE_INTERFACE
+
+
 def _get_practice_interface():
-    """Get an interface suitable for practice (prefers non-primary)."""
-    try:
-        from device.network_manager import (
-            get_practice_interface, get_primary_interface,
-            get_connection_for_interface
-        )
-        iface = get_practice_interface()
-        if iface:
-            return iface
-    except Exception:
-        pass
-    return 'eth0'
+    """
+    Return an isolated dummy interface for practice tasks.
+
+    IMPORTANT: this NEVER returns the primary/live interface. The previous
+    implementation fell back to the primary NIC when no spare interface
+    existed, which meant a static-IP task could clobber the candidate's live
+    connection. A dedicated 'dummy0' interface is created on demand instead.
+    """
+    return _ensure_practice_interface()
 
 
 def _get_primary_interface():
@@ -87,7 +127,7 @@ def _random_hostname():
     names = [
         'server1.example.com', 'server2.example.com',
         'node1.lab.example.com', 'node2.lab.example.com',
-        'rhel9.lab.local', 'workstation.test.net',
+        'rhel10.lab.local', 'workstation.test.net',
         'app01.prod.example.com', 'db01.corp.example.com',
         'web01.example.com', 'mail.example.com',
     ]
@@ -1506,7 +1546,14 @@ class ConfigureSearchDomainTask(BaseTask):
 
 @TaskRegistry.register("networking")
 class FullNetworkSetupTask(BaseTask):
-    """Complete network configuration: static IP + DNS + hostname + gateway."""
+    """
+    Complete network configuration using a practice dummy interface.
+    inject_fault creates dummy0 so the task never touches the live interface.
+    """
+
+    has_fault_injection = True
+    _DUMMY_IFACE = 'dummy0'
+    _CONN_NAME = 'practice-net'
 
     def __init__(self):
         super().__init__(
@@ -1516,56 +1563,99 @@ class FullNetworkSetupTask(BaseTask):
             points=20
         )
         self.requires_persistence = True
-        self.tags = ["nmcli", "hostnamectl", "full-setup", "persistence", "compound"]
+        self.tags = ["nmcli", "hostnamectl", "full-setup", "persistence", "compound", "fault-injection"]
         self.exam_tips = [
-            "This is a compound task - tackle each piece: hostname, IP, gateway, DNS.",
-            "Set hostname with hostnamectl, everything else with nmcli.",
-            "Always bring the connection up after all modifications.",
-            "Verify every component independently before moving on.",
+            "Tackle each component: hostname first, then IP/gateway/DNS via nmcli.",
+            "'nmcli con add' creates a new connection; 'nmcli con mod' edits an existing one.",
+            "Always run 'nmcli con up <name>' after configuring to activate.",
+            "Verify: hostnamectl; ip addr show dummy0; nmcli con show practice-net",
         ]
         self.hostname = None
-        self.interface = None
-        self.connection_name = None
+        self.interface = self._DUMMY_IFACE
+        self.connection_name = self._CONN_NAME
         self.ip_address = None
         self.prefix = None
         self.gateway = None
         self.dns_servers = None
+        self._orig_hostname = None
 
     def generate(self, **params):
         subnet = _random_subnet()
         self.hostname = params.get('hostname', _random_hostname())
-        self.interface = params.get('interface') or _get_practice_interface()
-        self.connection_name = params.get('connection') or _get_connection_name(self.interface) or self.interface
         self.ip_address = params.get('ip', f'192.168.{subnet}.{_random_host()}')
         self.prefix = params.get('prefix', '24')
         self.gateway = params.get('gateway', f'192.168.{subnet}.1')
         self.dns_servers = params.get('dns', _random_dns_pair())
         if isinstance(self.dns_servers, str):
             self.dns_servers = [self.dns_servers]
-        dns_str = ' '.join(self.dns_servers)
+        dns_str = ', '.join(self.dns_servers)
 
         self.description = (
             f"Perform a COMPLETE network configuration:\n"
-            f"  1. Set hostname to: {self.hostname}\n"
-            f"  2. Configure connection '{self.connection_name}' on {self.interface}:\n"
+            f"  1. Set system hostname to: {self.hostname}\n"
+            f"  2. Create a new nmcli connection named '{self.connection_name}'\n"
+            f"     bound to interface: {self.interface}\n"
             f"     - IP Address: {self.ip_address}/{self.prefix}\n"
             f"     - Gateway: {self.gateway}\n"
-            f"     - DNS Servers: {', '.join(self.dns_servers)}\n"
+            f"     - DNS Servers: {dns_str}\n"
             f"     - IPv4 method: manual\n"
-            f"  3. Activate the connection\n"
-            f"  ALL settings must persist across reboots."
+            f"  3. Bring the connection up\n"
+            f"  ALL settings must persist across reboots.\n"
+            f"\n"
+            f"  Note: '{self.interface}' is a virtual practice interface — safe to configure."
         )
-
         self.hints = [
-            f"hostnamectl set-hostname {self.hostname}",
-            f"nmcli con mod {self.connection_name} ipv4.addresses {self.ip_address}/{self.prefix}",
-            f"nmcli con mod {self.connection_name} ipv4.gateway {self.gateway}",
-            f"nmcli con mod {self.connection_name} ipv4.dns \"{dns_str}\"",
-            f"nmcli con mod {self.connection_name} ipv4.method manual",
-            f"nmcli con up {self.connection_name}",
-            "Verify: hostnamectl; ip addr; ip route; cat /etc/resolv.conf",
+            f"Set hostname: hostnamectl set-hostname {self.hostname}",
+            f"Add connection: nmcli con add type dummy ifname {self.interface} con-name {self.connection_name} \\",
+            f"  ipv4.method manual ipv4.addresses {self.ip_address}/{self.prefix} \\",
+            f"  ipv4.gateway {self.gateway} ipv4.dns \"{' '.join(self.dns_servers)}\"",
+            f"Activate: nmcli con up {self.connection_name}",
+            f"Verify: ip addr show {self.interface}; nmcli con show {self.connection_name}",
         ]
         return self
+
+    def inject_fault(self):
+        import subprocess as _sp
+        # Create the dummy kernel module and interface
+        _sp.run(['modprobe', 'dummy'], capture_output=True)
+        r = _sp.run(['ip', 'link', 'add', self._DUMMY_IFACE, 'type', 'dummy'],
+                    capture_output=True, text=True)
+        if r.returncode != 0 and 'File exists' not in r.stderr:
+            return False, f"Could not create dummy0: {r.stderr.strip()}"
+        _sp.run(['ip', 'link', 'set', self._DUMMY_IFACE, 'up'], capture_output=True)
+
+        # Remove any existing practice-net connection so the user starts fresh
+        _sp.run(['nmcli', 'con', 'delete', self._CONN_NAME], capture_output=True)
+
+        # Save current hostname for restore
+        r2 = _sp.run(['hostname'], capture_output=True, text=True)
+        self._orig_hostname = r2.stdout.strip()
+
+        from tasks.troubleshooting import save_fault_state
+        save_fault_state(self.id, {
+            'orig_hostname': self._orig_hostname,
+            'iface': self._DUMMY_IFACE,
+            'conn': self._CONN_NAME,
+        })
+        return True, f"Created {self._DUMMY_IFACE} virtual interface for practice"
+
+    def restore_fault(self):
+        import subprocess as _sp
+        from tasks.troubleshooting import load_fault_state, clear_fault_state
+
+        state = load_fault_state()
+        info = state.get('restore_info', {}) if state else {}
+        orig_hostname = info.get('orig_hostname', '')
+        iface = info.get('iface', self._DUMMY_IFACE)
+        conn = info.get('conn', self._CONN_NAME)
+
+        _sp.run(['nmcli', 'con', 'delete', conn], capture_output=True)
+        _sp.run(['ip', 'link', 'delete', iface], capture_output=True)
+        if orig_hostname:
+            _sp.run(['hostnamectl', 'set-hostname', orig_hostname], capture_output=True)
+
+        clear_fault_state()
+        return True, f"Removed {iface}, {conn} connection, restored hostname"
 
     def validate(self):
         checks = []
@@ -1575,68 +1665,69 @@ class FullNetworkSetupTask(BaseTask):
         result = execute_safe(['hostname'])
         current_hostname = result.stdout.strip() if result.success else None
         if current_hostname == self.hostname:
-            checks.append(ValidationCheck("hostname_set", True, 4,
-                          f"Hostname is {self.hostname}"))
+            checks.append(ValidationCheck("hostname_set", True, 4, f"Hostname is {self.hostname}"))
             total += 4
         else:
             checks.append(ValidationCheck("hostname_set", False, 0,
                           f"Hostname is '{current_hostname}', expected '{self.hostname}'", max_points=4))
 
-        # 2. IP address (5 pts)
+        # 2. nmcli connection exists with correct profile (6 pts)
+        conn = get_nmcli_connection_info(self.connection_name)
+        if conn:
+            checks.append(ValidationCheck("conn_exists", True, 2, f"Connection '{self.connection_name}' exists"))
+            total += 2
+            # Check method
+            if conn.get('ipv4.method') == 'manual':
+                checks.append(ValidationCheck("method_manual", True, 2, "ipv4.method is 'manual'"))
+                total += 2
+            else:
+                checks.append(ValidationCheck("method_manual", False, 0,
+                              f"ipv4.method is '{conn.get('ipv4.method', '?')}'", max_points=2))
+            # Check address in profile
+            addr_field = conn.get('ipv4.addresses', '')
+            if self.ip_address in addr_field:
+                checks.append(ValidationCheck("ip_in_profile", True, 2,
+                              f"IP {self.ip_address} in connection profile"))
+                total += 2
+            else:
+                checks.append(ValidationCheck("ip_in_profile", False, 0,
+                              f"IP {self.ip_address} not found in profile (got: {addr_field})", max_points=2))
+        else:
+            checks.append(ValidationCheck("conn_exists", False, 0,
+                          f"Connection '{self.connection_name}' not found", max_points=6))
+
+        # 3. IP address on interface (5 pts)
         actual_ip = get_ip_address(self.interface)
         if actual_ip == self.ip_address:
-            checks.append(ValidationCheck("ip_configured", True, 5,
-                          f"IP {self.ip_address} configured on {self.interface}"))
+            checks.append(ValidationCheck("ip_active", True, 5,
+                          f"IP {self.ip_address} active on {self.interface}"))
             total += 5
         else:
-            checks.append(ValidationCheck("ip_configured", False, 0,
-                          f"IP is {actual_ip}, expected {self.ip_address}", max_points=5))
+            checks.append(ValidationCheck("ip_active", False, 0,
+                          f"IP on {self.interface} is '{actual_ip}', expected '{self.ip_address}'", max_points=5))
 
-        # 3. Gateway (3 pts)
-        gw = get_default_gateway()
-        if gw == self.gateway:
-            checks.append(ValidationCheck("gateway_configured", True, 3,
-                          f"Gateway {self.gateway} is active"))
-            total += 3
+        # 4. DNS servers in profile (3 pts)
+        if conn:
+            dns_field = conn.get('ipv4.dns', '')
+            found = sum(1 for d in self.dns_servers if d in dns_field)
+            if found == len(self.dns_servers):
+                checks.append(ValidationCheck("dns_configured", True, 3, "DNS servers configured in profile"))
+                total += 3
+            elif found > 0:
+                checks.append(ValidationCheck("dns_configured", True, 1, f"{found}/{len(self.dns_servers)} DNS servers configured"))
+                total += 1
+            else:
+                checks.append(ValidationCheck("dns_configured", False, 0, "DNS not configured in profile", max_points=3))
         else:
-            checks.append(ValidationCheck("gateway_configured", False, 0,
-                          f"Gateway is {gw}, expected {self.gateway}", max_points=3))
+            checks.append(ValidationCheck("dns_configured", False, 0, "Connection not found", max_points=3))
 
-        # 4. DNS servers (3 pts)
-        current_dns = get_dns_servers()
-        all_dns = all(d in current_dns for d in self.dns_servers)
-        if all_dns:
-            checks.append(ValidationCheck("dns_configured", True, 3,
-                          "All DNS servers configured"))
-            total += 3
-        elif any(d in current_dns for d in self.dns_servers):
-            checks.append(ValidationCheck("dns_configured", True, 1,
-                          "Some DNS servers configured (partial)"))
-            total += 1
-        else:
-            checks.append(ValidationCheck("dns_configured", False, 0,
-                          f"DNS not configured (current: {current_dns})", max_points=3))
-
-        # 5. Persistent config - method is manual (3 pts)
-        conn = get_nmcli_connection_info(self.connection_name)
-        if conn and conn.get('ipv4.method') == 'manual':
-            checks.append(ValidationCheck("method_manual", True, 3,
-                          "ipv4.method is 'manual' (persistent)"))
-            total += 3
-        else:
-            method = conn.get('ipv4.method', 'unknown') if conn else 'connection not found'
-            checks.append(ValidationCheck("method_manual", False, 0,
-                          f"ipv4.method is '{method}'", max_points=3))
-
-        # 6. Interface UP (2 pts)
+        # 5. Interface UP (2 pts)
         state = get_interface_state(self.interface)
         if state == 'UP':
-            checks.append(ValidationCheck("interface_up", True, 2,
-                          f"Interface {self.interface} is UP"))
+            checks.append(ValidationCheck("interface_up", True, 2, f"{self.interface} is UP"))
             total += 2
         else:
-            checks.append(ValidationCheck("interface_up", False, 0,
-                          f"Interface is {state}", max_points=2))
+            checks.append(ValidationCheck("interface_up", False, 0, f"{self.interface} is {state}", max_points=2))
 
         passed = total >= (self.points * 0.7)
         return ValidationResult(self.id, passed, total, self.points, checks)

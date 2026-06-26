@@ -203,7 +203,12 @@ class BootLogAnalysisTask(BaseTask):
 # ---------------------------------------------------------------------------
 @TaskRegistry.register("journalctl")
 class PersistentJournalTask(BaseTask):
-    """Configure persistent journal storage so logs survive reboot."""
+    """
+    Fault-injection: sets Storage=volatile so logs are lost on reboot.
+    User must re-enable persistent logging.
+    """
+
+    has_fault_injection = True
 
     def __init__(self):
         super().__init__(
@@ -213,69 +218,101 @@ class PersistentJournalTask(BaseTask):
             points=10
         )
         self.requires_persistence = True
-        self.tags = ['v10-new', 'journalctl', 'persistent-journal']
+        self.tags = ['v10-new', 'journalctl', 'persistent-journal', 'fault-injection']
         self.exam_tips = [
-            "By default on RHEL, journal is volatile (stored in /run/log/journal).",
-            "mkdir -p /var/log/journal and restart systemd-journald to enable persistence.",
-            "Alternatively set Storage=persistent in /etc/systemd/journald.conf.",
-            "Storage=auto persists if /var/log/journal/ exists (RHEL default behavior).",
+            "Journal persistence is controlled by Storage= in /etc/systemd/journald.conf.",
+            "Storage=persistent: always save to disk.",
+            "Storage=auto: saves to disk only if /var/log/journal/ directory exists.",
+            "After config changes: systemctl restart systemd-journald",
         ]
         self.storage_setting = None
 
     def generate(self, **params):
-        """Generate persistent journal configuration task."""
         storage_options = [
-            ('persistent', 'Storage=persistent',
-             'Explicitly enable persistent storage in journald.conf'),
-            ('auto', 'Storage=auto',
-             'Use auto mode (persists if /var/log/journal/ directory exists)'),
+            ('persistent', 'Storage=persistent'),
+            ('auto', 'Storage=auto'),
         ]
-
-        choice = params.get('storage')
-        if choice:
-            for opt, setting, desc in storage_options:
-                if opt == choice:
-                    self.storage_setting = opt
-                    setting_str = setting
-                    setting_desc = desc
-                    break
-            else:
-                self.storage_setting = choice
-                setting_str = f"Storage={choice}"
-                setting_desc = 'the specified setting'
-        else:
-            self.storage_setting, setting_str, setting_desc = random.choice(storage_options)
+        self.storage_setting, self._target_setting = params.get(
+            'storage', random.choice(storage_options)
+        ) if isinstance(params.get('storage'), tuple) else random.choice(storage_options)
 
         self.description = (
-            f"Configure persistent systemd journal storage:\n"
-            f"\n"
-            f"  By default, the systemd journal stores logs in volatile memory\n"
-            f"  (/run/log/journal) and they are lost on reboot.\n"
-            f"\n"
-            f"  Required configuration:\n"
-            f"  1. Create the persistent journal directory: /var/log/journal\n"
-            f"  2. Set correct ownership: chown root:systemd-journal /var/log/journal\n"
-            f"  3. Set correct permissions: chmod 2755 /var/log/journal\n"
-            f"  4. Edit /etc/systemd/journald.conf:\n"
-            f"     - Set {setting_str} under the [Journal] section\n"
-            f"     ({setting_desc})\n"
-            f"  5. Restart the journal service: systemctl restart systemd-journald\n"
-            f"\n"
-            f"  After configuration, logs will persist across reboots.\n"
-            f"  Verify with: journalctl --list-boots"
+            f"Troubleshoot system journal configuration:\n\n"
+            f"Symptom: Boot logs are not available from previous reboots.\n"
+            f"The systemd journal is not persisting logs to disk.\n\n"
+            f"Tasks:\n"
+            f"  1. Identify why journal logs are not persisting across reboots\n"
+            f"  2. Configure the journal for persistent storage\n"
+            f"  3. Restart the journal service to apply the change\n"
+            f"  4. Verify: journalctl --list-boots shows entries"
         )
-
         self.hints = [
-            "mkdir -p /var/log/journal",
-            "chown root:systemd-journal /var/log/journal",
-            "chmod 2755 /var/log/journal",
-            f"Edit /etc/systemd/journald.conf: set {setting_str} under [Journal]",
-            "systemctl restart systemd-journald",
-            "Verify: journalctl --list-boots (should show multiple boots if persistent)",
-            "Also verify: ls -ld /var/log/journal/",
+            "Check current config: cat /etc/systemd/journald.conf | grep -i storage",
+            "Journal config file: /etc/systemd/journald.conf  (section: [Journal])",
+            "Verify persistence directory: ls -ld /var/log/journal",
+            "Apply change: systemctl restart systemd-journald",
         ]
-
         return self
+
+    def inject_fault(self):
+        import subprocess as _sp
+        import shutil
+
+        # Save original journald.conf
+        conf = '/etc/systemd/journald.conf'
+        backup = '/var/lib/rhcsa-simulator/journald.conf.bak'
+        os.makedirs(os.path.dirname(backup), exist_ok=True)
+        shutil.copy2(conf, backup)
+
+        # Remove /var/log/journal to break persistence
+        journal_dir = '/var/log/journal'
+        had_dir = os.path.isdir(journal_dir)
+        if had_dir:
+            shutil.rmtree(journal_dir)
+
+        # Set Storage=volatile in journald.conf
+        with open(conf) as f:
+            content = f.read()
+        import re
+        content = re.sub(r'(?m)^#?Storage=.*$', 'Storage=volatile', content)
+        if 'Storage=' not in content:
+            content = content.replace('[Journal]', '[Journal]\nStorage=volatile')
+        with open(conf, 'w') as f:
+            f.write(content)
+
+        _sp.run(['systemctl', 'restart', 'systemd-journald'], capture_output=True)
+
+        from tasks.troubleshooting import save_fault_state
+        save_fault_state(self.id, {
+            'backup': backup,
+            'had_dir': had_dir,
+            'target_setting': self._target_setting,
+        })
+        return True, "Set Storage=volatile and removed /var/log/journal"
+
+    def restore_fault(self):
+        import subprocess as _sp
+        import shutil
+        from tasks.troubleshooting import load_fault_state, clear_fault_state
+
+        state = load_fault_state()
+        info = state.get('restore_info', {}) if state else {}
+        backup = info.get('backup', '/var/lib/rhcsa-simulator/journald.conf.bak')
+        had_dir = info.get('had_dir', True)
+        journal_dir = '/var/log/journal'
+
+        if os.path.exists(backup):
+            shutil.copy2(backup, '/etc/systemd/journald.conf')
+            os.remove(backup)
+
+        if had_dir and not os.path.isdir(journal_dir):
+            os.makedirs(journal_dir, exist_ok=True)
+            _sp.run(['chown', 'root:systemd-journal', journal_dir], capture_output=True)
+            _sp.run(['chmod', '2755', journal_dir], capture_output=True)
+
+        _sp.run(['systemctl', 'restart', 'systemd-journald'], capture_output=True)
+        clear_fault_state()
+        return True, "Restored journald.conf and restarted systemd-journald"
 
     def validate(self):
         """Validate persistent journal is properly configured."""
