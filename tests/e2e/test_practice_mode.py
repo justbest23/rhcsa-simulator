@@ -40,13 +40,15 @@ class TestPracticeTask:
             checks=[ValidationCheck(name="c", passed=True, points=10, message="ok")],
         )
 
-        # Mock _select_category and _select_difficulty to skip input
+        # Mock selection helpers to skip input. start() flow consumes:
+        # preview-loop "s", then per-task "complete" + "press enter" prompts.
         with patch.object(session, "_select_category", return_value="lvm"), \
              patch.object(session, "_select_difficulty", return_value="exam"), \
-             patch("builtins.input", side_effect=["", ""]), \
+             patch.object(session, "_select_reboot_filter", return_value=False), \
+             patch("builtins.input", side_effect=["s", "", ""]), \
              patch("core.practice.get_validator") as mock_val, \
              patch("core.practice.get_results_db", return_value=tmp_db), \
-             patch("core.practice.confirm_action", side_effect=[False, True]), \
+             patch("core.practice.confirm_action", side_effect=[True]), \
              patch("core.practice.fmt"):
             mock_engine = MagicMock()
             mock_engine.validate_task.return_value = mock_result
@@ -68,13 +70,14 @@ class TestPracticeTask:
             checks=[ValidationCheck(name="c", passed=True, points=10, message="ok")],
         )
 
-        # fail -> retry -> pass -> continue
+        # preview "s" -> complete -> fail -> retry "r" -> complete -> pass -> press enter
         with patch.object(session, "_select_category", return_value="lvm"), \
              patch.object(session, "_select_difficulty", return_value="exam"), \
-             patch("builtins.input", side_effect=["", "r", "", ""]), \
+             patch.object(session, "_select_reboot_filter", return_value=False), \
+             patch("builtins.input", side_effect=["s", "", "r", "", ""]), \
              patch("core.practice.get_validator") as mock_val, \
              patch("core.practice.get_results_db", return_value=tmp_db), \
-             patch("core.practice.confirm_action", side_effect=[False, False, True]), \
+             patch("core.practice.confirm_action", side_effect=[True]), \
              patch("core.practice.fmt"):
             mock_engine = MagicMock()
             mock_engine.validate_task.side_effect = [fail_result, pass_result]

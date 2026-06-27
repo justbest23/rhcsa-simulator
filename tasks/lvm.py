@@ -3,6 +3,7 @@ LVM (Logical Volume Management) tasks for RHCSA exam.
 """
 
 import random
+import string
 from tasks.base import BaseTask
 from tasks.registry import TaskRegistry
 from core.validator import ValidationCheck, ValidationResult
@@ -10,9 +11,57 @@ from validators.system_validators import validate_lv_exists, get_lv_size_mb
 from utils.helpers import get_practice_device, get_all_practice_devices, get_practice_lv, get_practice_vg
 
 
+def _uid(n=4):
+    """Short random suffix so concurrent scratch VGs/LVs never share a name."""
+    return ''.join(random.choices(string.digits, k=n))
+
+
+def _scratch_setup(task, device, vg, lv=None, lv_mb=150, fstype=None):
+    """Provision a practice VG (and optional LV) on `device` for a task that
+    would otherwise assume pre-existing LVM. Records fault state for crash
+    recovery. Returns (ok, message)."""
+    import subprocess as _sp
+    from tasks.troubleshooting import save_fault_state
+    if not device:
+        return False, "No practice device available — run 'Setup → 1' first"
+    r = _sp.run(['pvcreate', '-ff', '-y', device], capture_output=True, text=True)
+    if r.returncode != 0:
+        return False, f"pvcreate {device} failed: {r.stderr.strip()}"
+    r = _sp.run(['vgcreate', vg, device], capture_output=True, text=True)
+    if r.returncode != 0:
+        return False, f"vgcreate {vg} failed: {r.stderr.strip()}"
+    if lv:
+        r = _sp.run(['lvcreate', '-L', f'{lv_mb}M', '-n', lv, vg], capture_output=True, text=True)
+        if r.returncode != 0:
+            return False, f"lvcreate {lv} failed: {r.stderr.strip()}"
+        if fstype == 'ext4':
+            _sp.run(['mkfs.ext4', '-F', f'/dev/{vg}/{lv}'], capture_output=True)
+        elif fstype == 'xfs':
+            _sp.run(['mkfs.xfs', '-f', f'/dev/{vg}/{lv}'], capture_output=True)
+    save_fault_state(task.id, {'vg': vg, 'dev': device})
+    return True, f"Provisioned {vg}" + (f"/{lv}" if lv else "")
+
+
+def _scratch_teardown(task, vg, device):
+    """Tear down a scratch VG/device created by _scratch_setup."""
+    import subprocess as _sp
+    from tasks.troubleshooting import clear_fault_state
+    if vg:
+        _sp.run(['lvremove', '-ff', vg], capture_output=True)
+        _sp.run(['vgchange', '-an', vg], capture_output=True)
+        _sp.run(['vgremove', '-ff', vg], capture_output=True)
+    if device:
+        _sp.run(['pvremove', '-ff', '-y', device], capture_output=True)
+        _sp.run(['wipefs', '-a', device], capture_output=True)
+    clear_fault_state(task.id)
+    return True, f"Removed {vg}"
+
+
 @TaskRegistry.register("lvm")
 class VerifyLVExistsTask(BaseTask):
     """Verify logical volume exists with correct size."""
+
+    disk_slots = 1
 
     def __init__(self):
         super().__init__(
@@ -76,6 +125,8 @@ class VerifyLVExistsTask(BaseTask):
 class CreatePVTask(BaseTask):
     """Create a physical volume."""
 
+    disk_slots = 1
+
     def __init__(self):
         super().__init__(
             id="lvm_pv_create_001",
@@ -133,6 +184,8 @@ class CreatePVTask(BaseTask):
 @TaskRegistry.register("lvm")
 class CreateVGTask(BaseTask):
     """Create a volume group."""
+
+    disk_slots = 1
 
     def __init__(self):
         super().__init__(
@@ -199,6 +252,9 @@ class CreateVGTask(BaseTask):
 class CreateLVTask(BaseTask):
     """Create a logical volume with specific size."""
 
+    disk_slots = 1
+    has_fault_injection = True
+
     def __init__(self):
         super().__init__(
             id="lvm_lv_create_001",
@@ -215,19 +271,18 @@ class CreateLVTask(BaseTask):
             "LV device appears at /dev/vg_name/lv_name",
         ]
         self.requires_persistence = True
+        self.device = None
         self.vg_name = None
         self.lv_name = None
         self.lv_size_mb = None
 
     def generate(self, **params):
-        # Try to detect existing practice LV
-        existing_vg, existing_lv = get_practice_lv()
-        if existing_vg and existing_lv:
-            self.vg_name = params.get('vg_name', existing_vg)
-            self.lv_name = params.get('lv_name', existing_lv)
-        else:
-            self.vg_name = params.get('vg_name', 'vg_practice')
-            self.lv_name = params.get('lv_name', 'lv_practice')
+        # Self-contained: a scratch VG is provisioned on an allocated device at
+        # exam time; the candidate creates the LV inside it.
+        self.device = params.get('device') or get_practice_device() or '/dev/loop0'
+        uid = _uid()
+        self.vg_name = params.get('vg_name', f'vg_prac{uid}')
+        self.lv_name = params.get('lv_name', f'lv_data{uid}')
         self.lv_size_mb = params.get('size', random.choice([300, 350, 400]))
 
         self.description = (
@@ -243,6 +298,12 @@ class CreateLVTask(BaseTask):
         ]
 
         return self
+
+    def inject_fault(self):
+        return _scratch_setup(self, self.device, self.vg_name)
+
+    def restore_fault(self):
+        return _scratch_teardown(self, self.vg_name, self.device)
 
     def validate(self):
         checks = []
@@ -272,6 +333,10 @@ class CreateLVTask(BaseTask):
 class ExtendLVTask(BaseTask):
     """Extend a logical volume."""
 
+    disk_slots = 1
+    has_fault_injection = True
+    _INITIAL_MB = 100
+
     def __init__(self):
         super().__init__(
             id="lvm_extend_001",
@@ -289,50 +354,45 @@ class ExtendLVTask(BaseTask):
             "Common exam task - practice both extending LV and filesystem",
         ]
         self.requires_persistence = True
+        self.device = None
         self.vg_name = None
         self.lv_name = None
-        self.new_size_mb = None
+        self.target_mb = None
         self.extend_by_mb = None
 
     def generate(self, **params):
-        # Try to detect existing practice LV
-        existing_vg, existing_lv = get_practice_lv()
-        if existing_vg and existing_lv:
-            self.vg_name = params.get('vg_name', existing_vg)
-            self.lv_name = params.get('lv_name', existing_lv)
-        else:
-            self.vg_name = params.get('vg_name', 'vg_practice')
-            self.lv_name = params.get('lv_name', 'lv_practice')
+        # Self-contained: provision a small scratch LV that the candidate extends.
+        self.device = params.get('device') or get_practice_device() or '/dev/loop0'
+        uid = _uid()
+        self.vg_name = params.get('vg_name', f'vg_prac{uid}')
+        self.lv_name = params.get('lv_name', f'lv_data{uid}')
         self.extend_by_mb = params.get('extend_by', random.choice([100, 150]))
-        self.new_size_mb = params.get('new_size', random.choice([350, 400, 450]))
-
-        use_extend_by = params.get('use_extend_by', True)
-
-        if use_extend_by:
-            task_spec = f"extend by {self.extend_by_mb}MB"
-            hint_cmd = f"lvextend -L +{self.extend_by_mb}M /dev/{self.vg_name}/{self.lv_name}"
-        else:
-            task_spec = f"resize to {self.new_size_mb}MB total"
-            hint_cmd = f"lvextend -L {self.new_size_mb}M /dev/{self.vg_name}/{self.lv_name}"
+        self.target_mb = self._INITIAL_MB + self.extend_by_mb
 
         self.description = (
             f"Extend a logical volume:\n"
             f"  - Volume group: {self.vg_name}\n"
-            f"  - Logical volume: {self.lv_name}\n"
-            f"  - Task: {task_spec}\n"
+            f"  - Logical volume: {self.lv_name}  (currently {self._INITIAL_MB}MB)\n"
+            f"  - Task: extend by {self.extend_by_mb}MB (to ~{self.target_mb}MB)\n"
             f"  - Ensure LV is extended"
         )
 
         self.hints = [
-            f"Extend LV: {hint_cmd}",
+            f"Extend LV: lvextend -L +{self.extend_by_mb}M /dev/{self.vg_name}/{self.lv_name}",
             "Check current size: lvs or lvdisplay",
             "Extend by amount: lvextend -L +<size>M /dev/vg/lv",
-            "Resize to total: lvextend -L <size>M /dev/vg/lv",
             "Use all free space: lvextend -l +100%FREE /dev/vg/lv",
             "After extending, resize filesystem with xfs_growfs or resize2fs"
         ]
 
         return self
+
+    def inject_fault(self):
+        return _scratch_setup(self, self.device, self.vg_name,
+                              lv=self.lv_name, lv_mb=self._INITIAL_MB)
+
+    def restore_fault(self):
+        return _scratch_teardown(self, self.vg_name, self.device)
 
     def validate(self):
         checks = []
@@ -343,12 +403,12 @@ class ExtendLVTask(BaseTask):
             total_points += 4
 
             actual_size = get_lv_size_mb(self.vg_name, self.lv_name)
-            # Check if LV has been extended (allow some tolerance)
-            if actual_size and actual_size >= self.extend_by_mb:
+            # Require the LV to have actually grown toward the target size.
+            if actual_size and actual_size >= self.target_mb * 0.95:
                 checks.append(ValidationCheck("lv_extended", True, 8, f"LV size is {actual_size}MB (extended)"))
                 total_points += 8
             else:
-                checks.append(ValidationCheck("lv_extended", False, 0, f"LV size is {actual_size}MB (may not be extended)", max_points=8))
+                checks.append(ValidationCheck("lv_extended", False, 0, f"LV size is {actual_size}MB (expected ~{self.target_mb}MB)", max_points=8))
         else:
             checks.append(ValidationCheck("lv_exists", False, 0, f"LV not found", max_points=4))
 
@@ -360,7 +420,7 @@ class ExtendLVTask(BaseTask):
 class LVMFullWorkflowTask(BaseTask):
     """Complete LVM workflow: Create PV, VG, LV, format, and mount."""
 
-    exclusive_resource = 'physical_disk'
+    disk_slots = 1
 
     def __init__(self):
         super().__init__(
@@ -396,9 +456,12 @@ class LVMFullWorkflowTask(BaseTask):
 
         self.vg_name = params.get('vg_name', f'vg_exam{random.randint(1,99)}')
         self.lv_name = params.get('lv_name', f'lv_data{random.randint(1,99)}')
-        self.lv_size_mb = params.get('size', random.choice([200, 300, 400]))
-        self.mount_point = params.get('mount', f'/mnt/lvm{random.randint(1,99)}')
+        # RHEL 10 mkfs.xfs refuses filesystems <= 300MB, so keep XFS sizes above
+        # that. Loop practice disks are 500MB, so 350-450MB fits comfortably.
         self.fstype = params.get('fstype', 'xfs')
+        default_sizes = [350, 400, 450] if self.fstype == 'xfs' else [200, 300, 400]
+        self.lv_size_mb = params.get('size', random.choice(default_sizes))
+        self.mount_point = params.get('mount', f'/mnt/lvm{random.randint(1,99)}')
 
         self.description = (
             f"Complete LVM setup:\n"
@@ -469,13 +532,26 @@ class LVMFullWorkflowTask(BaseTask):
         else:
             checks.append(ValidationCheck("lv_mounted", False, 0, "Not mounted", max_points=3))
 
-        # Check 6: Persistent mount (3 points)
-        from validators.file_validators import validate_file_contains
-        if validate_file_contains('/etc/fstab', self.mount_point):
-            checks.append(ValidationCheck("persistent_mount", True, 3, "Entry in /etc/fstab"))
+        # Check 6: Persistent mount (3 points) — require a real source field, not
+        # just the mount point appearing somewhere (a broken "UUID= <mp>" line
+        # must NOT pass).
+        fstab_ok = False
+        try:
+            with open('/etc/fstab') as f:
+                for line in f:
+                    s = line.split('#', 1)[0].split()
+                    if len(s) >= 2 and s[1] == self.mount_point:
+                        source = s[0]
+                        if source and source not in ('UUID=', 'LABEL='):
+                            fstab_ok = True
+                            break
+        except OSError:
+            pass
+        if fstab_ok:
+            checks.append(ValidationCheck("persistent_mount", True, 3, "Valid entry in /etc/fstab"))
             total_points += 3
         else:
-            checks.append(ValidationCheck("persistent_mount", False, 0, "No fstab entry", max_points=3))
+            checks.append(ValidationCheck("persistent_mount", False, 0, "No valid fstab entry", max_points=3))
 
         passed = total_points >= (self.points * 0.7)
         return ValidationResult(self.id, passed, total_points, self.points, checks)
@@ -487,6 +563,8 @@ class ExtendVGTask(BaseTask):
     Fault-injection: creates vg_practice on loop0 at start, uses loop1
     (or sda) as the device to add. User must pvcreate + vgextend.
     """
+
+    disk_slots = 2
 
     has_fault_injection = True
     _VG = 'vg_practice'
@@ -512,24 +590,23 @@ class ExtendVGTask(BaseTask):
         self.new_device = None    # device user must add
 
     def generate(self, **params):
-        from utils.helpers import get_loop_devices, list_all_block_devices
-        loops = get_loop_devices()
+        from utils.helpers import (device_allocation_active, allocate_practice_device,
+                                    get_loop_devices)
+        self.vg_name = params.get('vg_name', f'vg_ext{_uid()}')
 
-        # Use loop0 for the existing VG, loop1 (or sda) as the device to add
-        if len(loops) >= 2:
-            self.base_device = loops[0]
-            self.new_device = loops[1]
-        elif len(loops) == 1:
-            self.base_device = loops[0]
-            # Try to find sda as the second device
-            all_devs = list_all_block_devices()
-            candidates = [d for d in all_devs if 'sda' in d and d != self.base_device]
-            self.new_device = candidates[0] if candidates else '/dev/sdb'
+        # Needs two distinct devices: one to build the VG on, one to add.
+        if device_allocation_active():
+            self.base_device = params.get('base_device') or allocate_practice_device() or '/dev/loop0'
+            self.new_device = params.get('new_device') or allocate_practice_device() or '/dev/loop1'
         else:
-            self.base_device = '/dev/vdb'
-            self.new_device = '/dev/vdc'
+            loops = get_loop_devices()
+            if len(loops) >= 2:
+                self.base_device, self.new_device = loops[0], loops[1]
+            elif len(loops) == 1:
+                self.base_device, self.new_device = loops[0], '/dev/sda'
+            else:
+                self.base_device, self.new_device = '/dev/loop0', '/dev/loop1'
 
-        self.vg_name = params.get('vg_name', self._VG)
         self.description = (
             f"Extend a volume group:\n"
             f"  - Volume group: {self.vg_name}  (already exists)\n"
@@ -567,7 +644,7 @@ class ExtendVGTask(BaseTask):
         import subprocess as _sp
         from tasks.troubleshooting import load_fault_state, clear_fault_state
 
-        state = load_fault_state()
+        state = load_fault_state(self.id)
         info = state.get('restore_info', {}) if state else {}
         vg = info.get('vg', self.vg_name)
         base_dev = info.get('base_dev', self.base_device)
@@ -579,8 +656,9 @@ class ExtendVGTask(BaseTask):
         _sp.run(['vgremove', '-ff', vg], capture_output=True)
         for dev in filter(None, [base_dev, new_dev]):
             _sp.run(['pvremove', '-ff', '-y', dev], capture_output=True)
+            _sp.run(['wipefs', '-a', dev], capture_output=True)
 
-        clear_fault_state()
+        clear_fault_state(self.id)
         return True, f"Removed {vg} and cleaned up PVs"
 
     def validate(self):
@@ -612,6 +690,9 @@ class ExtendVGTask(BaseTask):
 class RemoveLVTask(BaseTask):
     """Remove a logical volume safely."""
 
+    disk_slots = 1
+    has_fault_injection = True
+
     def __init__(self):
         super().__init__(
             id="lvm_lv_remove_001",
@@ -628,12 +709,16 @@ class RemoveLVTask(BaseTask):
             "Verify removal with 'lvs' command",
         ]
         self.requires_persistence = True
+        self.device = None
         self.vg_name = None
         self.lv_name = None
 
     def generate(self, **params):
-        self.vg_name = params.get('vg_name', f'vg_test{random.randint(1,99)}')
-        self.lv_name = params.get('lv_name', f'lv_remove{random.randint(1,99)}')
+        # Self-contained: provision a scratch VG+LV the candidate must remove.
+        self.device = params.get('device') or get_practice_device() or '/dev/loop0'
+        uid = _uid()
+        self.vg_name = params.get('vg_name', f'vg_test{uid}')
+        self.lv_name = params.get('lv_name', f'lv_remove{uid}')
 
         self.description = (
             f"Remove a logical volume:\n"
@@ -654,6 +739,13 @@ class RemoveLVTask(BaseTask):
 
         return self
 
+    def inject_fault(self):
+        return _scratch_setup(self, self.device, self.vg_name,
+                              lv=self.lv_name, lv_mb=100)
+
+    def restore_fault(self):
+        return _scratch_teardown(self, self.vg_name, self.device)
+
     def validate(self):
         checks = []
         total_points = 0
@@ -673,6 +765,10 @@ class RemoveLVTask(BaseTask):
 class ReduceLVTask(BaseTask):
     """Reduce a logical volume (ext4 only - XFS cannot shrink)."""
 
+    disk_slots = 1
+    has_fault_injection = True
+    _INITIAL_MB = 350
+
     def __init__(self):
         super().__init__(
             id="lvm_lv_reduce_001",
@@ -689,14 +785,17 @@ class ReduceLVTask(BaseTask):
             "Reducing LVs is risky and rarely tested on exam - extending is much more common",
         ]
         self.requires_persistence = True
+        self.device = None
         self.vg_name = None
         self.lv_name = None
         self.new_size_mb = None
 
     def generate(self, **params):
-        existing_vg, existing_lv = get_practice_lv()
-        self.vg_name = params.get('vg_name', existing_vg or 'vg_practice')
-        self.lv_name = params.get('lv_name', existing_lv or 'lv_practice')
+        # Self-contained: provision an ext4 LV (larger than target) to reduce.
+        self.device = params.get('device') or get_practice_device() or '/dev/loop0'
+        uid = _uid()
+        self.vg_name = params.get('vg_name', f'vg_prac{uid}')
+        self.lv_name = params.get('lv_name', f'lv_data{uid}')
         self.new_size_mb = params.get('new_size', random.choice([100, 150, 200]))
 
         self.description = (
@@ -719,6 +818,13 @@ class ReduceLVTask(BaseTask):
         ]
 
         return self
+
+    def inject_fault(self):
+        return _scratch_setup(self, self.device, self.vg_name,
+                              lv=self.lv_name, lv_mb=self._INITIAL_MB, fstype='ext4')
+
+    def restore_fault(self):
+        return _scratch_teardown(self, self.vg_name, self.device)
 
     def validate(self):
         checks = []

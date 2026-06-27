@@ -208,9 +208,18 @@ class ResultsDB:
                 interval = row['interval_days']
                 reps = row['repetitions']
 
-            # SM-2 algorithm
+            # SM-2 algorithm.
+            # Map the pass/fail + score onto SM-2's 0-5 quality grade. A perfect
+            # score must reach 5 — at q=4 the EF delta is exactly 0, so without a
+            # 5 the easiness factor could only ever stay flat or shrink toward the
+            # 1.3 floor (intervals would never grow).
             if passed:
-                quality = 4 if score >= max_score * 0.9 else 3
+                if score >= max_score:
+                    quality = 5
+                elif score >= max_score * 0.9:
+                    quality = 4
+                else:
+                    quality = 3
                 reps += 1
                 if reps == 1:
                     interval = 1

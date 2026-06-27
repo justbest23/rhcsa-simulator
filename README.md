@@ -1,513 +1,245 @@
 # RHCSA Mock Exam Simulator
 
-A realistic command-line RHCSA EX200 v10 (Red Hat Enterprise Linux 10) exam simulator that generates exam tasks, validates your system configuration, and tracks your progress over time.
+A realistic command-line **RHCSA EX200 v10** (Red Hat Enterprise Linux 10) exam
+simulator. It generates exam tasks, sets up the practice environment for you,
+validates your real system configuration with safe read-only checks, and tracks
+your progress over time.
 
-> **EX200 v10 aligned**: All tasks cover the official Red Hat EX200 v10 exam objectives. Containers/Podman and DNF module streams have been removed (they are not on the v10 exam). Flatpak, systemd timers, tuning profiles (tuned-adm), and secure file transfer (scp) are included as they appear on the v10 objectives.
+> **EX200 v10 aligned** — tasks cover the Red Hat EX200 v10 objectives. The bank
+> currently ships **194 tasks across 25 categories in 8 domains**. Flatpak,
+> systemd timers, tuning profiles (`tuned-adm`), and secure file transfer are
+> included; legacy module streams are not.
 
-> **Note**: This project is under active development. While functional and useful for RHCSA prep, you may encounter bugs or incomplete features. Contributions, bug reports, and feedback are welcome!
+> **Active development** — functional and useful for RHCSA prep, but you may hit
+> rough edges. Bug reports and contributions welcome.
 
-## Features
+---
 
-### Learning Modes
-- **Learn Mode**: Study RHCSA concepts with detailed explanations, command syntax, examples, common mistakes, and exam tricks
-- **Guided Practice**: Practice tasks with progressive 3-level hints (concept → command structure → full solution)
-- **Command Recall Training**: Build muscle memory by typing commands before execution with instant accuracy feedback
+## Quick Start
 
-### Testing Modes
-- **Full Exam Mode**: Simulates a complete RHCSA exam with 15-20 tasks covering all objectives
-- **Practice Mode**: Focus on specific categories (Users, LVM, SELinux, etc.) at different difficulty levels with **retry support**
-- **Scenario Mode**: Multi-step real-world scenarios that combine multiple skills
-- **Troubleshooting Mode**: Diagnose and fix broken system configurations
+```bash
+# 1. On a RHEL 10 / Rocky 10 / Alma 10 VM, become root
+sudo -i
 
-### Core Features
-- **Automatic Validation**: Validates your system configuration using safe, read-only commands
-- **Adaptive Feedback**: Explains what was expected vs. what was found for each failed check
-- **Progress Tracking**: Saves exam results and displays statistics over time
-- **Weak Area Analysis**: Identifies your weak spots and provides targeted recommendations
-- **Bookmarks**: Save difficult tasks to revisit later
-- **Export Reports**: Generate progress reports in TXT, HTML, or PDF format
-- **Timer Support**: Optional 2.5-hour timer to simulate real exam conditions
-- **Offline Operation**: No internet connection required
-- **Safe & Secure**: Uses command whitelisting and validation-only approach
+# 2. Get the code
+git clone https://github.com/justbest23/rhcsa-simulator.git
+cd rhcsa-simulator
 
-### Practice Disk Support
-- **Dynamic Device Detection**: LVM tasks automatically detect available disks
-- **Loop Device Support**: Create virtual practice disks - no extra hardware needed!
-- **Easy Setup**: Menu-driven setup for practice disks (option 13)
-- **Works on Cloud VMs**: Practice LVM on AWS/Azure/GCP without adding volumes
+# 3. Install (interactive). For an unattended install use: ./install.sh --yes
+./install.sh
 
-### AI-Powered Feedback (Optional)
-- **Intelligent Analysis**: Line-by-line command analysis using Claude AI
-- **Smart Explanations**: Understands WHY you failed, not just that you failed
-- **Approach Comparison**: Compares your solution to optimal approaches
-- **Contextual Tips**: RHCSA exam tips personalized to each task
-- **Command Tracking**: Automatically tracks and categorizes commands you execute
+# 4. Launch (must be root — validation inspects real system state)
+rhcsa-simulator
 
-**Setup**: See [AI_SETUP.md](AI_SETUP.md) for configuration instructions (requires Anthropic API key)
+# 5. At the menu, press  E  for a full Mock Exam, or  Q  for a 5-task quick round.
+```
+
+That's it. The simulator **auto-creates the practice disks it needs** (loop
+devices, plus any spare disk such as `/dev/sda`) and **sets up each task's
+starting state** when an exam begins — so a "kill the apache processes" task
+actually has processes running, and an "extend the logical volume" task actually
+has a volume to extend. When the exam ends, it tears all of that back down.
+
+**Typical loop:** read a task → do it on the system in another terminal → come
+back and press Enter to validate → review per-check feedback and score.
+
+---
 
 ## Requirements
 
-- **OS**: RHEL 10, Rocky Linux 9/10, or Alma Linux 9/10 (EX200 v10 exam targets RHEL 10)
-- **Python**: 3.9 or later (included in RHEL 10)
-- **Privileges**: Must run as root (uses `sudo`)
-- **Dependencies**: None (uses Python standard library only)
+| | Minimum |
+|---|---|
+| **OS** | RHEL 10, Rocky Linux 9/10, or AlmaLinux 9/10 (EX200 v10 targets RHEL 10) |
+| **Python** | 3.6+ (ships with the OS) |
+| **Privileges** | root (validation reads users, services, mounts, SELinux, etc.) |
+| **Dependencies** | none — Python standard library only |
+| **Disk** | a few hundred MB free under `/var/lib/rhcsa-simulator` for loop-device images |
+| **Network** | not required (optional, only for the DNF-history practice setup) |
+
+### Recommended VM configuration
+
+Practice on a **throwaway VM you can snapshot/revert**, never a machine you care
+about — tasks change real system state (users, partitions, services, firewall,
+SELinux).
+
+- **vCPUs:** 2
+- **RAM:** 2–4 GB
+- **Primary disk:** 20 GB (OS)
+- **A spare disk for storage practice:** optional. The simulator auto-creates
+  500 MB loop devices, so you don't *need* one. If you add a small spare disk
+  (e.g. a 1–2 GB `/dev/sda`), it is detected and added to the practice device
+  pool automatically — handy for realistic `fdisk`/`parted` partitioning.
+- **Install type:** minimal install is fine.
+- **Snapshot first:** take a VM snapshot before a session so you can revert.
+- **SELinux:** leave it **Enforcing** for realistic SELinux tasks.
+- **Networking:** any NAT/bridged setup; only needed if you want the optional
+  DNF transaction-history practice data.
+
+> Cloud VMs (AWS/Azure/GCP) work well — loop devices mean you don't have to
+> attach extra block storage to practice LVM/partitioning.
+
+---
 
 ## Installation
 
-### Quick Install
+### Install script
 
 ```bash
-# Download or clone the repository
 cd rhcsa-simulator
-
-# Run installation script
-sudo ./install.sh
+./install.sh            # interactive
+./install.sh --yes      # unattended (overwrite existing install, no prompts)
+./install.sh --no-populate   # skip the optional DNF-history setup
 ```
 
-The installer will:
-- Check Python version
-- Copy files to `/opt/rhcsa-simulator`
-- Create symlink at `/usr/local/bin/rhcsa-simulator`
-- Set proper permissions
+The installer:
+- checks the Python version and OS,
+- copies files to `/opt/rhcsa-simulator`,
+- creates the `rhcsa-simulator` command at `/usr/local/bin/rhcsa-simulator`,
+- sets permissions,
+- offers to build some DNF transaction history for the package-history tasks.
 
-### Manual Installation
+`install.sh` auto-detects a non-interactive shell (piped/scripted) and runs
+unattended, so it won't stall in automation.
+
+### Run without installing
 
 ```bash
-sudo mkdir -p /opt/rhcsa-simulator
-sudo cp -r * /opt/rhcsa-simulator/
-sudo chmod +x /opt/rhcsa-simulator/rhcsa_simulator.py
-sudo ln -s /opt/rhcsa-simulator/rhcsa_simulator.py /usr/local/bin/test-rhcsa-simulator
+sudo python3 rhcsa_simulator.py
 ```
+
+---
 
 ## Usage
 
-### Launch the Simulator
+Launch the interactive menu:
 
 ```bash
-sudo test-rhcsa-simulator
+sudo rhcsa-simulator
 ```
 
-**Note**: Root privileges are required to validate system state (users, services, permissions, etc.)
+Main menu options:
 
-### Exam Mode
+| Key | Mode | What it does |
+|---|---|---|
+| `Q` | **Quick Practice** | 5 random tasks, fast feedback |
+| `E` | **Mock Exam** | Full timed exam (20–25 tasks) with environment setup + reboot-persistence simulation |
+| `1` | **Learn Mode** | Study by domain — concepts, commands, tips |
+| `2` | **Practice Mode** | One category at a time, with retry & progressive hints |
+| `3` | **Adaptive Mode** | SM-2 spaced repetition — focuses your weak/overdue areas |
+| `4` | **Dashboard** | Stats, history, weak areas |
+| `5` | **Export Report** | Write a progress report (text) to `data/` |
+| `6` | **Result History** | Drill into past exams task by task |
+| `S` | **Setup** | Practice disks, system reset, DNF-history setup |
+| `0` | Exit | |
 
-1. Select "Exam Mode" from main menu
-2. Review exam information (tasks, duration, pass threshold)
-3. Press Enter to generate exam tasks
-4. Read all tasks carefully
-5. Complete tasks on your Linux system
-6. Return to simulator and press Enter to validate
-7. Review your results and detailed feedback
+### Command-line shortcuts
 
-### Learn Mode
-
-1. Select "Learn Mode" from main menu
-2. Choose a topic to study
-3. Review:
-   - Concept explanations
-   - Command syntax with examples
-   - Common mistakes to avoid
-   - Exam-specific tricks and tips
-4. Optionally jump to practice mode for that topic
-
-### Guided Practice Mode
-
-1. Select "Guided Practice" from main menu
-2. Choose a category and difficulty level
-3. Read each task carefully
-4. Use progressive hints if needed:
-   - Hint 1: Concept reminder
-   - Hint 2: Command structure and syntax
-   - Hint 3: Full solution with examples
-5. Complete task and get adaptive feedback
-6. Review detailed explanations for any failures
-
-### Command Recall Training
-
-1. Select "Command Recall" from main menu
-2. Choose a category and difficulty level
-3. Read the task description
-4. Type the command(s) you would use
-5. Get instant feedback on command accuracy
-6. Build muscle memory and improve speed
-
-### Practice Mode
-
-1. Select "Practice Mode" from main menu
-2. Choose a category:
-   - Users & Groups
-   - Permissions & ACLs
-   - LVM (Logical Volume Management)
-   - SELinux
-   - Services (systemd)
-   - And more...
-3. Select difficulty level (easy/exam/hard)
-4. Complete each task and get immediate feedback
-5. **If you fail**: Choose to Retry, see Solution, or Continue
-6. Review fix suggestions for each failed check
-
-### Setup Practice Disks (for LVM)
-
-If you don't have spare disks for LVM practice:
-
-1. Select "Setup Practice Disks" from main menu (option 13)
-2. Choose "Create practice disks (2 x 500MB)"
-3. Virtual loop devices are created automatically
-4. LVM tasks will now use these devices
-
-**Manual method:**
 ```bash
-# Create disk images
-sudo dd if=/dev/zero of=/tmp/disk1.img bs=1M count=500
-sudo dd if=/dev/zero of=/tmp/disk2.img bs=1M count=500
-
-# Attach as loop devices
-sudo losetup -f --show /tmp/disk1.img  # Returns /dev/loop0
-sudo losetup -f --show /tmp/disk2.img  # Returns /dev/loop1
-
-# Now practice LVM on /dev/loop0, /dev/loop1
+rhcsa-simulator --quick            # 5 random tasks
+rhcsa-simulator --quick lvm        # 5 LVM tasks
+rhcsa-simulator --exam             # jump straight into a mock exam
+rhcsa-simulator --practice lvm     # practice a specific category
+rhcsa-simulator --learn            # study mode
+rhcsa-simulator --adaptive         # SM-2 weak-area practice
+rhcsa-simulator --list-categories  # list categories/domains (no root needed)
+rhcsa-simulator --version
 ```
 
-### View Progress
+---
 
-Track your improvement over time:
-- Overall statistics (average score, pass rate)
-- Recent exam results
-- Performance by category
+## Practice disks (LVM / partitioning / swap / filesystems)
 
-### Weak Area Analysis
+You normally don't have to do anything — exams provision disks automatically.
+To manage them yourself, use **Setup → Practice Disks**:
 
-Identify where you need more practice:
-1. Select "Weak Areas" from main menu
-2. View categories with lowest success rates
-3. Get personalized recommendations
-4. Focus your study time effectively
+- **Create loop devices** — three 500 MB virtual disks (no spare hardware needed).
+- **Use a real disk** — point practice at a spare drive already in the VM.
+- **Clean up / reset** — remove practice LVM structures and detach loop devices.
 
-### Bookmarks
+Under the hood, every whole-disk task in an exam is handed a **distinct** device
+from the pool, so an LVM task and a partitioning task never collide on the same
+disk. Loop-device images live in `/var/lib/rhcsa-simulator/loops/`.
 
-Save tasks to revisit later:
-- Bookmark difficult tasks during practice
-- Review all bookmarked tasks from menu
-- Clear bookmarks when mastered
+**Setup also offers:** *System Reset* (remove practice artifacts — LVM, swap
+files, practice repos, cron/at jobs, scripts — without touching SSH/network/users)
+and *Populate Practice Environment* (build DNF transaction history).
 
-### Export Reports
+---
 
-Generate progress reports:
-1. Select "Export Report" from main menu
-2. Choose format: TXT, HTML, or PDF
-3. Share or print your progress
+## Task domains & categories
 
-## Recommended Learning Path
+8 EX200 v10 domains, 25 categories:
 
-For best results, follow this progression:
+1. **Software Management** — packages, repos, flatpak
+2. **System Setup & Boot** — boot targets, boot recovery, journald
+3. **Users, Groups & Permissions** — users/groups, permissions/ACLs, essential tools
+4. **Storage & Filesystems** — partitioning, LVM, filesystems, swap, network storage
+5. **Network & DNS** — networking, SSH
+6. **Systemd, Services & Processes** — services, systemd timers, processes, time services, troubleshooting
+7. **Security** — SELinux, firewall
+8. **Automation & Scripting** — scheduling (cron/at/timers), shell scripting
 
-1. **Learn** - Study each topic with Learn Mode
-   - Understand concepts before practicing
-   - Review command syntax and examples
-   - Learn common mistakes and exam tricks
+Run `rhcsa-simulator --list-categories` for the live list and per-category task counts.
 
-2. **Guided Practice** - Build confidence with hints
-   - Start practicing tasks with support
-   - Use hints when stuck
-   - Learn from adaptive feedback
+---
 
-3. **Command Recall** - Build muscle memory
-   - Practice typing commands from memory
-   - Improve speed and accuracy
-   - Build exam-day confidence
+## How it works
 
-4. **Practice Mode** - Test without hints
-   - Validate your knowledge independently
-   - Identify weak areas
-   - Build problem-solving skills
+**Read-only validation.** The simulator checks your work with whitelisted,
+timeout-protected, read-only commands (`id`, `lsblk`, `systemctl is-active`,
+`getenforce`, …). It does not modify your system *to grade* it — only the
+exam's setup/teardown phase changes state, and it reverses what it created.
 
-5. **Exam Mode** - Full exam simulation
-   - Take complete timed exams
-   - Simulate real exam pressure
-   - Track your progress over time
+**Scoring.** Each task is worth points with multiple checks and partial credit.
+Default pass threshold is 70%. A full exam is 20–25 tasks over a 3-hour timer
+(configurable), followed by a reboot-persistence simulation for tasks that must
+survive a reboot.
 
-**Pro Tip**: Cycle through topics rather than mastering one at a time. This improves retention and helps you see connections between different RHCSA objectives.
+**Progress.** Results and spaced-repetition state are stored in a local SQLite
+database under `/opt/rhcsa-simulator/data/` (`ResultsDB`). Adaptive mode uses an
+SM-2 schedule (per-category easiness factor, 1→6→interval×EF progression).
 
-## Task Categories
-
-The simulator covers **100% of RHCSA EX200 exam objectives**:
-
-### Core System Administration
-1. **Essential Tools** - find, grep, tar, archives
-2. **Users & Groups** - user/group management, sudo
-3. **Permissions** - chmod, chown, ACLs, special bits
-4. **Services** - systemd service management
-5. **Boot Targets** - multi-user, graphical targets
-6. **Processes** - process management, priorities
-7. **Scheduling** - cron, at, systemd timers
-
-### Storage Management
-8. **LVM** - physical volumes, volume groups, logical volumes
-9. **File Systems** - create, mount, fstab, XFS, ext4
-10. **Disk Partitioning** - fdisk, parted, GPT/MBR
-11. **RAID** - mdadm arrays, persistent configuration
-12. **Advanced Storage** - Stratis, thin provisioning, swap
-
-### Networking & Security
-13. **Networking** - interface configuration, DNS, hostnames
-14. **SELinux** - contexts, booleans, modes
-15. **SSH** - key generation, authorized_keys, sshd security
-16. **Firewall** - firewalld zones, services, ports
-
-### Additional Topics
-17. **Shell Scripting** - bash scripts, conditionals, loops, arguments
-18. **Package Management** - dnf, rpm, repos, module streams
-19. **Time Services** - chrony, NTP, timezone configuration
-20. **Network Storage** - NFS mounts, autofs, CIFS/SMB
-21. **Containers** - Podman basics
-
-## Example Tasks
-
-### User Management
-```
-Task: Create a user named 'examuser42' with the following requirements:
-  - UID: 2500
-  - Primary group: developers
-  - Supplementary groups: wheel, sysadmin
-  - Home directory: /home/examuser42
-  - Login shell: /bin/bash
-```
-
-### SELinux
-```
-Task: Configure SELinux context for directory '/srv/web01':
-  - Set SELinux type to: httpd_sys_content_t
-  - Apply context recursively to all files
-  - Make the change persistent across relabels
-```
-
-### Services
-```
-Task: Configure the 'httpd' service:
-  - Start the service
-  - Enable the service to start at boot
-```
-
-## How It Works
-
-### Validation Process
-
-The simulator uses **read-only validation**:
-- Does NOT modify your system
-- Only checks if tasks were completed correctly
-- Uses safe, whitelisted commands (`id`, `ls`, `systemctl status`, etc.)
-- All commands have timeout protection
-- Command injection prevention
-
-### Scoring
-
-- Each task has a point value (4-12 points typically)
-- Tasks have multiple validation checks
-- Partial credit is awarded for partial completion
-- Pass threshold: 70% (configurable)
-
-### Results Storage
-
-Results are saved to JSON files in `/opt/rhcsa-simulator/data/results/`:
-- Exam ID and timestamp
-- Task-by-task results
-- Category breakdown
-- Total score and pass/fail status
+---
 
 ## Architecture
 
 ```
 rhcsa-simulator/
-├── rhcsa_simulator.py       # Main entry point
-├── config/                   # Configuration
-├── core/                     # Orchestration (exam, practice, menu, results)
-├── tasks/                    # Task categories (20+ task types)
-├── validators/               # Validation framework
-├── utils/                    # Utilities (logging, formatting, helpers)
-└── data/                     # Results storage
+├── rhcsa_simulator.py   # entry point / CLI
+├── config/              # settings, exam objectives
+├── core/                # exam, practice, learn, adaptive, menu, results_db, reboot engine
+├── tasks/               # task definitions by category (+ fault injection/teardown)
+├── validators/          # safe read-only validation framework
+├── device/              # loop-device / practice-disk management
+├── utils/               # helpers, formatting, logging, device pool/allocator
+└── data/                # SQLite progress DB
 ```
 
-## Extending the Simulator
+## Extending — adding a task
 
-### Adding New Tasks
+1. Open the category file (e.g. `tasks/users_groups.py`).
+2. Subclass `BaseTask`, decorate with `@TaskRegistry.register("category")`.
+3. Implement `generate()` (build the prompt) and `validate()` (return a
+   `ValidationResult`).
+4. If the task needs a whole disk, set `disk_slots = 1` so the allocator gives
+   it a dedicated device. If it needs a starting state (a process to kill, an LV
+   to extend), add `has_fault_injection = True` with `inject_fault()` /
+   `restore_fault()`.
 
-1. Open the appropriate category file (e.g., `tasks/users_groups.py`)
-2. Create a new class extending `BaseTask`
-3. Register with `@TaskRegistry.register("category_name")`
-4. Implement `generate()` and `validate()` methods
+## AI-powered feedback (optional)
 
-Example:
-
-```python
-@TaskRegistry.register("users_groups")
-class MyNewTask(BaseTask):
-    def __init__(self):
-        super().__init__(
-            id="my_task_001",
-            category="users_groups",
-            difficulty="exam",
-            points=8
-        )
-
-    def generate(self, **params):
-        self.description = "Task description here"
-        self.hints = ["Hint 1", "Hint 2"]
-        return self
-
-    def validate(self):
-        checks = []
-        # Add validation checks
-        return ValidationResult(self.id, passed, score, max_score, checks)
-```
-
-## Security
-
-- **Command Whitelisting**: Only approved read-only commands
-- **Timeout Protection**: All commands have 5-second timeout
-- **Pattern Blocking**: Detects dangerous patterns (rm -rf, etc.)
-- **No System Modifications**: Validation is read-only
-- **Root Required**: Needed to check system state, not to modify it
+Set `ANTHROPIC_API_KEY` to enable line-by-line command analysis. See
+[AI_SETUP.md](AI_SETUP.md).
 
 ## Troubleshooting
 
-### "Must run as root" error
-```bash
-sudo rhcsa-simulator  # Don't forget sudo!
-```
-
-### Module import errors
-```bash
-# Ensure you're in the correct directory
-cd /opt/rhcsa-simulator
-sudo python3 rhcsa_simulator.py
-```
-
-### No tasks available
-- Run `sudo rhcsa-simulator` to initialize task registry
-- Check logs at `/opt/rhcsa-simulator/data/logs/rhcsa_simulator.log`
-
-### LVM tasks reference missing devices (e.g., /dev/vdb)
-Use the built-in practice disk feature:
-```bash
-sudo rhcsa-simulator
-# Select option 13: Setup Practice Disks
-# Create 2 x 500MB practice disks
-```
-
-Or manually:
-```bash
-sudo dd if=/dev/zero of=/tmp/disk1.img bs=1M count=500
-sudo losetup -f --show /tmp/disk1.img
-# Use the returned device (e.g., /dev/loop0) for LVM practice
-```
-
-### Cleaning up practice disks
-```bash
-# Remove LVM structures first
-sudo vgremove -f <vgname>
-sudo pvremove /dev/loop0
-
-# Detach loop devices
-sudo losetup -d /dev/loop0
-sudo losetup -d /dev/loop1
-
-# Remove image files
-sudo rm /var/lib/rhcsa-simulator/loops/*.img
-```
-
-## Development
-
-### Project Stats
-- **Lines of Code**: ~16,000+
-- **Task Categories**: 21
-- **Task Types**: 178 tasks covering 100% of RHCSA objectives
-- **Validators**: 90+ validation functions
-- **Modes**: 8 (Learn, Guided Practice, Command Recall, Exam, Practice, Scenario, Troubleshoot, Flashcards)
-- **Dependencies**: 0 (Python stdlib only, optional: anthropic for AI feedback)
-
-### Testing Tasks
-
-```python
-# Run from project root
-cd /opt/rhcsa-simulator
-sudo python3 -c "
-from tasks.registry import TaskRegistry
-TaskRegistry.initialize()
-TaskRegistry.print_statistics()
-"
-```
-
-## Contributing
-
-To add more tasks:
-1. Choose a category or create a new one
-2. Follow the pattern in `tasks/users_groups.py`
-3. Use existing validators from `validators/` modules
-4. Test thoroughly on a test system
+- **"must be run as root"** — launch with `sudo`; validation needs root.
+- **Storage tasks fail in a container** — loop devices/SELinux/systemd may be
+  limited; use a real RHEL/Rocky/Alma VM.
+- **Left in a messy state after a crash** — run **Setup → System Reset**; it also
+  restores any practice "faults" that were still active.
+- **Reinstall from scratch** — re-run `./install.sh --yes`.
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file for details.
-
-This is an educational tool for RHCSA exam preparation. Use at your own risk on test systems only.
-
-## Disclaimer
-
-- This simulator is NOT affiliated with Red Hat
-- Practice on test systems only
-- Always backup important data
-- Validation commands are safe but require root to check system state
-
-## Resources
-
-- [RHCSA Exam Objectives](https://www.redhat.com/en/services/training/ex200-red-hat-certified-system-administrator-rhcsa-exam)
-- [RHEL Documentation](https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/)
-
-## Version
-
-**v3.0.0** - 100% RHCSA Coverage Release (Current)
-- **178 tasks**: 41 new tasks for complete RHCSA EX200 coverage
-- **Shell Scripting**: 6 tasks (conditionals, loops, arguments, exit codes)
-- **Package Management**: 8 tasks (dnf, rpm, repos, module streams)
-- **NFS/Autofs**: 6 tasks (mounts, autofs, home directories)
-- **Time Services**: 5 tasks (chrony, NTP, timezone)
-- **Disk Partitioning**: 5 tasks (fdisk, parted, GPT/MBR)
-- **SSH**: 4 tasks (keys, authorized_keys, sshd security)
-- **RAID**: 4 tasks (create, persist, manage, remove)
-- **SMB/CIFS**: 2 tasks (mount shares, credentials)
-- **Enhanced validation**: New safe commands for all new task types
-
-**v2.5.0** - Auto-Cleanup & Content Expansion
-- **DeviceManager**: Automatic cleanup of LVM/disk resources between tasks
-- **Comprehensive boot training**: 14 boot tasks including password reset procedure practice
-- **Expanded learning content**: Detailed boot/recovery section with rd.break walkthrough
-- **Bug fixes**: Fixed f-string hints, command recall evaluation
-- **CLI quick modes**: `--quick lvm`, `--exam`, `--learn users`
-
-**v2.2.0** - Practice Disk Support
-- Dynamic device detection for LVM tasks
-- Loop device support - practice LVM without extra disks
-- "Setup Practice Disks" menu option
-- Works on cloud VMs (AWS, Azure, GCP) without adding volumes
-
-**v2.1.0** - Enhanced Practice & Analytics
-- Retry option in Practice Mode (R to retry, S for solution)
-- Scenario Mode - multi-step real-world scenarios
-- Troubleshooting Mode - diagnose broken systems
-- Weak Area Analysis with recommendations
-- Bookmarks - save tasks for later
-- Export Reports (TXT, HTML, PDF)
-- Fix suggestions for failed validation checks
-
-**v2.0.0** - AI-Powered Feedback Release
-- Added AI-powered intelligent feedback using Claude API
-- Command history tracking and analysis
-- Line-by-line approach comparison
-- Contextual failure explanations
-- Complete RHCSA exam coverage (all 12 categories)
-
-**v1.0.0** - Initial release
-
----
-
-**Good luck with your RHCSA certification!**
+See [LICENSE](LICENSE).

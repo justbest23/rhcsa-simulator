@@ -27,7 +27,7 @@ class PracticeSession:
 
     def __init__(self):
         self.category = None
-        self.difficulty = "exam"
+        self.difficulty = None  # None => prompt in start(); set explicitly to skip prompt
         self.task_count = settings.DEFAULT_PRACTICE_TASKS
         self.skip_reboot = False
 
@@ -35,11 +35,15 @@ class PracticeSession:
         """Start practice session."""
         TaskRegistry.initialize()
 
-        self.category = self._select_category()
+        # Honor a pre-selected category/difficulty (e.g. from `--practice <cat>`);
+        # only prompt for what hasn't already been set.
+        if not self.category:
+            self.category = self._select_category()
         if not self.category:
             return
 
-        self.difficulty = self._select_difficulty()
+        if not self.difficulty:
+            self.difficulty = self._select_difficulty()
         self.skip_reboot = self._select_reboot_filter()
 
         tasks = TaskRegistry.get_practice_tasks(

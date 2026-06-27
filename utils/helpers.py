@@ -568,6 +568,11 @@ def get_swap_practice_device():
     import subprocess
     import os
 
+    # During exam generation, draw a distinct device from the allocator so the
+    # swap-partition task doesn't collide with other disk tasks.
+    if device_allocation_active():
+        return allocate_practice_device()
+
     cfg = get_practice_device_config()
 
     if cfg and cfg['mode'] == 'real' and cfg.get('devices'):
@@ -738,6 +743,11 @@ def get_practice_device():
     Returns:
         str: Device path or None if none available
     """
+    # During exam generation an allocator hands out a *distinct* device per
+    # consuming task so two disk tasks never collide on the same disk.
+    if device_allocation_active():
+        return allocate_practice_device()
+
     # Use DeviceManager for smart detection (skips system disks, caches result,
     # recognizes disks with existing practice PVs/VGs)
     # Check saved config first
@@ -761,6 +771,85 @@ def get_practice_device():
     if loop_devices:
         return loop_devices[0]
 
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Exam device pool + allocator
+#
+# Several task categories (LVM, partitioning, filesystems, swap) each need a
+# whole disk. Historically they all called get_practice_device() and got the
+# *same* first device, so an LVM task and a partition task in the same exam
+# would fight over one disk. The allocator below hands each consuming task a
+# distinct device drawn from a pool of >= `min_loops` loop devices (auto-created
+# if missing) plus any spare non-system real disk (e.g. /dev/sda).
+# ---------------------------------------------------------------------------
+
+_device_alloc_pool = None   # list while allocation is active, else None
+_device_alloc_idx = 0
+
+
+def ensure_loop_devices(minimum=3):
+    """Ensure at least `minimum` loop practice devices exist; create if needed."""
+    loops = get_loop_devices()
+    if len(loops) < minimum:
+        create_practice_devices(count=minimum, size_mb=500)
+        loops = get_loop_devices()
+        if loops:
+            save_practice_device_config('loop', loops)
+    return get_loop_devices()
+
+
+def get_spare_real_disks():
+    """Non-system, unmounted real disks (e.g. /dev/sda) usable for practice."""
+    spares = []
+    try:
+        for d in list_all_block_devices():
+            if not d.get('is_system') and not d.get('mounted'):
+                spares.append(d['device'])
+    except Exception:
+        pass
+    return spares
+
+
+def build_device_pool(min_loops=3):
+    """Ordered list of distinct practice devices: loop devices (>= min_loops)
+    first, then spare non-system real disks (e.g. /dev/sda)."""
+    pool = list(ensure_loop_devices(min_loops))
+    for dev in get_spare_real_disks():
+        if dev not in pool:
+            pool.append(dev)
+    return pool
+
+
+def begin_device_allocation(min_loops=3):
+    """Start handing out distinct devices (call once at exam generation)."""
+    global _device_alloc_pool, _device_alloc_idx
+    _device_alloc_pool = build_device_pool(min_loops)
+    _device_alloc_idx = 0
+    return list(_device_alloc_pool)
+
+
+def end_device_allocation():
+    """Stop the allocator; get_practice_device() reverts to normal behaviour."""
+    global _device_alloc_pool, _device_alloc_idx
+    _device_alloc_pool = None
+    _device_alloc_idx = 0
+
+
+def device_allocation_active():
+    return _device_alloc_pool is not None
+
+
+def allocate_practice_device():
+    """Return the next un-allocated device, or None if the pool is exhausted."""
+    global _device_alloc_idx
+    if _device_alloc_pool is None:
+        return None
+    if _device_alloc_idx < len(_device_alloc_pool):
+        dev = _device_alloc_pool[_device_alloc_idx]
+        _device_alloc_idx += 1
+        return dev
     return None
 
 

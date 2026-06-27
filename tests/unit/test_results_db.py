@@ -133,8 +133,20 @@ class TestSM2Algorithm:
             score=10, max_score=10, passed=True,
         )
         stats = tmp_db.get_category_stats("selinux")
-        # With quality=4: ef = 2.5 + (0.1 - (5-4)*(0.08 + (5-4)*0.02)) = 2.5 + 0.0 = 2.5
-        assert stats["easiness_factor"] == pytest.approx(2.5, abs=0.01)
+        # Perfect score -> quality=5: ef = 2.5 + (0.1 - 0*(...)) = 2.6.
+        # (A perfect recall must be able to grow EF; q<=4 can only hold/shrink it.)
+        assert stats["easiness_factor"] == pytest.approx(2.6, abs=0.01)
+
+    def test_quality_scoring_perfect(self, tmp_db):
+        """A perfect score maps to SM-2 quality 5 and grows the easiness factor."""
+        for i in range(3):
+            tmp_db.save_practice_attempt(
+                task_id=f"t{i}", category="repos", difficulty="exam", domain=1,
+                score=10, max_score=10, passed=True,
+            )
+        stats = tmp_db.get_category_stats("repos")
+        # Three perfect passes -> EF climbs above the 2.5 starting point.
+        assert stats["easiness_factor"] > 2.5
 
     def test_failing_resets_interval(self, tmp_db):
         # Build up interval

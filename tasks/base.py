@@ -21,6 +21,11 @@ class BaseTask(ABC):
     the generate() and validate() methods.
     """
 
+    # Number of whole practice disks this task consumes (0 = none). The exam
+    # generator caps the number of disk tasks to the size of the device pool and
+    # hands each one a *distinct* device so they never collide on the same disk.
+    disk_slots = 0
+
     def __init__(self, id, category, difficulty, points):
         self.id = id
         self.category = category
@@ -49,6 +54,18 @@ class BaseTask(ABC):
     def validate(self):
         """Validate task completion. Returns ValidationResult."""
         pass
+
+    def provision_devices(self):
+        """Re-bind this task to freshly-allocated practice device(s).
+
+        Called once during exam generation while the device allocator is active.
+        The default re-runs generate(), so any task whose generate() pulls a
+        device via helpers.get_practice_device()/get_swap_practice_device() will
+        pick a *distinct* device from the allocator. Multi-disk tasks override
+        this to allocate the right number of devices.
+        """
+        if self.disk_slots:
+            self.generate()
 
     def validate_persistence(self):
         """

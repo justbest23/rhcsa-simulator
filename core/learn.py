@@ -88,17 +88,18 @@ class LearnMode:
             print()
             fmt.print_menu_option("Q", "Back to Main Menu")
 
-            choice = input("\nSelect domain (1-9 or Q): ").strip()
+            max_domain = max(EXAM_OBJECTIVES.keys())
+            choice = input(f"\nSelect domain (1-{max_domain} or Q): ").strip()
 
             if choice.lower() == "q":
                 return
 
             try:
                 domain_num = int(choice)
-                if 1 <= domain_num <= 9:
+                if domain_num in EXAM_OBJECTIVES:
                     self._show_domain_topics(domain_num, weak_cats, due_cats)
                 else:
-                    print(fmt.error("Invalid selection. Choose 1-9."))
+                    print(fmt.error(f"Invalid selection. Choose 1-{max_domain}."))
                     input("Press Enter to continue...")
             except ValueError:
                 print(fmt.error("Please enter a number or Q"))

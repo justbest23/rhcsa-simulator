@@ -17,7 +17,8 @@ logger = logging.getLogger(__name__)
 class CreateSwapPartitionTask(BaseTask):
     """Create and activate a swap partition."""
 
-    exclusive_resource = 'physical_disk'
+    disk_slots = 1
+
 
     def __init__(self):
         super().__init__(

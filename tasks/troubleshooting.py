@@ -29,36 +29,83 @@ FAULT_STATE_FILE = '/var/lib/rhcsa-simulator/active_fault.json'
 
 # ── Fault-state bookkeeping ───────────────────────────────────────────────────
 
-def save_fault_state(task_id: str, restore_info: dict):
-    os.makedirs(os.path.dirname(FAULT_STATE_FILE), exist_ok=True)
-    with open(FAULT_STATE_FILE, 'w') as f:
-        json.dump({'task_id': task_id, 'restore_info': restore_info}, f)
-
-
-def load_fault_state() -> dict | None:
+def _read_faults() -> dict:
+    """Return {task_id: restore_info} for all active faults (migrates legacy)."""
     try:
         with open(FAULT_STATE_FILE) as f:
-            return json.load(f)
+            data = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+    if isinstance(data, dict) and 'faults' in data and isinstance(data['faults'], dict):
+        return data['faults']
+    # Legacy single-entry format: {'task_id':..., 'restore_info':...}
+    if isinstance(data, dict) and 'task_id' in data:
+        return {data['task_id']: data.get('restore_info', {})}
+    return {}
+
+
+def _write_faults(faults: dict):
+    if faults:
+        os.makedirs(os.path.dirname(FAULT_STATE_FILE), exist_ok=True)
+        with open(FAULT_STATE_FILE, 'w') as f:
+            json.dump({'faults': faults}, f)
+    else:
+        try:
+            os.remove(FAULT_STATE_FILE)
+        except FileNotFoundError:
+            pass
+
+
+def save_fault_state(task_id: str, restore_info: dict):
+    """Record an active fault. Multiple concurrent faults are kept, keyed by
+    task_id, so exam tasks that inject in parallel don't clobber each other."""
+    faults = _read_faults()
+    faults[task_id] = restore_info
+    _write_faults(faults)
+
+
+def load_fault_state(task_id: str = None) -> dict | None:
+    """Return {'task_id', 'restore_info'} for the given task (or any one fault
+    when task_id is None, for the startup 'stale fault' warning)."""
+    faults = _read_faults()
+    if not faults:
         return None
+    if task_id is None:
+        task_id = next(iter(faults))
+    elif task_id not in faults:
+        return None
+    return {'task_id': task_id, 'restore_info': faults[task_id]}
 
 
-def clear_fault_state():
-    try:
-        os.remove(FAULT_STATE_FILE)
-    except FileNotFoundError:
-        pass
+def clear_fault_state(task_id: str = None):
+    """Clear one fault (task_id given) or all faults (task_id None)."""
+    if task_id is None:
+        _write_faults({})
+        return
+    faults = _read_faults()
+    faults.pop(task_id, None)
+    _write_faults(faults)
+
+
+def get_active_faults() -> dict:
+    """All active faults as {task_id: restore_info}."""
+    return _read_faults()
 
 
 def restore_any_active_fault():
-    """Called at startup and during system_reset to restore a stale fault."""
-    state = load_fault_state()
-    if not state:
+    """Called at startup and during system_reset to restore stale fault(s)."""
+    faults = _read_faults()
+    if not faults:
         return False, "No active fault"
-    task_id = state.get('task_id', '')
-    info = state.get('restore_info', {})
     msgs = []
+    for task_id, info in list(faults.items()):
+        _dispatch_restore(task_id, info, msgs)
+    clear_fault_state()
+    return True, '\n'.join(msgs)
 
+
+def _dispatch_restore(task_id, info, msgs):
+    """Restore a single fault by task_id (crash-recovery dispatcher)."""
     # Dispatch to the right restorer
     if task_id.startswith('fault_selinux_context'):
         _restore_selinux_context(info, msgs)
@@ -136,11 +183,42 @@ def restore_any_active_fault():
         if orig_hostname:
             subprocess.run(['hostnamectl', 'set-hostname', orig_hostname], capture_output=True)
         msgs.append(f"Cleaned up {iface} and {conn}")
+    elif task_id == 'proc_kill_001':
+        name = info.get('process')
+        d = info.get('dir')
+        if name:
+            subprocess.run(['pkill', '-x', name], capture_output=True)
+        if d:
+            import shutil as _sh
+            _sh.rmtree(d, ignore_errors=True)
+        msgs.append(f"Killed injected '{name}' processes")
+    elif task_id == 'proc_find_user_001':
+        user = info.get('username', 'apache')
+        subprocess.run(['pkill', '-u', user], capture_output=True)
+        if info.get('created_user'):
+            subprocess.run(['userdel', '-rf', user], capture_output=True)
+        msgs.append(f"Cleaned up processes for user '{user}'")
+    elif task_id.startswith('selinux_denial'):
+        import shutil as _sh
+        directory = info.get('directory')
+        if directory and os.path.exists(directory):
+            subprocess.run(['restorecon', '-Rv', directory], capture_output=True)
+            _sh.rmtree(directory, ignore_errors=True)
+        msgs.append(f"Removed injected SELinux practice dir {directory}")
+    elif (task_id.startswith('lvm_lv_') or task_id.startswith('lvm_extend')
+          or {'vg', 'dev'} <= set(info.keys())):
+        vg = info.get('vg')
+        dev = info.get('dev')
+        if vg:
+            subprocess.run(['lvremove', '-ff', vg], capture_output=True)
+            subprocess.run(['vgchange', '-an', vg], capture_output=True)
+            subprocess.run(['vgremove', '-ff', vg], capture_output=True)
+        if dev:
+            subprocess.run(['pvremove', '-ff', '-y', dev], capture_output=True)
+            subprocess.run(['wipefs', '-a', dev], capture_output=True)
+        msgs.append(f"Cleaned up scratch LVM ({vg})")
     else:
         msgs.append(f"Unknown fault type: {task_id}")
-
-    clear_fault_state()
-    return True, '\n'.join(msgs)
 
 
 # ── Shared restore helpers ────────────────────────────────────────────────────
