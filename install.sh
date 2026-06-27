@@ -19,6 +19,41 @@ INSTALL_DIR="/opt/rhcsa-simulator"
 BIN_LINK="/usr/local/bin/rhcsa-simulator"
 REQUIRED_PYTHON_VERSION="3.6"
 
+# Defaults / argument parsing
+ASSUME_YES=false      # auto-answer all [y/N] prompts (overwrite, non-RHEL continue)
+POPULATE=""           # ""=ask/auto, "yes"=force populate, "no"=skip populate
+
+usage() {
+    cat <<EOF
+Usage: $0 [options]
+
+  -y, --yes, --force   Run unattended: overwrite an existing installation and
+                       continue on non-RHEL systems without prompting.
+      --populate       Populate DNF transaction history without prompting.
+      --no-populate    Skip populating DNF transaction history.
+  -h, --help           Show this help and exit.
+
+If stdin is not a TTY (e.g. piped or run from a script), unattended mode is
+assumed automatically.
+EOF
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -y|--yes|--force) ASSUME_YES=true ;;
+        --populate) POPULATE="yes" ;;
+        --no-populate) POPULATE="no" ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
+    esac
+    shift
+done
+
+# No controlling terminal on stdin -> can't prompt, so assume unattended.
+if [ ! -t 0 ]; then
+    ASSUME_YES=true
+fi
+
 echo "========================================="
 echo "RHCSA Mock Exam Simulator - Installation"
 echo "========================================="
@@ -54,10 +89,14 @@ if [ -f /etc/redhat-release ]; then
     echo "Detected: ${OS_INFO}"
 else
     echo -e "${YELLOW}Warning: This tool is designed for RHEL/Rocky/Alma Linux${NC}"
-    read -p "Continue anyway? [y/N]: " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
+    if [ "$ASSUME_YES" = true ]; then
+        echo "Continuing anyway (unattended mode)."
+    else
+        read -p "Continue anyway? [y/N]: " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
     fi
 fi
 
@@ -65,13 +104,18 @@ fi
 echo "Creating installation directory..."
 if [ -d "$INSTALL_DIR" ]; then
     echo -e "${YELLOW}Warning: Installation directory already exists${NC}"
-    read -p "Remove existing installation? [y/N]: " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
+    if [ "$ASSUME_YES" = true ]; then
+        echo "Removing existing installation (unattended mode)..."
         rm -rf "$INSTALL_DIR"
     else
-        echo "Installation cancelled"
-        exit 1
+        read -p "Remove existing installation? [y/N]: " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            rm -rf "$INSTALL_DIR"
+        else
+            echo "Installation cancelled"
+            exit 1
+        fi
     fi
 fi
 
@@ -129,9 +173,21 @@ echo "Some practice tasks (e.g. DNF history) work best with a populated"
 echo "transaction history. This installs and removes small packages to"
 echo "build up ~12 DNF transactions. Nothing is permanently changed."
 echo
-read -p "Populate DNF transaction history now? [Y/n]: " -r
-echo
-if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+# Decide whether to populate: explicit flag wins, then unattended default (yes),
+# otherwise ask.
+if [ "$POPULATE" = "yes" ]; then
+    do_populate=true
+elif [ "$POPULATE" = "no" ]; then
+    do_populate=false
+elif [ "$ASSUME_YES" = true ]; then
+    do_populate=true
+else
+    read -p "Populate DNF transaction history now? [Y/n]: " -r
+    echo
+    if [[ $REPLY =~ ^[Nn]$ ]]; then do_populate=false; else do_populate=true; fi
+fi
+
+if [ "$do_populate" = true ]; then
     echo "Building DNF transaction history..."
     PRACTICE_PKGS=(tree dos2unix bc mtr strace lsof pv screen nmap zip ltrace telnet whois jq)
     CYCLES=0
