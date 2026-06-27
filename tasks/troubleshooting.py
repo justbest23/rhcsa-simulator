@@ -198,7 +198,15 @@ def _dispatch_restore(task_id, info, msgs):
         if info.get('created_user'):
             subprocess.run(['userdel', '-rf', user], capture_output=True)
         msgs.append(f"Cleaned up processes for user '{user}'")
-    elif task_id.startswith('lvm_lv_') or task_id == 'lvm_scratch':
+    elif task_id.startswith('selinux_denial'):
+        import shutil as _sh
+        directory = info.get('directory')
+        if directory and os.path.exists(directory):
+            subprocess.run(['restorecon', '-Rv', directory], capture_output=True)
+            _sh.rmtree(directory, ignore_errors=True)
+        msgs.append(f"Removed injected SELinux practice dir {directory}")
+    elif (task_id.startswith('lvm_lv_') or task_id.startswith('lvm_extend')
+          or {'vg', 'dev'} <= set(info.keys())):
         vg = info.get('vg')
         dev = info.get('dev')
         if vg:
