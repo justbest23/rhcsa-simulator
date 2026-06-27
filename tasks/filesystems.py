@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 class CreateFilesystemTask(BaseTask):
     """Create a filesystem on a device."""
 
-    exclusive_resource = 'physical_disk'
+    disk_slots = 1
 
     def __init__(self):
         super().__init__(
@@ -104,7 +104,7 @@ class CreateFilesystemTask(BaseTask):
 class MountFilesystemTask(BaseTask):
     """Mount a filesystem at a specific mount point."""
 
-    exclusive_resource = 'physical_disk'
+    disk_slots = 1
 
     def __init__(self):
         super().__init__(
@@ -200,7 +200,7 @@ class MountFilesystemTask(BaseTask):
 class PersistentMountTask(BaseTask):
     """Configure persistent mount in /etc/fstab using UUID."""
 
-    exclusive_resource = 'physical_disk'
+    disk_slots = 1
 
     def __init__(self):
         super().__init__(
@@ -350,7 +350,7 @@ class PersistentMountTask(BaseTask):
 class ConfigureSwapTask(BaseTask):
     """Swap configuration — lives in tasks/swap.py; kept here only to avoid import errors."""
 
-    exclusive_resource = 'physical_disk'
+    disk_slots = 1
 
     def __init__(self):
         super().__init__(
@@ -462,10 +462,9 @@ class ExtendFilesystemTask(BaseTask):
     formats it, and mounts it. The user must extend it to expected_size_mb.
     """
 
+    disk_slots = 1
+
     has_fault_injection = True
-    _VG = 'vg_practice'
-    _LV = 'lv_practice'
-    _MP = '/mnt/practice_extend'
     _INITIAL_MB = 150
 
     def __init__(self):
@@ -483,73 +482,62 @@ class ExtendFilesystemTask(BaseTask):
             "Always extend the LV first (lvextend), then resize the filesystem",
             "Verify new size with 'df -h' after resizing",
         ]
+        self.pv_dev = None
+        self.vg_name = None
+        self.lv_name = None
+        self.mount_point = None
         self.device = None
         self.fstype = None
         self.expected_size_mb = None
 
     def generate(self, **params):
-        self.device = f'/dev/mapper/{self._VG}-{self._LV}'
-        self.fstype = params.get('fstype', 'ext4')
+        from utils.helpers import get_practice_device
+        uid = ''.join(random.choices('0123456789', k=4))
+        self.pv_dev = params.get('device') or get_practice_device() or '/dev/loop0'
+        self.vg_name = params.get('vg_name', f'vg_prac{uid}')
+        self.lv_name = params.get('lv_name', f'lv_prac{uid}')
+        self.mount_point = params.get('mount_point', f'/mnt/practice_extend{uid}')
+        self.device = f'/dev/mapper/{self.vg_name}-{self.lv_name}'
+        # ext4 only: a 150MB XFS can't be created on RHEL 10 (xfs min > 300MB)
+        self.fstype = 'ext4'
         self.expected_size_mb = params.get('size', random.choice([250, 300, 350]))
-
-        grow_cmd = f'xfs_growfs {self._MP}' if self.fstype == 'xfs' else f'resize2fs {self.device}'
 
         self.description = (
             f"Extend a filesystem:\n"
             f"  - Device: {self.device}\n"
-            f"  - Mount point: {self._MP}\n"
+            f"  - Mount point: {self.mount_point}\n"
             f"  - Filesystem type: {self.fstype}  (currently {self._INITIAL_MB}MB)\n"
             f"  - Resize to approximately {self.expected_size_mb}MB\n"
             f"  - Keep the filesystem mounted — data must not be lost"
         )
         self.hints = [
-            f"Step 1 — extend the LV: lvextend -L {self.expected_size_mb}M /dev/{self._VG}/{self._LV}",
-            f"Step 2 — grow the filesystem: {grow_cmd}",
-            "Verify: df -h | grep practice_extend",
+            f"Step 1 — extend the LV: lvextend -L {self.expected_size_mb}M /dev/{self.vg_name}/{self.lv_name}",
+            f"Step 2 — grow the filesystem: resize2fs {self.device}",
+            f"Verify: df -h | grep {self.mount_point}",
         ]
         return self
 
     def inject_fault(self):
         import os
         import subprocess as _sp
-        from utils.helpers import get_loop_devices
 
-        check = _sp.run(['vgs', '--noheadings', '-o', 'vg_name'], capture_output=True, text=True)
-        if self._VG in (check.stdout or ''):
-            return True, f"{self._VG} already set up"
+        pv_dev, vg, lv, mp = self.pv_dev, self.vg_name, self.lv_name, self.mount_point
+        if not pv_dev:
+            return False, "No practice device available — run 'Setup → 1' first"
 
-        loops = get_loop_devices()
-        if not loops:
-            return False, "No loop devices available — run 'Setup → 1' first to create practice disks"
-
-        pv_dev = loops[0]
-        vg, lv, mp = self._VG, self._LV, self._MP
-
-        # pvcreate
         r = _sp.run(['pvcreate', '-ff', '-y', pv_dev], capture_output=True, text=True)
         if r.returncode != 0:
             return False, f"pvcreate failed: {r.stderr.strip()}"
-
-        # vgcreate
         r = _sp.run(['vgcreate', vg, pv_dev], capture_output=True, text=True)
         if r.returncode != 0:
             return False, f"vgcreate failed: {r.stderr.strip()}"
-
-        # lvcreate at initial size
         r = _sp.run(['lvcreate', '-L', f'{self._INITIAL_MB}M', '-n', lv, vg],
                     capture_output=True, text=True)
         if r.returncode != 0:
             return False, f"lvcreate failed: {r.stderr.strip()}"
-
-        # format
-        if self.fstype == 'xfs':
-            r = _sp.run(['mkfs.xfs', self.device], capture_output=True, text=True)
-        else:
-            r = _sp.run(['mkfs.ext4', '-F', self.device], capture_output=True, text=True)
+        r = _sp.run(['mkfs.ext4', '-F', self.device], capture_output=True, text=True)
         if r.returncode != 0:
-            return False, f"mkfs.{self.fstype} failed: {r.stderr.strip()}"
-
-        # mount
+            return False, f"mkfs.ext4 failed: {r.stderr.strip()}"
         os.makedirs(mp, exist_ok=True)
         r = _sp.run(['mount', self.device, mp], capture_output=True, text=True)
         if r.returncode != 0:
@@ -564,12 +552,12 @@ class ExtendFilesystemTask(BaseTask):
         import subprocess as _sp
         from tasks.troubleshooting import load_fault_state, clear_fault_state
 
-        state = load_fault_state()
+        state = load_fault_state(self.id)
         info = state.get('restore_info', {}) if state else {}
-        vg = info.get('vg', self._VG)
-        lv = info.get('lv', self._LV)
-        pv = info.get('pv', '')
-        mp = info.get('mp', self._MP)
+        vg = info.get('vg', self.vg_name)
+        lv = info.get('lv', self.lv_name)
+        pv = info.get('pv', self.pv_dev)
+        mp = info.get('mp', self.mount_point)
 
         _sp.run(['umount', mp], capture_output=True)
         _sp.run(['lvremove', '-ff', f'/dev/{vg}/{lv}'], capture_output=True)
@@ -579,7 +567,7 @@ class ExtendFilesystemTask(BaseTask):
             _sp.run(['pvremove', '-ff', '-y', pv], capture_output=True)
             _sp.run(['wipefs', '-a', pv], capture_output=True)
 
-        clear_fault_state()
+        clear_fault_state(self.id)
         return True, f"Removed {vg}/{lv} and cleaned up {mp}"
 
     def validate(self):
@@ -787,6 +775,8 @@ class CreateSwapFileTask(BaseTask):
 @TaskRegistry.register("filesystems")
 class UnmountFilesystemTask(BaseTask):
     """Safely unmount a filesystem."""
+
+    disk_slots = 1
 
     def __init__(self):
         super().__init__(

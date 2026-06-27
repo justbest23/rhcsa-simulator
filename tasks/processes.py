@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 class KillProcessTask(BaseTask):
     """Kill a process by name or PID."""
 
+    has_fault_injection = True
+
     def __init__(self):
         super().__init__(
             id="proc_kill_001",
@@ -27,6 +29,7 @@ class KillProcessTask(BaseTask):
         )
         self.process_name = None
         self.signal = None
+        self._fake_dir = None
 
     def generate(self, **params):
         """Generate process kill task."""
@@ -52,6 +55,46 @@ class KillProcessTask(BaseTask):
         ]
 
         return self
+
+    def inject_fault(self):
+        """Start real processes the candidate must kill.
+
+        We copy `sleep` to a file named after the target process so that
+        `pgrep -x <name>` (used by validate) matches its comm, then launch a
+        couple of instances. Without this the task is trivially "passed" because
+        nothing of that name is running.
+        """
+        import subprocess as _sp
+        import os, shutil, tempfile
+        src = shutil.which('sleep') or '/usr/bin/sleep'
+        d = tempfile.mkdtemp(prefix='rhcsa_proc_')
+        fake = os.path.join(d, self.process_name)
+        try:
+            shutil.copy(src, fake)
+            os.chmod(fake, 0o755)
+            for _ in range(2):
+                _sp.Popen([fake, '600'])
+        except Exception as e:
+            shutil.rmtree(d, ignore_errors=True)
+            return False, f"Could not start '{self.process_name}': {e}"
+        self._fake_dir = d
+        from tasks.troubleshooting import save_fault_state
+        save_fault_state(self.id, {'process': self.process_name, 'dir': d})
+        return True, f"Started 2 '{self.process_name}' process(es)"
+
+    def restore_fault(self):
+        import subprocess as _sp
+        import shutil
+        from tasks.troubleshooting import load_fault_state, clear_fault_state
+        state = load_fault_state(self.id)
+        info = state.get('restore_info', {}) if state else {}
+        name = info.get('process', self.process_name)
+        d = info.get('dir', self._fake_dir)
+        _sp.run(['pkill', '-x', name], capture_output=True)
+        if d:
+            shutil.rmtree(d, ignore_errors=True)
+        clear_fault_state(self.id)
+        return True, f"Killed '{name}' processes and cleaned up"
 
     def validate(self):
         """Validate process is killed."""
@@ -303,6 +346,7 @@ class FindProcessByUserTask(BaseTask):
         )
         self.username = None
         self.action = None
+        self._created_user = False
 
     def generate(self, **params):
         """Generate find process by user task."""
@@ -339,24 +383,37 @@ class FindProcessByUserTask(BaseTask):
 
     def inject_fault(self):
         import subprocess as _sp
-        if self.action != 'kill':
-            return True, "No setup needed for list/count action"
-        # Ensure the user exists
-        _sp.run(['useradd', '-r', '-s', '/sbin/nologin', '-M', self.username],
-                capture_output=True)
+        # Provision for every action: list/count need processes to see, kill needs
+        # processes to kill. Only delete the user later if we actually create it
+        # here (apache may pre-exist as a real httpd account — never remove that).
+        existed = _sp.run(['id', self.username], capture_output=True).returncode == 0
+        self._created_user = not existed
+        if not existed:
+            _sp.run(['useradd', '-r', '-s', '/sbin/nologin', '-M', self.username],
+                    capture_output=True)
         # Start several background sleep processes as that user
         for _ in range(3):
             _sp.Popen(['runuser', '-u', self.username, '--', 'sleep', '600'])
         from tasks.troubleshooting import save_fault_state
-        save_fault_state(self.id, {'username': self.username})
+        save_fault_state(self.id, {'username': self.username,
+                                   'created_user': self._created_user})
         return True, f"Started 3 background processes as '{self.username}'"
 
     def restore_fault(self):
         import subprocess as _sp
-        from tasks.troubleshooting import clear_fault_state
+        import time
+        from tasks.troubleshooting import load_fault_state, clear_fault_state
+        state = load_fault_state(self.id)
+        info = state.get('restore_info', {}) if state else {}
+        created = info.get('created_user', getattr(self, '_created_user', False))
         _sp.run(['pkill', '-u', self.username], capture_output=True)
-        clear_fault_state()
-        return True, f"Killed remaining '{self.username}' processes"
+        msg = f"Killed remaining '{self.username}' processes"
+        if created:
+            time.sleep(0.5)  # let pkill reap processes so userdel won't fail on "in use"
+            _sp.run(['userdel', '-rf', self.username], capture_output=True)
+            msg += " and removed the user it created"
+        clear_fault_state(self.id)
+        return True, msg
 
     def validate(self):
         """Validate process management by user."""

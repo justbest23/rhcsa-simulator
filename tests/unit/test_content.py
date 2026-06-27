@@ -19,9 +19,9 @@ class TestContentRegistry:
         ContentRegistry.initialize()
         assert ContentRegistry._initialized is True
 
-    def test_all_9_domains_have_categories(self):
+    def test_all_domains_have_categories(self):
         ContentRegistry.initialize()
-        for domain_num in range(1, 10):
+        for domain_num in settings.EXAM_DOMAINS:
             cats = ContentRegistry.get_categories_for_domain(domain_num)
             assert len(cats) >= 1, f"Domain {domain_num} has no categories"
 

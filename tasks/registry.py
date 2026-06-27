@@ -172,13 +172,26 @@ class TaskRegistry:
         return cls.get_random_tasks(count, difficulty="exam")
 
     @classmethod
-    def generate_exam(cls, count=12):
+    def generate_exam(cls, count=12, disk_budget=None):
         """
-        Generate a balanced exam across all 9 domains.
+        Generate a balanced exam across all 8 domains.
         60%+ persistence tasks, weighted by domain importance.
+
+        disk_budget caps how many whole-disk tasks (by disk_slots) may be
+        selected, so each can later be given a distinct practice device. When
+        None it is inferred from the devices currently available (without
+        creating any) with a sane floor, so callers/tests need not pass it.
         """
         tasks = []
         exclude_ids = []
+
+        if disk_budget is None:
+            try:
+                from utils.helpers import get_loop_devices, get_spare_real_disks
+                disk_budget = len(get_loop_devices()) + len(get_spare_real_disks())
+            except Exception:
+                disk_budget = 0
+            disk_budget = max(disk_budget, 3)  # floor: exam start ensures >=3 loops
 
         # Distribute tasks across domains weighted by domain weight
         from config.exam_objectives import EXAM_OBJECTIVES
@@ -221,8 +234,10 @@ class TaskRegistry:
                 return False
             return True
 
-        # Generate tasks per domain — enforce one task per category to avoid duplicates
-        used_exclusive_resources = set()
+        # Generate tasks per domain — enforce one task per category to avoid
+        # duplicates, and cap whole-disk tasks to disk_budget so each can be
+        # assigned a distinct device (no two disk tasks share one disk).
+        disk_used = 0
         for domain_num, needed in domain_counts.items():
             domain_cats = [
                 cat for cat, dom in settings.CATEGORY_TO_DOMAIN.items()
@@ -249,31 +264,29 @@ class TaskRegistry:
                 if not _exam_eligible(task):
                     task = None
                 if task:
-                    res = getattr(task, 'exclusive_resource', None)
-                    if res and res in used_exclusive_resources:
-                        task = None
+                    slots = getattr(task, 'disk_slots', 0)
+                    if slots and disk_used + slots > disk_budget:
+                        task = None  # no device left for this disk task
                 if task and task.id not in exclude_ids:
-                    res = getattr(task, 'exclusive_resource', None)
-                    if res:
-                        used_exclusive_resources.add(res)
+                    disk_used += getattr(task, 'disk_slots', 0)
                     tasks.append(task)
                     exclude_ids.append(task.id)
                     used_cats.add(cat)
                     remaining_for_domain -= 1
 
         # If we couldn't fill all slots, add random tasks (allowing category repeats as last resort)
-        while len(tasks) < count:
+        guard = 0
+        while len(tasks) < count and guard < count * 20:
+            guard += 1
             task = cls.get_random_task(difficulty="exam")
             if not _exam_eligible(task):
                 task = None
             if task:
-                res = getattr(task, 'exclusive_resource', None)
-                if res and res in used_exclusive_resources:
+                slots = getattr(task, 'disk_slots', 0)
+                if slots and disk_used + slots > disk_budget:
                     task = None
             if task and task.id not in exclude_ids:
-                res = getattr(task, 'exclusive_resource', None)
-                if res:
-                    used_exclusive_resources.add(res)
+                disk_used += getattr(task, 'disk_slots', 0)
                 tasks.append(task)
                 exclude_ids.append(task.id)
 

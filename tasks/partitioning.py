@@ -50,6 +50,8 @@ def _partition_dev(device, number):
 class CreateMBRPartitionTask(BaseTask):
     """Create an MBR (msdos) partition using fdisk or parted."""
 
+    disk_slots = 1
+
     def __init__(self):
         super().__init__(
             id="part_mbr_create",
@@ -152,6 +154,8 @@ class CreateMBRPartitionTask(BaseTask):
 class CreateGPTPartitionTask(BaseTask):
     """Create a GPT partition table and partition using parted or gdisk."""
 
+    disk_slots = 1
+
     def __init__(self):
         super().__init__(
             id="part_gpt_create",
@@ -247,6 +251,8 @@ class CreateGPTPartitionTask(BaseTask):
 @TaskRegistry.register("partitioning")
 class ResizePartitionTask(BaseTask):
     """Resize an existing partition (grow) using parted or growpart."""
+
+    disk_slots = 1
 
     def __init__(self):
         super().__init__(
@@ -346,6 +352,8 @@ class ResizePartitionTask(BaseTask):
 class DeletePartitionTask(BaseTask):
     """Delete an existing partition."""
 
+    disk_slots = 1
+
     def __init__(self):
         super().__init__(
             id="part_delete",
@@ -418,6 +426,8 @@ class DeletePartitionTask(BaseTask):
 @TaskRegistry.register("partitioning")
 class PartitionAndFormatTask(BaseTask):
     """Create a partition, format it, mount it, and add to fstab (exam-style)."""
+
+    disk_slots = 1
 
     def __init__(self):
         super().__init__(
@@ -551,6 +561,8 @@ class PartitionAndFormatTask(BaseTask):
 @TaskRegistry.register("partitioning")
 class ConvertPartitionTableTask(BaseTask):
     """Convert a disk partition table from MBR to GPT or vice-versa."""
+
+    disk_slots = 1
 
     def __init__(self):
         super().__init__(

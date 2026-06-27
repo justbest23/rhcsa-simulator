@@ -55,15 +55,28 @@ class ExamSession:
             print("Exam cancelled.")
             return None
 
+        # Build the practice device pool first (auto-creates >=3 loop devices,
+        # plus any spare non-system disk like /dev/sda) so the generator can cap
+        # whole-disk tasks to the number of devices we can actually hand out.
+        from utils import helpers
+        try:
+            pool = helpers.build_device_pool()
+        except Exception:
+            pool = []
+        disk_budget = len(pool) if pool else None
+
         # Generate domain-balanced tasks
         print("\nGenerating exam tasks...")
-        self.tasks = TaskRegistry.generate_exam(self.task_count)
+        self.tasks = TaskRegistry.generate_exam(self.task_count, disk_budget=disk_budget)
 
         if not self.tasks:
             print(fmt.error("Error: Could not generate exam tasks"))
             return None
 
         print(fmt.success(f"Generated {len(self.tasks)} tasks across {self._count_domains()} domains"))
+
+        # Give each whole-disk task a distinct device (no two share one disk)
+        self._provision_devices()
 
         # Inject faults / set up environments for tasks that require it
         self._inject_exam_faults()
@@ -84,6 +97,25 @@ class ExamSession:
 
         print("\nComplete the tasks on your system, then return here to validate your work.")
         print("=" * 60)
+
+    def _provision_devices(self):
+        """Assign a distinct practice device to each whole-disk task so an LVM
+        task and a partition task never collide on the same disk."""
+        from utils import helpers
+        disk_tasks = [t for t in self.tasks if getattr(t, 'disk_slots', 0) > 0]
+        if not disk_tasks:
+            return
+        need = sum(t.disk_slots for t in disk_tasks)
+        spares = len(helpers.get_spare_real_disks())
+        helpers.begin_device_allocation(min_loops=max(3, need - spares))
+        try:
+            for t in disk_tasks:
+                try:
+                    t.provision_devices()
+                except Exception:
+                    pass
+        finally:
+            helpers.end_device_allocation()
 
     def _inject_exam_faults(self):
         """Inject faults / create practice environments for all tasks that need it."""
