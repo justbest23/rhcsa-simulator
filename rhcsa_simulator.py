@@ -202,6 +202,18 @@ def main():
     except SystemExit:
         return 1
 
+    # Best-effort: capture a known-good /etc/fstab baseline so the fstab guard
+    # (tools/rhcsa-fstab-guard.sh) can strip leftover practice/fault entries if a
+    # session is ever interrupted. Only captures when none exists and fstab is
+    # clean; never fails the launch.
+    try:
+        import subprocess as _sp
+        _guard = '/usr/local/sbin/rhcsa-fstab-guard.sh'
+        if os.path.exists(_guard):
+            _sp.run([_guard, 'ensure'], capture_output=True, timeout=15)
+    except Exception:
+        pass
+
     # CLI quick modes
     if args.quick:
         run_quick_practice(args.quick)

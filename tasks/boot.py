@@ -492,12 +492,24 @@ class BootTroubleshootingTask(BaseTask):
         self.target = None
         self.timeout = None
         self.extra_param = None
+        self.add_param = None
+        self.remove_param = None
 
     def generate(self, **params):
         self._scenario = params.get('scenario', random.choice(self._SCENARIOS))
         self.target = self._scenario['correct_target']
         self.timeout = self._scenario['correct_timeout']
-        self.extra_param = self._scenario.get('add_param') or self._scenario.get('remove_param')
+        self.add_param = self._scenario.get('add_param')
+        self.remove_param = self._scenario.get('remove_param')
+        # Back-compat alias: the single parameter this scenario is concerned with.
+        self.extra_param = self.add_param or self.remove_param
+
+        if self.add_param:
+            param_line = f"  - Kernel command line: ensure '{self.add_param}' IS present\n"
+        elif self.remove_param:
+            param_line = f"  - Kernel command line: ensure '{self.remove_param}' is NOT present\n"
+        else:
+            param_line = ""
 
         self.description = (
             f"Boot Configuration Problem:\n"
@@ -507,6 +519,7 @@ class BootTroubleshootingTask(BaseTask):
             f"  Required end state:\n"
             f"  - Default target: {self.target}\n"
             f"  - GRUB timeout: {self.timeout} seconds\n"
+            f"{param_line}"
             f"  - All changes must persist across reboots"
         )
         self.hints = [
@@ -636,19 +649,38 @@ class BootTroubleshootingTask(BaseTask):
                 message=f"Timeout is {current}, expected {self.timeout}"
             ))
 
-        # Check 3: Extra kernel parameter present (3 points)
-        if '=' in self.extra_param:
-            pn, pv = self.extra_param.split('=', 1)
-            param_ok = validate_grub_parameter_value(pn, pv)
+        # Check 3: kernel command line is correct (3 points).
+        # add_param scenarios require the parameter to be PRESENT; remove_param
+        # scenarios require it to be ABSENT (e.g. dropping 'rhgb' for a
+        # text-mode server). Earlier versions always checked for presence, which
+        # silently failed every remove_param scenario.
+        if self.add_param:
+            param = self.add_param
+            if '=' in param:
+                pn, pv = param.split('=', 1)
+                param_ok = validate_grub_parameter_value(pn, pv)
+            else:
+                param_ok = validate_grub_parameter(param)
+            ok_msg = f"Kernel parameter '{param}' is present"
+            bad_msg = f"Kernel parameter '{param}' not found in GRUB_CMDLINE_LINUX"
+        elif self.remove_param:
+            param = self.remove_param
+            # Absent means neither the bare flag nor a name=value form remains.
+            name = param.split('=', 1)[0]
+            param_ok = not validate_grub_parameter(param) and not validate_grub_parameter(name)
+            ok_msg = f"Kernel parameter '{param}' has been removed"
+            bad_msg = f"Kernel parameter '{param}' is still present in GRUB_CMDLINE_LINUX"
         else:
-            param_ok = validate_grub_parameter(self.extra_param)
+            param_ok = True
+            ok_msg = "No kernel parameter change required"
+            bad_msg = ""
 
         if param_ok:
             checks.append(ValidationCheck(
                 name="extra_param_present",
                 passed=True,
                 points=3,
-                message=f"Kernel parameter '{self.extra_param}' is present"
+                message=ok_msg
             ))
             total_points += 3
         else:
@@ -657,7 +689,7 @@ class BootTroubleshootingTask(BaseTask):
                 passed=False,
                 points=0,
                 max_points=3,
-                message=f"Kernel parameter '{self.extra_param}' not found in GRUB_CMDLINE_LINUX"
+                message=bad_msg
             ))
 
         # Check 4: GRUB config regenerated (3 points)

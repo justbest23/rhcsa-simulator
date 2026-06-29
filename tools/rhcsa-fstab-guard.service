@@ -1,0 +1,19 @@
+[Unit]
+Description=RHCSA Simulator fstab guard (strip leftover practice entries so the system always boots)
+Documentation=file:///opt/rhcsa-simulator/tools/rhcsa-fstab-guard.sh
+DefaultDependencies=no
+# Run early at boot, before anything tries to mount from /etc/fstab, and again
+# right before the system goes down.
+Before=local-fs-pre.target shutdown.target
+Conflicts=shutdown.target
+After=systemd-remount-fs.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/rhcsa-fstab-guard.sh boot
+ExecStop=/usr/local/sbin/rhcsa-fstab-guard.sh shutdown
+TimeoutSec=30
+
+[Install]
+WantedBy=local-fs-pre.target

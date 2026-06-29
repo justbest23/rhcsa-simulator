@@ -122,6 +122,43 @@ fi
 
 echo
 echo "========================================="
+echo "Installing fstab safety guard"
+echo "========================================="
+echo
+# The simulator and candidate add /etc/fstab entries (swap, mounts, fault
+# injection). If a session is interrupted those can be left behind and break the
+# next boot. This guard restores a known-good baseline at shutdown and early
+# boot so the system always comes up clean.
+GUARD_SRC="$SCRIPT_DIR/tools/rhcsa-fstab-guard.sh"
+GUARD_UNIT_SRC="$SCRIPT_DIR/tools/rhcsa-fstab-guard.service"
+GUARD_DST="/usr/local/sbin/rhcsa-fstab-guard.sh"
+GUARD_UNIT_DST="/etc/systemd/system/rhcsa-fstab-guard.service"
+
+if [ -f "$GUARD_SRC" ] && [ -f "$GUARD_UNIT_SRC" ]; then
+    install -m 755 "$GUARD_SRC" "$GUARD_DST"
+    install -m 644 "$GUARD_UNIT_SRC" "$GUARD_UNIT_DST"
+
+    # Capture the current (clean) fstab as the baseline.
+    "$GUARD_DST" init || echo -e "${YELLOW}Warning: could not capture fstab baseline (fstab not currently valid?)${NC}"
+
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl daemon-reload
+        if systemctl enable rhcsa-fstab-guard.service >/dev/null 2>&1; then
+            # Activate now so the shutdown hook is armed this boot too.
+            systemctl start rhcsa-fstab-guard.service >/dev/null 2>&1 || true
+            echo -e "${GREEN}✓ fstab guard installed and enabled${NC}"
+        else
+            echo -e "${YELLOW}Warning: could not enable rhcsa-fstab-guard.service${NC}"
+        fi
+    else
+        echo -e "${YELLOW}systemctl not available — guard installed but not enabled${NC}"
+    fi
+else
+    echo -e "${YELLOW}Guard files not found in tools/ — skipping${NC}"
+fi
+
+echo
+echo "========================================="
 echo "Optional: Populate Practice Environment"
 echo "========================================="
 echo
