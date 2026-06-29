@@ -256,6 +256,14 @@ class AddFlathubRepoTask(BaseTask):
 class InstallFlatpakAppTask(BaseTask):
     """Install a Flatpak application from a remote."""
 
+    has_setup = True
+
+    def setup_environment(self):
+        # Uninstall the app first (no network needed) so installing it is real
+        # work; teardown reinstalls best-effort.
+        from tasks import env_setup
+        return env_setup.ensure_flatpak_app_absent(self.id, self.app_id)
+
     def __init__(self):
         super().__init__(
             id="flatpak_install_app_001",

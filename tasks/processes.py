@@ -350,7 +350,11 @@ class FindProcessByUserTask(BaseTask):
 
     def generate(self, **params):
         """Generate find process by user task."""
-        self.username = params.get('username', 'apache')
+        # Use a dedicated practice account, never a real service user. 'apache'
+        # is the httpd runtime user: if httpd is running (several fault tasks
+        # start it), its workers are owned by apache and the master respawns any
+        # the candidate kills, making the kill action impossible to complete.
+        self.username = params.get('username', 'pracproc')
         actions = ['list', 'count', 'kill']
         self.action = params.get('action', random.choice(actions))
 

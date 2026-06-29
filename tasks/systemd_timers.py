@@ -718,6 +718,12 @@ class ListActiveTimersTask(BaseTask):
 class EnableTimerTask(BaseTask):
     """Enable and start an existing systemd timer."""
 
+    has_setup = True
+
+    def setup_environment(self):
+        from tasks import env_setup
+        return env_setup.make_timer_absent(self.id, self.timer_name)
+
     def __init__(self):
         super().__init__(
             id="timer_enable_001",

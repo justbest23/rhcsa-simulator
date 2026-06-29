@@ -19,6 +19,12 @@ logger = logging.getLogger(__name__)
 class FindFilesTask(BaseTask):
     """Find files using the find command."""
 
+    has_setup = True
+
+    def setup_environment(self):
+        from tasks import env_setup
+        return env_setup.remove_paths(self.id, [self.output_file])
+
     def __init__(self):
         super().__init__(
             id="tools_find_001",
@@ -436,6 +442,14 @@ class ExtractArchiveTask(BaseTask):
 @TaskRegistry.register("essential_tools")
 class IORedirectionTask(BaseTask):
     """Use I/O redirection and pipes."""
+
+    has_setup = True
+
+    def setup_environment(self):
+        # Remove a leftover output file from a previous session so the task
+        # can't pass without the candidate regenerating it.
+        from tasks import env_setup
+        return env_setup.remove_paths(self.id, [self.output_file])
 
     def __init__(self):
         super().__init__(

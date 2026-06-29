@@ -448,8 +448,14 @@ class PartitionAndFormatTask(BaseTask):
     def generate(self, **params):
         self.params["device"] = params.get("device", _random_device())
         self.params["part_num"] = params.get("part_num", 1)
-        self.params["size_mb"] = params.get("size", random.choice([100, 150, 200, 300]))
+        # Pick fstype first: RHEL 10 mkfs.xfs refuses filesystems <= 300MB, so an
+        # XFS partition must be larger than that. Loop practice disks are 500MB,
+        # so 350-450MB fits. ext4 has no such floor.
         self.params["fstype"] = params.get("fstype", random.choice(["xfs", "ext4"]))
+        if self.params["fstype"] == "xfs":
+            self.params["size_mb"] = params.get("size", random.choice([350, 400, 450]))
+        else:
+            self.params["size_mb"] = params.get("size", random.choice([100, 150, 200, 300]))
         self.params["mount_point"] = params.get("mount_point", f"/mnt/{random.choice(['data', 'apps', 'backup', 'extra'])}{random.randint(1, 99)}")
 
         dev = self.params["device"]

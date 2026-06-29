@@ -106,6 +106,12 @@ def restore_any_active_fault():
 
 def _dispatch_restore(task_id, info, msgs):
     """Restore a single fault by task_id (crash-recovery dispatcher)."""
+    # Generic environment-setup records (from positive-config tasks that
+    # establish a negative precondition at exam start) carry a restore_type and
+    # are undone independently of their task_id.
+    if isinstance(info, dict) and info.get('restore_type'):
+        _restore_env_setup(info, msgs)
+        return
     # Dispatch to the right restorer
     if task_id.startswith('fault_selinux_context'):
         _restore_selinux_context(info, msgs)
@@ -329,6 +335,50 @@ def _restore_fstab(info, msgs):
         with open('/etc/fstab', 'w') as f:
             f.writelines(cleaned)
         msgs.append("Removed injected fstab line")
+
+
+def _restore_env_setup(info, msgs):
+    """Undo a positive-task environment setup (see tasks/env_setup.py)."""
+    rt = info.get('restore_type')
+    if rt == 'unit':
+        unit = info.get('unit')
+        if not unit:
+            return
+        if info.get('was_enabled'):
+            subprocess.run(['systemctl', 'enable', unit], capture_output=True)
+        else:
+            subprocess.run(['systemctl', 'disable', unit], capture_output=True)
+        if info.get('was_active'):
+            subprocess.run(['systemctl', 'start', unit], capture_output=True)
+        else:
+            subprocess.run(['systemctl', 'stop', unit], capture_output=True)
+        msgs.append(f"Restored {unit} (active={info.get('was_active')}, "
+                    f"enabled={info.get('was_enabled')})")
+    elif rt == 'file_backup':
+        import shutil as _shutil
+        for p in info.get('paths', []):
+            bak = p + '.rhcsa-bak'
+            if os.path.exists(bak):
+                try:
+                    _shutil.move(bak, p)
+                except OSError:
+                    pass
+        msgs.append(f"Restored original file(s): {info.get('paths')}")
+    elif rt == 'pkg_remove':
+        pkg = info.get('pkg')
+        if pkg:
+            subprocess.run(['dnf', '-y', 'remove', pkg], capture_output=True)
+            msgs.append(f"Removed setup package {pkg}")
+    elif rt == 'pkg_install':
+        pkg = info.get('pkg')
+        if pkg:
+            subprocess.run(['dnf', '-y', 'install', pkg], capture_output=True)
+            msgs.append(f"Reinstalled package {pkg}")
+    elif rt == 'flatpak_install':
+        app = info.get('app_id')
+        if app:
+            subprocess.run(['flatpak', 'install', '-y', 'flathub', app], capture_output=True)
+            msgs.append(f"Reinstalled flatpak {app}")
 
 
 # ── Base class ────────────────────────────────────────────────────────────────

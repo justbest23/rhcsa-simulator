@@ -19,6 +19,14 @@ logger = logging.getLogger(__name__)
 class GenerateSSHKeyTask(BaseTask):
     """Generate an SSH key pair."""
 
+    has_setup = True
+
+    def setup_environment(self):
+        # Move any existing key (the user's real key, or a leftover) aside so the
+        # candidate must actually generate one; teardown restores the original.
+        from tasks import env_setup
+        return env_setup.backup_paths(self.id, [self.key_path, f'{self.key_path}.pub'])
+
     def __init__(self):
         super().__init__(
             id="ssh_keygen_001",

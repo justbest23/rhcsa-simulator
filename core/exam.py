@@ -44,6 +44,7 @@ class ExamSession:
         self.exam_id = generate_id("exam")
         self.timer = None
         self._injected_tasks = []
+        self._setup_tasks = []
 
     def start(self):
         """Start the exam session."""
@@ -80,6 +81,10 @@ class ExamSession:
 
         # Inject faults / set up environments for tasks that require it
         self._inject_exam_faults()
+
+        # Establish negative preconditions for positive-config tasks so they
+        # can't pass on pre-existing/default state.
+        self._setup_task_environments()
 
         self._display_tasks()
 
@@ -137,14 +142,37 @@ class ExamSession:
         time.sleep(1)
         print()
 
+    def _setup_task_environments(self):
+        """Run setup_environment() for positive-config tasks so they establish a
+        negative precondition (stop a default-on service, move an artifact aside)
+        and therefore require real work to pass."""
+        setup_tasks = [t for t in self.tasks if getattr(t, 'has_setup', False)]
+        if not setup_tasks:
+            return
+        for task in setup_tasks:
+            try:
+                ok, msg = task.setup_environment()
+                if ok:
+                    print(fmt.success(f"  ✓ {task.id}: {msg}"))
+                    self._setup_tasks.append(task)
+                # A False result just means no precondition was needed; the task
+                # is still valid, so stay quiet to avoid alarming the candidate.
+            except Exception as e:
+                print(fmt.warning(f"  ✗ {task.id}: setup error ({e})"))
+
     def _restore_exam_faults(self):
         """Restore any environments that were set up for the exam."""
-        if not self._injected_tasks:
+        if not self._injected_tasks and not self._setup_tasks:
             return
         print(fmt.dim("\nCleaning up exam environment..."))
         for task in self._injected_tasks:
             try:
                 task.restore_fault()
+            except Exception:
+                pass
+        for task in self._setup_tasks:
+            try:
+                task.teardown_environment()
             except Exception:
                 pass
 

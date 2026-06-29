@@ -17,6 +17,14 @@ logger = logging.getLogger(__name__)
 class InstallPackageTask(BaseTask):
     """Install a package using dnf."""
 
+    has_setup = True
+
+    def setup_environment(self):
+        # Remove the package first so installing it is real work (needs repo
+        # access; degrades gracefully if unavailable).
+        from tasks import env_setup
+        return env_setup.ensure_package_absent(self.id, self.package_name)
+
     def __init__(self):
         super().__init__(id="pkg_install_001", category="packages", difficulty="easy", points=6)
         self.tags = []
@@ -56,6 +64,13 @@ class InstallPackageTask(BaseTask):
 @TaskRegistry.register("packages")
 class RemovePackageTask(BaseTask):
     """Remove a package using dnf."""
+
+    has_setup = True
+
+    def setup_environment(self):
+        # Install the package first so removing it is real work.
+        from tasks import env_setup
+        return env_setup.ensure_package_installed(self.id, self.package_name)
 
     def __init__(self):
         super().__init__(id="pkg_remove_001", category="packages", difficulty="easy", points=6)
