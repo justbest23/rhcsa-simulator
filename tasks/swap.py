@@ -41,7 +41,9 @@ class CreateSwapPartitionTask(BaseTask):
         self.size_mb = None
 
     def generate(self, **params):
-        self.size_mb = params.get('size_mb', random.choice([256, 512]))
+        # Practice loop disks are 500MB; a 512MB partition can't fit (≈498MB
+        # usable after the 1MiB alignment offset). Keep sizes comfortably below.
+        self.size_mb = params.get('size_mb', random.choice([256, 400]))
         self.loop_device = params.get('loop_device') or get_swap_practice_device() or '/dev/sdb'
         # Partition 1 on the loop device (e.g. /dev/loop2p1)
         self.device = params.get('device') or f"{self.loop_device}p1"

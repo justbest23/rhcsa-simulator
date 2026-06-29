@@ -26,6 +26,13 @@ class BaseTask(ABC):
     # hands each one a *distinct* device so they never collide on the same disk.
     disk_slots = 0
 
+    # True if this task establishes a "negative precondition" at exam start so
+    # the candidate must actually do the work (e.g. stop a default-on service,
+    # move an existing artifact aside). The exam loop calls setup_environment()
+    # during preparation and teardown_environment() during cleanup. Without this,
+    # positive-config tasks can pass on pre-existing/default state.
+    has_setup = False
+
     def __init__(self, id, category, difficulty, points):
         self.id = id
         self.category = category
@@ -66,6 +73,24 @@ class BaseTask(ABC):
         """
         if self.disk_slots:
             self.generate()
+
+    def setup_environment(self):
+        """Establish the negative precondition for this task at exam start.
+
+        Override in tasks that would otherwise pass on pre-existing/default
+        state. Return (ok: bool, message: str). Default: no-op.
+        """
+        return True, "no setup needed"
+
+    def teardown_environment(self):
+        """Restore whatever setup_environment() changed.
+
+        The default replays the restore record saved via tasks/env_setup.py
+        helpers (resilient to interruption — System Reset and startup recovery
+        use the same record).
+        """
+        from tasks import env_setup
+        return env_setup.restore_and_clear(self.id)
 
     def validate_persistence(self):
         """

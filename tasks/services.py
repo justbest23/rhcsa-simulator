@@ -31,6 +31,12 @@ _TROUBLESHOOT_SERVICES = ['httpd', 'nginx', 'mariadb', 'named', 'vsftpd']
 class StartServiceTask(BaseTask):
     """Start a systemd service (without enabling)."""
 
+    has_setup = True
+
+    def setup_environment(self):
+        from tasks import env_setup
+        return env_setup.make_service_absent(self.id, self.service_name)
+
     def __init__(self):
         super().__init__(
             id="svc_start_001",
@@ -94,6 +100,12 @@ class StartServiceTask(BaseTask):
 class EnableServiceTask(BaseTask):
     """Enable a systemd service at boot."""
 
+    has_setup = True
+
+    def setup_environment(self):
+        from tasks import env_setup
+        return env_setup.make_service_absent(self.id, self.service_name)
+
     def __init__(self):
         super().__init__(
             id="svc_enable_001",
@@ -155,6 +167,12 @@ class EnableServiceTask(BaseTask):
 @TaskRegistry.register("services")
 class StartAndEnableServiceTask(BaseTask):
     """Start AND enable a systemd service (the most common exam task)."""
+
+    has_setup = True
+
+    def setup_environment(self):
+        from tasks import env_setup
+        return env_setup.make_service_absent(self.id, self.service_name)
 
     def __init__(self):
         super().__init__(
@@ -237,6 +255,12 @@ class StartAndEnableServiceTask(BaseTask):
 @TaskRegistry.register("services")
 class StopAndDisableServiceTask(BaseTask):
     """Stop a service and disable it from starting at boot."""
+
+    has_setup = True
+
+    def setup_environment(self):
+        from tasks import env_setup
+        return env_setup.make_service_present(self.id, self.service_name)
 
     def __init__(self):
         super().__init__(
