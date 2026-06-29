@@ -734,6 +734,186 @@ def cleanup_practice_devices():
         return False
 
 
+_SYSTEM_VGS = {'rl', 'rl00', 'rhel', 'centos', 'fedora', 'almalinux', 'rocky'}
+
+# Bypass the LVM devices file so we can see/remove VGs on loop devices even when
+# their devices-file entries are missing or stale (the usual state after an
+# interrupted session). Passed via --config to every LVM command in teardown.
+_LVM_NODEVFILE = ['--config', 'devices{use_devicesfile=0}']
+
+
+def _remove_stray_practice_vgs():
+    """Deactivate and remove leftover non-system practice VGs (e.g. vg_prac*,
+    vg_exam*) from interrupted sessions. These hold loop devices open via
+    device-mapper and must go before the loops can be detached. Best-effort."""
+    import subprocess
+
+    def run(cmd):
+        try:
+            subprocess.run(cmd, capture_output=True, timeout=20)
+        except Exception:
+            pass
+
+    # Stray LVs left mounted (e.g. /mnt/lvm23) or active as swap from an
+    # interrupted task keep the mapping open, so deactivate/remove fails. Unmount
+    # and swapoff every generated mapper device (vg_exam*/vg_prac*) first.
+    try:
+        res = subprocess.run(['dmsetup', 'ls'], capture_output=True, text=True, timeout=10)
+        for line in res.stdout.splitlines():
+            name = line.split()[0] if line.split() else ''
+            if name.startswith('vg_') and not name.startswith(tuple(_SYSTEM_VGS)):
+                dev = f'/dev/mapper/{name}'
+                run(['umount', '-f', dev])
+                run(['swapoff', dev])
+    except Exception:
+        pass
+
+    try:
+        res = subprocess.run(
+            ['vgs', '--noheadings', '-o', 'vg_name'] + _LVM_NODEVFILE,
+            capture_output=True, text=True, timeout=20
+        )
+        vgs = {v.strip() for v in res.stdout.splitlines() if v.strip()}
+    except Exception:
+        vgs = set()
+
+    for vg in vgs:
+        if vg in _SYSTEM_VGS:
+            continue
+        run(['vgchange', '-an', vg] + _LVM_NODEVFILE)
+        run(['vgremove', '-ff', '-y', vg] + _LVM_NODEVFILE)
+
+    # Fallback: vgremove can't read metadata off a deleted/zeroed backing image,
+    # so any still-active device-mapper LV from a generated VG (vg_exam*/vg_prac*)
+    # would keep its loop open. Force-remove those mappings directly.
+    try:
+        res = subprocess.run(['dmsetup', 'ls'], capture_output=True, text=True, timeout=10)
+        for line in res.stdout.splitlines():
+            name = line.split()[0] if line.split() else ''
+            if name.startswith('vg_') and not name.startswith(tuple(_SYSTEM_VGS)):
+                run(['dmsetup', 'remove', '-f', name])
+    except Exception:
+        pass
+
+
+def _purge_loop_device(device):
+    """Completely tear down a single loop device backed by the loops dir:
+    deactivate/remove any LVM on it, wipe filesystem/PV signatures, drop its
+    entry from the LVM devices file, and detach it. Best-effort throughout."""
+    import subprocess
+
+    def run(cmd):
+        try:
+            subprocess.run(cmd, capture_output=True, timeout=15)
+        except Exception:
+            pass
+
+    # Enumerate the whole device plus any child partitions/holders.
+    members = [device]
+    try:
+        res = subprocess.run(['lsblk', '-rno', 'NAME,MOUNTPOINT', device],
+                             capture_output=True, text=True, timeout=10)
+        for line in res.stdout.splitlines():
+            parts = line.split()
+            if not parts:
+                continue
+            dev = f'/dev/{parts[0]}'
+            mnt = parts[1] if len(parts) > 1 else ''
+            if dev != device:
+                members.append(dev)
+            if mnt.startswith('/'):
+                run(['umount', '-f', dev])
+            run(['swapoff', dev])
+    except Exception:
+        pass
+
+    # Remove any VGs that still live on these members before wiping PV
+    # signatures (devices-file check bypassed so loop PVs are visible).
+    try:
+        vg_res = subprocess.run(['pvs', '--noheadings', '-o', 'vg_name'] + members + _LVM_NODEVFILE,
+                                capture_output=True, text=True, timeout=10)
+        for vg in {v.strip() for v in vg_res.stdout.splitlines() if v.strip()}:
+            if vg in _SYSTEM_VGS:
+                continue
+            run(['vgchange', '-an', vg] + _LVM_NODEVFILE)
+            run(['vgremove', '-ff', '-y', vg] + _LVM_NODEVFILE)
+    except Exception:
+        pass
+
+    for dev in members:
+        run(['pvremove', '-ff', '-y', dev] + _LVM_NODEVFILE)
+        run(['wipefs', '-a', dev])
+        # Drop the device from the LVM devices file so a fresh pvcreate doesn't
+        # hit "has no PVID (devices file ...)" against stale metadata.
+        run(['lvmdevices', '--deldev', dev])
+
+    # Tear down any leftover partition mappings, then detach the loop itself.
+    run(['partx', '-d', device])
+    run(['losetup', '-d', device])
+
+
+def reset_practice_loops(count=3, size_mb=500):
+    """Guarantee a clean loop-device pool for a new session.
+
+    Interrupted sessions leave orphan loop devices behind — loops still attached
+    to '(deleted)' backing images, leftover partitions, stale PV/filesystem
+    signatures, and dangling LVM-devices-file entries. Those get handed to disk
+    tasks and break pvcreate/mkfs ("device has a signature", "has no PVID").
+
+    This tears down EVERY simulator loop device (including orphans) and recreates
+    exactly `count` freshly-zeroed, signature-free images. Returns the new list.
+    """
+    import subprocess
+
+    loop_dir = '/var/lib/rhcsa-simulator/loops'
+
+    # 0. Remove stray practice VGs first — active LVs from interrupted sessions
+    #    hold the loops open via device-mapper and block detach.
+    _remove_stray_practice_vgs()
+
+    # 1. Purge all loops backed by our loops dir, including '(deleted)' orphans.
+    for device in get_loop_devices():
+        _purge_loop_device(device)
+
+    # 2. Delete every backing image so nothing stale is reattached.
+    try:
+        if os.path.exists(loop_dir):
+            for f in os.listdir(loop_dir):
+                if f.endswith('.img'):
+                    try:
+                        os.remove(os.path.join(loop_dir, f))
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+    # 3. Strip any leftover loop_file entries from the LVM devices file so fresh
+    #    loops are treated as new devices and auto-registered by pvcreate.
+    devices_file = '/etc/lvm/devices/system.devices'
+    try:
+        if os.path.exists(devices_file):
+            with open(devices_file) as fh:
+                lines = fh.readlines()
+            kept = [ln for ln in lines
+                    if not ('IDTYPE=loop_file' in ln and loop_dir in ln)]
+            if len(kept) != len(lines):
+                with open(devices_file, 'w') as fh:
+                    fh.writelines(kept)
+    except Exception:
+        pass
+
+    # 4. Recreate a clean pool and wipe each fresh device for good measure.
+    created = create_practice_devices(count=count, size_mb=size_mb)
+    for dev in created:
+        try:
+            subprocess.run(['wipefs', '-a', dev], capture_output=True, timeout=10)
+        except Exception:
+            pass
+    if created:
+        save_practice_device_config('loop', get_loop_devices())
+    return get_loop_devices()
+
+
 def get_practice_device():
     """
     Get a device suitable for LVM practice.
