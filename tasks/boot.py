@@ -119,8 +119,8 @@ class ModifyGrubTimeoutTask(BaseTask):
         self.tags = ["grub", "bootloader", "timeout"]
         self.exam_tips = [
             "Always run grub2-mkconfig after editing /etc/default/grub.",
-            "On UEFI: grub2-mkconfig -o /boot/efi/EFI/redhat/grub.cfg",
-            "On BIOS: grub2-mkconfig -o /boot/grub2/grub.cfg",
+            "On RHEL 9/10 the boot layout is unified: grub2-mkconfig -o /boot/grub2/grub.cfg",
+            "The UEFI /boot/efi/EFI/redhat/grub.cfg is just a stub that loads /boot/grub2/grub.cfg.",
         ]
         self.timeout = None
 
@@ -139,7 +139,7 @@ class ModifyGrubTimeoutTask(BaseTask):
         self.hints = [
             "Edit /etc/default/grub and modify the GRUB_TIMEOUT value",
             "After editing, run 'grub2-mkconfig -o /boot/grub2/grub.cfg'",
-            "On UEFI systems, use '/boot/efi/EFI/redhat/grub.cfg' instead",
+            "On RHEL 9/10 /boot/grub2/grub.cfg is canonical for both BIOS and UEFI",
             "Verify with 'grep GRUB_TIMEOUT /etc/default/grub'",
         ]
 
@@ -486,7 +486,7 @@ class BootTroubleshootingTask(BaseTask):
         self.exam_tips = [
             "Verify ALL changes: systemctl get-default, grep TIMEOUT /etc/default/grub, grubby --info=DEFAULT",
             "grub2-mkconfig regenerates the GRUB binary config from /etc/default/grub.",
-            "BIOS path: /boot/grub2/grub.cfg   EFI path: /boot/efi/EFI/redhat/grub.cfg",
+            "RHEL 9/10: grub2-mkconfig -o /boot/grub2/grub.cfg (canonical for BIOS and UEFI)",
         ]
         self._scenario = None
         self.target = None
@@ -556,10 +556,10 @@ class BootTroubleshootingTask(BaseTask):
         if s.get('remove_param'):
             _sp.run(['grubby', '--remove-args', s['remove_param'], '--update-kernel=ALL'], capture_output=True)
 
-        # Regenerate GRUB so the injected state is applied
-        grub_cfg = '/boot/efi/EFI/redhat/grub.cfg'
-        if not os.path.exists(grub_cfg):
-            grub_cfg = '/boot/grub2/grub.cfg'
+        # Regenerate GRUB so the injected state is applied. On RHEL 9/10 the boot
+        # layout is unified: /boot/grub2/grub.cfg is canonical for both BIOS and
+        # UEFI (the EFI grub.cfg is only a stub that loads it).
+        grub_cfg = '/boot/grub2/grub.cfg'
         _sp.run(['grub2-mkconfig', '-o', grub_cfg], capture_output=True)
 
         from tasks.troubleshooting import save_fault_state

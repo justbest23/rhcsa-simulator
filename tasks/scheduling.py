@@ -179,7 +179,7 @@ class CreateSystemCronTask(BaseTask):
             points=12
         )
         self.requires_persistence = True
-        self.tags = ['v10-new']
+        self.tags = []
         self.exam_tips = [
             "System cron files go in /etc/cron.d/",
             "System cron format includes the user field: min hour day month weekday user command",
@@ -322,7 +322,7 @@ class CreateAtJobTask(BaseTask):
             difficulty="easy",
             points=8
         )
-        self.tags = ['v10-new']
+        self.tags = []
         self.exam_tips = [
             "Use 'at' for one-time scheduled tasks",
             "Ensure atd service is running: systemctl start atd",
@@ -426,7 +426,7 @@ class ListCronJobsTask(BaseTask):
             difficulty="easy",
             points=6
         )
-        self.tags = ['v10-new']
+        self.tags = []
         self.exam_tips = [
             "crontab -l lists user cron jobs",
             "Also check /etc/cron.d/, /etc/cron.daily/, /etc/crontab",
@@ -565,7 +565,7 @@ class DenyCronAccessTask(BaseTask):
             points=8
         )
         self.requires_persistence = True
-        self.tags = ['v10-new']
+        self.tags = []
         self.exam_tips = [
             "/etc/cron.allow takes precedence over /etc/cron.deny",
             "If cron.allow exists, only listed users can use cron",
@@ -629,7 +629,7 @@ class ConfigureCronDirTask(BaseTask):
             points=8
         )
         self.requires_persistence = True
-        self.tags = ['v10-new']
+        self.tags = []
         self.exam_tips = [
             "Scripts in /etc/cron.daily/ run once per day via anacron",
             "Scripts must be executable (chmod +x) and have a shebang",

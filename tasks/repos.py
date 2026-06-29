@@ -26,7 +26,7 @@ class ConfigureRepoTask(BaseTask):
             points=10
         )
         self.requires_persistence = True
-        self.tags = ['v10-new']
+        self.tags = []
         self.exam_tips = [
             "Use /etc/yum.repos.d/ for repo files",
             "Repo file must end in .repo extension",
@@ -211,7 +211,7 @@ class ConfigureRepoGPGTask(BaseTask):
             points=12
         )
         self.requires_persistence = True
-        self.tags = ['v10-new']
+        self.tags = []
         self.exam_tips = [
             "GPG key URL uses gpgkey= directive in .repo file",
             "gpgcheck=1 must be set to enforce GPG checking",
@@ -410,7 +410,7 @@ class EnableDisableRepoTask(BaseTask):
             points=6
         )
         self.requires_persistence = True
-        self.tags = ['v10-new']
+        self.tags = []
         self.exam_tips = [
             "dnf config-manager --enable/--disable <repo>",
             "Or manually edit /etc/yum.repos.d/<repo>.repo and set enabled=0 or enabled=1",
@@ -518,7 +518,7 @@ class ConfigureBaseOSAppStreamTask(BaseTask):
             points=15
         )
         self.requires_persistence = True
-        self.tags = ['v10-new', 'exam-seen']
+        self.tags = ['exam-seen']
         self.exam_tips = [
             "The exam typically provides a URL for a content server",
             "You need BOTH BaseOS and AppStream repos configured",
@@ -747,7 +747,7 @@ class TroubleshootBrokenRepoTask(BaseTask):
             points=15
         )
         self.requires_persistence = False
-        self.tags = ['v10-new']
+        self.tags = []
         self.exam_tips = [
             "Common repo issues: wrong URL, missing gpgkey, typos in enabled/gpgcheck",
             "Use 'dnf repolist -v' for verbose repo info",
@@ -946,7 +946,7 @@ class AddThirdPartyRepoTask(BaseTask):
             points=10
         )
         self.requires_persistence = True
-        self.tags = ['v10-new']
+        self.tags = []
         self.exam_tips = [
             "Third-party repos often require importing a GPG key",
             "Use dnf config-manager --add-repo for quick setup",

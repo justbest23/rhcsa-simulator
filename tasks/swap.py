@@ -28,7 +28,7 @@ class CreateSwapPartitionTask(BaseTask):
             points=12
         )
         self.requires_persistence = True
-        self.tags = ['v10-new', 'swap', 'partitioning']
+        self.tags = ['swap', 'partitioning']
         self.exam_tips = [
             "Use mkswap to format, swapon to activate",
             "Add to /etc/fstab with swap as mount point and fstype",
@@ -126,7 +126,7 @@ class CreateSwapFileTask(BaseTask):
             points=10
         )
         self.requires_persistence = True
-        self.tags = ['v10-new', 'swap', 'filesystems']
+        self.tags = ['swap', 'filesystems']
         self.exam_tips = [
             "Create swap file: dd if=/dev/zero of=/swapfile bs=1M count=SIZE or fallocate -l SIZE /swapfile",
             "CRITICAL: Set permissions to 600 (chmod 600 /swapfile) before mkswap",
@@ -209,7 +209,7 @@ class SetSwappinessTask(BaseTask):
             points=8
         )
         self.requires_persistence = True
-        self.tags = ['v10-new', 'swap', 'tuning', 'sysctl']
+        self.tags = ['swap', 'tuning', 'sysctl']
         self.exam_tips = [
             "vm.swappiness controls how aggressively kernel swaps (0-100, default 60)",
             "Lower value (10-20) = less swapping, higher value (80+) = more swapping",

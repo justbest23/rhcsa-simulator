@@ -218,7 +218,7 @@ class PersistentJournalTask(BaseTask):
             points=10
         )
         self.requires_persistence = True
-        self.tags = ['v10-new', 'journalctl', 'persistent-journal', 'fault-injection']
+        self.tags = ['journalctl', 'persistent-journal', 'fault-injection']
         self.exam_tips = [
             "Journal persistence is controlled by Storage= in /etc/systemd/journald.conf.",
             "Storage=persistent: always save to disk.",

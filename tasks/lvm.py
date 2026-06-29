@@ -71,7 +71,7 @@ class VerifyLVExistsTask(BaseTask):
             points=10
         )
         self.task_order = 36
-        self.tags = ['v10-new', 'lvm-basics']
+        self.tags = ['lvm-basics']
         self.exam_tips = [
             "Use 'lvs' or 'lvdisplay' to verify logical volume exists",
             "LV size may vary slightly due to extent alignment",
@@ -135,7 +135,7 @@ class CreatePVTask(BaseTask):
             points=6
         )
         self.task_order = 10
-        self.tags = ['v10-new', 'lvm-basics']
+        self.tags = ['lvm-basics']
         self.exam_tips = [
             "Use 'pvcreate' to initialize a partition or disk for LVM use",
             "Verify with 'pvs' or 'pvdisplay' commands",
@@ -195,7 +195,7 @@ class CreateVGTask(BaseTask):
             points=8
         )
         self.task_order = 20
-        self.tags = ['v10-new', 'lvm-basics']
+        self.tags = ['lvm-basics']
         self.exam_tips = [
             "Use 'vgcreate' to create a volume group from one or more physical volumes",
             "Physical volumes must be initialized with pvcreate first",
@@ -263,7 +263,7 @@ class CreateLVTask(BaseTask):
             points=10
         )
         self.task_order = 30
-        self.tags = ['v10-new', 'lvm-basics']
+        self.tags = ['lvm-basics']
         self.exam_tips = [
             "Use 'lvcreate -L <size>M -n <name> <vg_name>' to create a logical volume",
             "Can also use -l option to specify size in extents or percentage",
@@ -345,7 +345,7 @@ class ExtendLVTask(BaseTask):
             points=12
         )
         self.task_order = 50
-        self.tags = ['v10-new', 'lvm-extend', 'exam-critical']
+        self.tags = ['lvm-extend', 'exam-critical']
         self.exam_tips = [
             "Use 'lvextend -L +<size>M' to extend by amount, or -L <size>M for total size",
             "Use -l +100%FREE to use all remaining VG space",
@@ -430,7 +430,7 @@ class LVMFullWorkflowTask(BaseTask):
             points=20
         )
         self.task_order = 35
-        self.tags = ['v10-new', 'lvm-workflow', 'exam-critical', 'fstab']
+        self.tags = ['lvm-workflow', 'exam-critical', 'fstab']
         self.exam_tips = [
             "Complete LVM workflow: pvcreate → vgcreate → lvcreate → mkfs → mount → fstab",
             "Use UUID in /etc/fstab for persistent mounting (get with blkid)",
@@ -577,7 +577,7 @@ class ExtendVGTask(BaseTask):
             points=10
         )
         self.task_order = 40
-        self.tags = ['v10-new', 'lvm-extend', 'fault-injection']
+        self.tags = ['lvm-extend', 'fault-injection']
         self.exam_tips = [
             "pvcreate initializes a disk/device as a physical volume.",
             "vgextend <vg> <device> adds a PV to an existing VG.",
@@ -701,7 +701,7 @@ class RemoveLVTask(BaseTask):
             points=8
         )
         self.task_order = 60
-        self.tags = ['v10-new', 'lvm-management']
+        self.tags = ['lvm-management']
         self.exam_tips = [
             "Must unmount LV before removing: 'umount /dev/vg/lv'",
             "Remove fstab entry to prevent boot errors",
@@ -777,7 +777,7 @@ class ReduceLVTask(BaseTask):
             points=15
         )
         self.task_order = 60
-        self.tags = ['v10-new', 'lvm-advanced']
+        self.tags = ['lvm-advanced']
         self.exam_tips = [
             "CRITICAL: XFS filesystems CANNOT be reduced - only ext4/ext3 support shrinking",
             "Always resize filesystem BEFORE reducing LV to avoid data loss",

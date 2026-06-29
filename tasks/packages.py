@@ -19,7 +19,7 @@ class InstallPackageTask(BaseTask):
 
     def __init__(self):
         super().__init__(id="pkg_install_001", category="packages", difficulty="easy", points=6)
-        self.tags = ['v10-new']
+        self.tags = []
         self.exam_tips = [
             "dnf install <package> -y to install without prompting",
             "rpm -q <package> to verify installation",
@@ -59,7 +59,7 @@ class RemovePackageTask(BaseTask):
 
     def __init__(self):
         super().__init__(id="pkg_remove_001", category="packages", difficulty="easy", points=6)
-        self.tags = ['v10-new']
+        self.tags = []
         self.exam_tips = [
             "dnf remove <package> -y to remove",
             "rpm -q <package> should show 'not installed' after removal",
@@ -96,7 +96,7 @@ class InstallPackageGroupTask(BaseTask):
 
     def __init__(self):
         super().__init__(id="pkg_group_001", category="packages", difficulty="medium", points=8)
-        self.tags = ['v10-new']
+        self.tags = []
         self.exam_tips = [
             'dnf group install "Group Name" to install a group',
             "dnf group list to see available groups",
@@ -150,7 +150,7 @@ class QueryPackageInfoTask(BaseTask):
 
     def __init__(self):
         super().__init__(id="pkg_query_001", category="packages", difficulty="easy", points=5)
-        self.tags = ['v10-new']
+        self.tags = []
         self.exam_tips = [
             "rpm -qi <package> shows detailed info",
             "rpm -ql <package> lists all files in package",
@@ -199,7 +199,7 @@ class FindPackageProviderTask(BaseTask):
 
     def __init__(self):
         super().__init__(id="pkg_provides_001", category="packages", difficulty="easy", points=6)
-        self.tags = ['v10-new']
+        self.tags = []
         self.exam_tips = [
             "dnf provides <file_path> finds which package owns a file",
             "rpm -qf <file_path> for installed files only",
@@ -260,7 +260,7 @@ class PackageHistoryTask(BaseTask):
 
     def __init__(self):
         super().__init__(id="pkg_history_001", category="packages", difficulty="medium", points=8)
-        self.tags = ['v10-new']
+        self.tags = []
         self.exam_tips = [
             "dnf history shows transaction log",
             "dnf history info <id> shows details of a transaction",
@@ -307,7 +307,7 @@ class VerifyPackageIntegrityTask(BaseTask):
 
     def __init__(self):
         super().__init__(id="pkg_verify_001", category="packages", difficulty="medium", points=8)
-        self.tags = ['v10-new']
+        self.tags = []
         self.exam_tips = [
             "rpm -V <package> verifies file integrity",
             "No output means all files match originals",
@@ -366,7 +366,7 @@ class DowngradePackageTask(BaseTask):
 
     def __init__(self):
         super().__init__(id="pkg_downgrade_001", category="packages", difficulty="hard", points=12)
-        self.tags = ['v10-new']
+        self.tags = []
         self.package_name = None
         self.exam_tips = [
             "Use 'dnf downgrade <package>' to revert to previous version",

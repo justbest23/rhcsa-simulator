@@ -26,7 +26,7 @@ class CreateBasicScriptTask(BaseTask):
             difficulty="easy",
             points=8
         )
-        self.tags = ['v10-new']
+        self.tags = []
         self.exam_tips = [
             "Always start with #!/bin/bash shebang",
             "Make executable: chmod +x script.sh",
@@ -185,7 +185,7 @@ class ScriptWithArgumentsTask(BaseTask):
             difficulty="medium",
             points=10
         )
-        self.tags = ['v10-new']
+        self.tags = []
         self.exam_tips = [
             "$1, $2 are positional arguments; $@ is all arguments",
             "$# gives the number of arguments",
@@ -349,7 +349,7 @@ class ScriptWithConditionalsTask(BaseTask):
             difficulty="medium",
             points=12
         )
-        self.tags = ['v10-new', 'exam-seen']
+        self.tags = ['exam-seen']
         self.exam_tips = [
             "if [ condition ]; then ... elif ... else ... fi",
             "File tests: -f (file), -d (dir), -e (exists), -r (readable)",
@@ -519,7 +519,7 @@ class ScriptWithLoopsTask(BaseTask):
             difficulty="medium",
             points=12
         )
-        self.tags = ['v10-new', 'exam-seen']
+        self.tags = ['exam-seen']
         self.exam_tips = [
             "for item in list; do ... done",
             "while [ condition ]; do ... done",
@@ -690,7 +690,7 @@ class ScriptExitCodesTask(BaseTask):
             difficulty="medium",
             points=10
         )
-        self.tags = ['v10-new']
+        self.tags = []
         self.exam_tips = [
             "exit 0 = success, exit 1 = general error",
             "$? holds the exit code of the last command",
@@ -851,7 +851,7 @@ class ScriptCommandSubstitutionTask(BaseTask):
             difficulty="medium",
             points=10
         )
-        self.tags = ['v10-new']
+        self.tags = []
         self.exam_tips = [
             "Modern syntax: VAR=$(command) - preferred",
             "Legacy syntax: VAR=`command` - avoid nesting issues",

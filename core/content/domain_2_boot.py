@@ -26,8 +26,8 @@ SYSTEMD TARGETS (vs Runlevels):
 
 KEY FILES:
   /etc/default/grub          - GRUB configuration source
-  /boot/grub2/grub.cfg       - Generated GRUB config (BIOS)
-  /boot/efi/EFI/redhat/grub.cfg - Generated GRUB config (UEFI)
+  /boot/grub2/grub.cfg       - Generated GRUB config (RHEL 9/10: BIOS and UEFI)
+  /boot/efi/EFI/redhat/grub.cfg - UEFI stub that loads /boot/grub2/grub.cfg
   /etc/fstab                 - Filesystem mount table
   /boot/initramfs-*.img      - Initial RAM filesystem
         """,
@@ -64,8 +64,8 @@ KEY FILES:
                     "GRUB_TIMEOUT": "Seconds to show menu (0 = instant boot)",
                     "GRUB_CMDLINE_LINUX": "Kernel parameters",
                     "grub2-mkconfig -o": "Regenerate GRUB config",
-                    "/boot/grub2/grub.cfg": "BIOS systems",
-                    "/boot/efi/EFI/redhat/grub.cfg": "UEFI systems",
+                    "/boot/grub2/grub.cfg": "RHEL 9/10: canonical for BIOS and UEFI",
+                    "/boot/efi/EFI/redhat/grub.cfg": "UEFI stub that loads /boot/grub2/grub.cfg",
                 },
             },
             {
@@ -130,7 +130,7 @@ KEY FILES:
             "Find slow services: systemd-analyze blame | head",
             "Bad fstab = rescue mode needed. Use 'mount -o remount,rw /' to fix",
             "Emergency vs Rescue: Emergency = minimal, Rescue = more services",
-            "UEFI path: /boot/efi/EFI/redhat/grub.cfg (not /boot/grub2/)",
+            "RHEL 9/10: regenerate /boot/grub2/grub.cfg (UEFI grub.cfg is just a stub)",
         ],
     },
     "boot_recovery": {

@@ -32,7 +32,7 @@ class CreateFilesystemTask(BaseTask):
             difficulty="easy",
             points=6
         )
-        self.tags = ['v10-new', 'filesystem', 'mkfs']
+        self.tags = ['filesystem', 'mkfs']
         self.exam_tips = [
             "Use 'lsblk -f' or 'blkid' to verify filesystem type after creation",
             "XFS is the default filesystem in RHEL 10 - know both mkfs.xfs and mkfs.ext4",
@@ -113,7 +113,7 @@ class MountFilesystemTask(BaseTask):
             difficulty="easy",
             points=8
         )
-        self.tags = ['v10-new', 'filesystem', 'mount']
+        self.tags = ['filesystem', 'mount']
         self.exam_tips = [
             "Create mount point with 'mkdir -p' before mounting",
             "Use 'mount | grep <mount_point>' or 'df -h' to verify the mount",
@@ -209,7 +209,7 @@ class PersistentMountTask(BaseTask):
             difficulty="medium",
             points=12
         )
-        self.tags = ['v10-new', 'filesystem', 'fstab', 'persistence']
+        self.tags = ['filesystem', 'fstab', 'persistence']
         self.exam_tips = [
             "ALWAYS use UUID in /etc/fstab, not device names (get with 'blkid')",
             "Test fstab syntax with 'findmnt --verify' before rebooting",
@@ -359,7 +359,7 @@ class ConfigureSwapTask(BaseTask):
             difficulty="medium",
             points=10
         )
-        self.tags = ['v10-new', 'swap', 'fstab', 'persistence']
+        self.tags = ['swap', 'fstab', 'persistence']
         self.exam_tips = [
             "Format swap with 'mkswap <device>', activate with 'swapon <device>'",
             "Use UUID in /etc/fstab: UUID=<uuid> none swap defaults 0 0",
@@ -474,7 +474,7 @@ class ExtendFilesystemTask(BaseTask):
             difficulty="exam",
             points=10
         )
-        self.tags = ['v10-new', 'filesystem', 'resize', 'ext4', 'fault-injection']
+        self.tags = ['filesystem', 'resize', 'ext4', 'fault-injection']
         self.exam_tips = [
             "For XFS: use 'xfs_growfs <mount_point>' (must be mounted)",
             "For ext4: use 'resize2fs <device>' (can be done online for growth)",
@@ -658,7 +658,7 @@ class CreateSwapFileTask(BaseTask):
             difficulty="exam",
             points=12
         )
-        self.tags = ['v10-new', 'swap', 'swapfile', 'fstab', 'persistence']
+        self.tags = ['swap', 'swapfile', 'fstab', 'persistence']
         self.exam_tips = [
             "Create file: 'dd if=/dev/zero of=/swapfile bs=1M count=<size>' or 'fallocate -l <size>M /swapfile'",
             "CRITICAL: Set permissions to 600 with 'chmod 600 /swapfile' for security",
@@ -785,7 +785,7 @@ class UnmountFilesystemTask(BaseTask):
             difficulty="easy",
             points=6
         )
-        self.tags = ['v10-new', 'filesystem', 'unmount']
+        self.tags = ['filesystem', 'unmount']
         self.exam_tips = [
             "Check for processes using the filesystem with 'lsof <mount_point>' or 'fuser -m <mount_point>'",
             "Use 'umount <mount_point>' to unmount (note: umount, not unmount)",
@@ -837,6 +837,100 @@ class UnmountFilesystemTask(BaseTask):
                 points=0,
                 max_points=6,
                 message=f"Filesystem is still mounted at {self.mount_point}"
+            ))
+
+        passed = total_points >= (self.points * 0.8)
+        return ValidationResult(self.id, passed, total_points, self.points, checks)
+
+
+@TaskRegistry.register("filesystems")
+class CreateVFATFilesystemTask(BaseTask):
+    """Create and mount a VFAT filesystem.
+
+    The EX200 v10 objective explicitly lists VFAT alongside ext4 and XFS
+    ("Create, mount, unmount, and use VFAT, ext4, and XFS file systems").
+    """
+
+    disk_slots = 1
+
+    def __init__(self):
+        super().__init__(
+            id="fs_vfat_create_mount_001",
+            category="filesystems",
+            difficulty="medium",
+            points=8
+        )
+        self.tags = ['filesystem', 'vfat', 'mkfs', 'mount']
+        self.exam_tips = [
+            "VFAT is made with 'mkfs.vfat' (from the dosfstools package).",
+            "Verify the type with 'lsblk -f' or 'blkid' — it reports TYPE=\"vfat\".",
+            "VFAT has no Linux ownership/permissions; control access with mount options (uid=, gid=, umask=).",
+        ]
+        self.device = None
+        self.mount_point = None
+
+    def generate(self, **params):
+        self.device = params.get('device') or get_practice_device() or '/dev/vdb1'
+        self.mount_point = params.get('mount_point', f'/mnt/vfat{random.randint(1,99)}')
+
+        self.description = (
+            f"Create and mount a VFAT filesystem:\n"
+            f"  - Device: {self.device}\n"
+            f"  - Filesystem type: VFAT\n"
+            f"  - Mount point: {self.mount_point}\n"
+            f"  - Create the mount point if it does not exist\n"
+            f"  - Format the device as VFAT and mount it there"
+        )
+
+        self.hints = [
+            f"Format: mkfs.vfat {self.device}",
+            f"Create the mount point: mkdir -p {self.mount_point}",
+            f"Mount it: mount {self.device} {self.mount_point}",
+            f"Verify with 'lsblk -f' (TYPE should be vfat) and 'mount | grep {self.mount_point}'",
+        ]
+        return self
+
+    def validate(self):
+        checks = []
+        total_points = 0
+
+        # Check 1: device is formatted VFAT (4 pts)
+        if validate_filesystem_type(self.device, 'vfat'):
+            checks.append(ValidationCheck(
+                name="filesystem_type",
+                passed=True,
+                points=4,
+                message="Filesystem type is correctly vfat"
+            ))
+            total_points += 4
+        else:
+            actual = get_filesystem_type(self.device)
+            checks.append(ValidationCheck(
+                name="filesystem_type",
+                passed=False,
+                points=0,
+                max_points=4,
+                message=f"Filesystem type is {actual}, expected vfat"
+            ))
+
+        # Check 2: mounted at the requested mount point (4 pts)
+        mounts = get_mounted_devices()
+        mounted = any(m['mount_point'] == self.mount_point for m in mounts)
+        if mounted:
+            checks.append(ValidationCheck(
+                name="filesystem_mounted",
+                passed=True,
+                points=4,
+                message=f"VFAT filesystem mounted at {self.mount_point}"
+            ))
+            total_points += 4
+        else:
+            checks.append(ValidationCheck(
+                name="filesystem_mounted",
+                passed=False,
+                points=0,
+                max_points=4,
+                message=f"No filesystem mounted at {self.mount_point}"
             ))
 
         passed = total_points >= (self.points * 0.8)
