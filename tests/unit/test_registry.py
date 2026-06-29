@@ -26,8 +26,9 @@ class TestInitialization:
 
     def test_discovers_expected_task_count(self, initialized_registry):
         count = initialized_registry.get_task_count()
-        # v4.0.0 has 198 tasks; allow some tolerance for legacy auto-discovered tasks
-        assert count >= 190
+        # ~188 tasks after the v10-relevance cleanup (removed off-objective
+        # RHCE-level tasks); allow tolerance for auto-discovered tasks.
+        assert count >= 185
 
     def test_discovers_expected_categories(self, initialized_registry):
         cats = initialized_registry.get_all_categories()
@@ -47,7 +48,7 @@ class TestTaskCount:
     """Test task counting."""
 
     def test_total_count(self, initialized_registry):
-        assert initialized_registry.get_task_count() >= 190
+        assert initialized_registry.get_task_count() >= 185
 
     def test_per_category_count(self, initialized_registry):
         count = initialized_registry.get_task_count("lvm")

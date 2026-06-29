@@ -36,7 +36,7 @@ class RootPasswordResetTask(BaseTask):
         )
         self.requires_persistence = False
         self.requires_reboot = True
-        self.tags = ['v10-new', 'exam-seen']
+        self.tags = ['exam-seen']
         self.exam_tips = [
             "On RHEL 10 sulogin may require existing root password",
             "rd.break drops to initramfs before root is mounted",
@@ -195,7 +195,7 @@ class RootPasswordResetSuloginTask(BaseTask):
         )
         self.requires_persistence = False
         self.requires_reboot = True
-        self.tags = ['v10-new', 'exam-seen']
+        self.tags = ['exam-seen']
         self.exam_tips = [
             "On RHEL 10 sulogin may require existing root password",
             "rd.break drops to initramfs before root is mounted",
@@ -386,7 +386,7 @@ class ChrootPracticeTask(BaseTask):
             points=12
         )
         self.requires_persistence = False
-        self.tags = ['v10-new']
+        self.tags = []
         self.exam_tips = [
             "In rd.break, /sysroot is where the real root filesystem is mounted.",
             "After chroot you must mount /proc, /sys, /dev for full functionality.",

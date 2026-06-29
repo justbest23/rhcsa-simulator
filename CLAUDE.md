@@ -30,7 +30,7 @@ python3 -m pytest -v            # Verbose output
 
 - `rhcsa_simulator.py` — Main entry point
 - `core/` — Engine: task manager, exam loop, SM-2 spaced repetition, ResultsDB
-- `tasks/` — Task definitions (194 tasks, 25 categories, 8 domains)
+- `tasks/` — Task definitions (188 tasks, 25 categories, 8 domains)
 - `validators/` — Safe read-only system validators for each task type
 - `utils/` — AI feedback, progress reports, device detection
 - `config/` — Settings and constants

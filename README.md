@@ -6,7 +6,7 @@ validates your real system configuration with safe read-only checks, and tracks
 your progress over time.
 
 > **EX200 v10 aligned** — tasks cover the Red Hat EX200 v10 objectives. The bank
-> currently ships **194 tasks across 25 categories in 8 domains**. Flatpak,
+> currently ships **188 tasks across 25 categories in 8 domains**. Flatpak,
 > systemd timers, tuning profiles (`tuned-adm`), and secure file transfer are
 > included; legacy module streams are not.
 

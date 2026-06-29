@@ -3,7 +3,7 @@
 RHCSA EX200 v10 Exam Simulator v4.0.0 - Main Entry Point
 
 Features:
-- 194 tasks across 25 categories, 8 EX200 v10 domains
+- 188 tasks across 25 categories, 8 EX200 v10 domains
 - SM-2 spaced repetition for adaptive practice
 - Reboot simulation with persistence validation
 - SQLite-backed progress tracking (ResultsDB)

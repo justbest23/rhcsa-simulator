@@ -25,7 +25,7 @@ class MountNFSShareTask(BaseTask):
             difficulty="medium",
             points=10
         )
-        self.tags = ['v10-new', 'nfs', 'network-storage']
+        self.tags = ['nfs', 'network-storage']
         self.exam_tips = [
             "Use showmount -e to discover available NFS exports",
             "Create mount point before mounting (mkdir -p)",
@@ -133,7 +133,7 @@ class PersistentNFSMountTask(BaseTask):
             points=12
         )
         self.requires_persistence = True
-        self.tags = ['v10-new', 'nfs', 'fstab', 'network-storage']
+        self.tags = ['nfs', 'fstab', 'network-storage']
         self.exam_tips = [
             "fstab format: server:/export /mountpoint nfs defaults,_netdev 0 0",
             "_netdev is CRITICAL for network mounts - delays mount until network is up",
@@ -273,7 +273,7 @@ class ConfigureAutofsTask(BaseTask):
             points=15
         )
         self.requires_persistence = True
-        self.tags = ['v10-new', 'autofs', 'nfs', 'network-storage']
+        self.tags = ['autofs', 'nfs', 'network-storage']
         self.exam_tips = [
             "Install autofs package first: dnf install autofs -y",
             "Two files needed: /etc/auto.master (master map) and /etc/auto.* (mount map)",
@@ -431,7 +431,7 @@ class AutofsHomeDirectoriesTask(BaseTask):
             points=18
         )
         self.requires_persistence = True
-        self.tags = ['v10-new', 'autofs', 'nfs', 'network-storage', 'home-directories']
+        self.tags = ['autofs', 'nfs', 'network-storage', 'home-directories']
         self.exam_tips = [
             "Wildcard substitution: * in map matches any name, & substitutes matched value",
             "Example: * -rw,sync server:/export/& mounts /mountpoint/user to server:/export/user",
@@ -557,287 +557,6 @@ class AutofsHomeDirectoriesTask(BaseTask):
                 points=0,
                 max_points=8,
                 message="No wildcard (*) map for home directories"
-            ))
-
-        passed = total_points >= (self.points * 0.7)
-        return ValidationResult(self.id, passed, total_points, self.points, checks)
-
-
-@TaskRegistry.register("network_storage")
-class MountCIFSShareTask(BaseTask):
-    """Mount a CIFS/SMB share."""
-
-    def __init__(self):
-        super().__init__(
-            id="cifs_mount_001",
-            category="network_storage",
-            difficulty="medium",
-            points=10
-        )
-        self.tags = ['v10-new', 'cifs', 'smb', 'network-storage']
-        self.exam_tips = [
-            "Install cifs-utils package: dnf install cifs-utils -y",
-            "CIFS mount syntax: mount -t cifs //server/share /mountpoint -o credentials=file",
-            "Credentials file format: username=user\\npassword=pass",
-            "Secure credentials: chmod 600 /root/smb.cred",
-            "Never put passwords directly in fstab - use credentials file",
-            "For Windows shares: use CIFS, not SMB in mount command",
-        ]
-        self.server = None
-        self.share = None
-        self.mount_point = None
-        self.username = None
-
-    def generate(self, **params):
-        """Generate CIFS mount task."""
-        self.server = params.get('server', 'fileserver.example.com')
-        self.share = params.get('share', 'shared')
-        self.mount_point = params.get('mount_point', '/mnt/samba')
-        self.username = params.get('username', 'smbuser')
-
-        self.description = (
-            f"Mount a CIFS/SMB (Windows) share:\n"
-            f"  - Server: {self.server}\n"
-            f"  - Share name: {self.share}\n"
-            f"  - Mount point: {self.mount_point}\n"
-            f"  - Username: {self.username}\n"
-            f"  - Create a credentials file for security"
-        )
-
-        self.hints = [
-            "Install cifs-utils: dnf install cifs-utils -y",
-            f"Create mount point: mkdir -p {self.mount_point}",
-            f"Create credentials file /root/smb.cred:\nusername={self.username}\npassword=<password>",
-            "Secure credentials: chmod 600 /root/smb.cred",
-            f"Mount: mount -t cifs //{self.server}/{self.share} {self.mount_point} -o credentials=/root/smb.cred"
-        ]
-
-        return self
-
-    def validate(self):
-        """Validate CIFS mount."""
-        checks = []
-        total_points = 0
-
-        import os
-
-        # Check 1: Mount point exists (2 points)
-        if os.path.isdir(self.mount_point):
-            checks.append(ValidationCheck(
-                name="mount_point_exists",
-                passed=True,
-                points=2,
-                message="Mount point exists"
-            ))
-            total_points += 2
-        else:
-            checks.append(ValidationCheck(
-                name="mount_point_exists",
-                passed=False,
-                points=0,
-                max_points=2,
-                message="Mount point does not exist"
-            ))
-
-        # Check 2: Credentials file exists (3 points)
-        cred_file = '/root/smb.cred'
-        if validate_file_exists(cred_file):
-            # Check permissions
-            try:
-                mode = os.stat(cred_file).st_mode
-                if mode & 0o077 == 0:  # Only owner can read
-                    checks.append(ValidationCheck(
-                        name="credentials_file",
-                        passed=True,
-                        points=3,
-                        message="Credentials file exists with secure permissions"
-                    ))
-                    total_points += 3
-                else:
-                    checks.append(ValidationCheck(
-                        name="credentials_file",
-                        passed=True,
-                        points=2,
-                        message="Credentials file exists but permissions too open"
-                    ))
-                    total_points += 2
-            except Exception:
-                checks.append(ValidationCheck(
-                    name="credentials_file",
-                    passed=True,
-                    points=2,
-                    message="Credentials file exists"
-                ))
-                total_points += 2
-        else:
-            checks.append(ValidationCheck(
-                name="credentials_file",
-                passed=False,
-                points=0,
-                max_points=3,
-                message="Credentials file not found"
-            ))
-
-        # Check 3: CIFS is mounted (5 points)
-        result = execute_safe(['mount', '-t', 'cifs'])
-        if result.success and self.mount_point in result.stdout:
-            checks.append(ValidationCheck(
-                name="cifs_mounted",
-                passed=True,
-                points=5,
-                message="CIFS share is mounted"
-            ))
-            total_points += 5
-        else:
-            checks.append(ValidationCheck(
-                name="cifs_mounted",
-                passed=False,
-                points=0,
-                max_points=5,
-                message="CIFS share is not mounted"
-            ))
-
-        passed = total_points >= (self.points * 0.6)
-        return ValidationResult(self.id, passed, total_points, self.points, checks)
-
-
-@TaskRegistry.register("network_storage")
-class PersistentCIFSMountTask(BaseTask):
-    """Configure persistent CIFS mount in fstab."""
-
-    def __init__(self):
-        super().__init__(
-            id="cifs_fstab_001",
-            category="network_storage",
-            difficulty="medium",
-            points=12
-        )
-        self.requires_persistence = True
-        self.tags = ['v10-new', 'cifs', 'smb', 'fstab', 'network-storage']
-        self.exam_tips = [
-            "fstab CIFS format: //server/share /mountpoint cifs credentials=/path/to/cred,_netdev 0 0",
-            "_netdev is REQUIRED for network mounts in fstab",
-            "Credentials file must exist before mount -a or system boot",
-            "Other useful options: uid=username, gid=groupname, file_mode=0755",
-            "Test fstab: mount -a (mounts all fstab entries)",
-            "Verify: mount | grep cifs",
-        ]
-        self.server = None
-        self.share = None
-        self.mount_point = None
-
-    def generate(self, **params):
-        """Generate persistent CIFS mount task."""
-        self.server = params.get('server', 'samba.example.com')
-        self.share = params.get('share', 'public')
-        self.mount_point = params.get('mount_point', '/mnt/public')
-
-        self.description = (
-            f"Configure persistent CIFS mount:\n"
-            f"  - Server: {self.server}\n"
-            f"  - Share: {self.share}\n"
-            f"  - Mount point: {self.mount_point}\n"
-            f"  - Add to /etc/fstab\n"
-            f"  - Use credentials file\n"
-            f"  - Use _netdev option"
-        )
-
-        self.hints = [
-            f"Create mount point: mkdir -p {self.mount_point}",
-            "Create /root/cifs.cred with username= and password=",
-            f"fstab entry: //{self.server}/{self.share} {self.mount_point} cifs credentials=/root/cifs.cred,_netdev 0 0",
-            "Test: mount -a",
-            "Verify: mount | grep cifs"
-        ]
-
-        return self
-
-    def validate(self):
-        """Validate persistent CIFS mount."""
-        checks = []
-        total_points = 0
-
-        # Check 1: fstab has CIFS entry (6 points)
-        if validate_file_contains('/etc/fstab', 'cifs') and validate_file_contains('/etc/fstab', self.mount_point):
-            # Check for _netdev
-            has_netdev = False
-            try:
-                with open('/etc/fstab', 'r') as f:
-                    for line in f:
-                        if self.mount_point in line and 'cifs' in line:
-                            if '_netdev' in line:
-                                has_netdev = True
-                            break
-            except Exception:
-                pass
-
-            if has_netdev:
-                checks.append(ValidationCheck(
-                    name="fstab_cifs",
-                    passed=True,
-                    points=6,
-                    message="fstab has CIFS entry with _netdev"
-                ))
-                total_points += 6
-            else:
-                checks.append(ValidationCheck(
-                    name="fstab_cifs",
-                    passed=True,
-                    points=4,
-                    message="fstab has CIFS entry (missing _netdev)"
-                ))
-                total_points += 4
-        else:
-            checks.append(ValidationCheck(
-                name="fstab_cifs",
-                passed=False,
-                points=0,
-                max_points=6,
-                message="No CIFS entry in fstab"
-            ))
-
-        # Check 2: Credentials file with right permissions (3 points)
-        cred_files = ['/root/cifs.cred', '/root/smb.cred', '/etc/samba/credentials']
-        cred_found = False
-        for cf in cred_files:
-            if validate_file_exists(cf):
-                cred_found = True
-                break
-
-        if cred_found:
-            checks.append(ValidationCheck(
-                name="credentials",
-                passed=True,
-                points=3,
-                message="Credentials file exists"
-            ))
-            total_points += 3
-        else:
-            checks.append(ValidationCheck(
-                name="credentials",
-                passed=False,
-                points=0,
-                max_points=3,
-                message="No credentials file found"
-            ))
-
-        # Check 3: Mount point exists (3 points)
-        import os
-        if os.path.isdir(self.mount_point):
-            checks.append(ValidationCheck(
-                name="mount_point",
-                passed=True,
-                points=3,
-                message="Mount point exists"
-            ))
-            total_points += 3
-        else:
-            checks.append(ValidationCheck(
-                name="mount_point",
-                passed=False,
-                points=0,
-                max_points=3,
-                message="Mount point does not exist"
             ))
 
         passed = total_points >= (self.points * 0.7)

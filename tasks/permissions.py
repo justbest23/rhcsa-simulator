@@ -29,7 +29,7 @@ class SetFilePermissionsTask(BaseTask):
             difficulty="easy",
             points=4
         )
-        self.tags = ['v10-new']
+        self.tags = []
         self.exam_tips = [
             "Use chmod command with octal notation (e.g., chmod 644 file)",
             "Verify permissions with 'ls -l' - shows rwxrwxrwx format",
@@ -117,7 +117,7 @@ class SetFileOwnershipTask(BaseTask):
             difficulty="easy",
             points=5
         )
-        self.tags = ['v10-new']
+        self.tags = []
         self.exam_tips = [
             "Use chown for changing owner and group: chown user:group file",
             "Change only owner: chown user file",
@@ -227,7 +227,7 @@ class SetACLTask(BaseTask):
             difficulty="exam",
             points=8
         )
-        self.tags = ['v10-new', 'acl']
+        self.tags = ['acl']
         self.exam_tips = [
             "ACLs grant additional permissions beyond basic owner/group/other",
             "Set ACL with setfacl -m u:username:rwx file",
@@ -318,7 +318,7 @@ class SetSpecialPermissionsTask(BaseTask):
             difficulty="exam",
             points=7
         )
-        self.tags = ['v10-new', 'special-permissions']
+        self.tags = ['special-permissions']
         self.exam_tips = [
             "SUID (4): Runs executable with owner's permissions (chmod 4755 or chmod u+s)",
             "SGID (2): On files runs with group permissions, on dirs new files inherit group (chmod 2755 or chmod g+s)",
@@ -421,7 +421,7 @@ class SharedDirectoryTask(BaseTask):
             difficulty="exam",
             points=12
         )
-        self.tags = ['v10-new', 'special-permissions', 'collaborative']
+        self.tags = ['special-permissions', 'collaborative']
         self.exam_tips = [
             "Collaborative directories typically combine two special bits for shared access",
             "One special bit ensures new files inherit the directory group instead of the creator's group",
@@ -586,7 +586,7 @@ class DefaultACLTask(BaseTask):
             difficulty="exam",
             points=10
         )
-        self.tags = ['v10-new', 'acl', 'inheritance']
+        self.tags = ['acl', 'inheritance']
         self.exam_tips = [
             "Default ACLs only work on directories, not files",
             "Use -d flag with setfacl to set default ACL: setfacl -d -m u:user:rwx dir",
@@ -725,7 +725,7 @@ class RecursivePermissionsTask(BaseTask):
             difficulty="medium",
             points=8
         )
-        self.tags = ['v10-new', 'recursive']
+        self.tags = ['recursive']
         self.exam_tips = [
             "Use chown -R user:group dir for recursive ownership changes",
             "chmod -R applies same permissions to all files and directories",
@@ -856,7 +856,7 @@ class UmaskConfigTask(BaseTask):
             points=10
         )
         self.requires_persistence = True
-        self.tags = ['v10-new', 'umask', 'persistent']
+        self.tags = ['umask', 'persistent']
         self.exam_tips = [
             "Umask sets default permissions for newly created files",
             "Umask subtracts from 666 (files) and 777 (directories)",
