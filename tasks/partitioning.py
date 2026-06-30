@@ -38,10 +38,11 @@ def _random_device():
 
 
 def _partition_dev(device, number):
-    """Build partition device path, handling NVMe naming convention."""
-    if 'nvme' in device or 'loop' in device:
-        return f"{device}p{number}"
-    return f"{device}{number}"
+    """Build partition device path. Inserts a 'p' before the number only when
+    the device name ends in a digit (loop0p1, nvme0n1p1, mmcblk0p1) but not for
+    sd*/vd*/hd* (sda1). Delegates to the shared helper."""
+    from utils.helpers import partition_device
+    return partition_device(device, number)
 
 
 # ===== 1. CreateMBRPartitionTask ==========================================

@@ -527,6 +527,22 @@ def get_available_block_devices():
         return []
 
 
+def partition_device(device, number):
+    """Build the partition device path for `device` using the kernel's naming
+    rule: insert a 'p' before the partition number only when the device name
+    ends in a digit.
+
+        /dev/sda      -> /dev/sda1       (sd*/vd*/hd* end in a letter)
+        /dev/loop0    -> /dev/loop0p1    (ends in a digit)
+        /dev/nvme0n1  -> /dev/nvme0n1p1
+        /dev/mmcblk0  -> /dev/mmcblk0p1
+
+    The old code appended 'p1' unconditionally, producing bogus paths like
+    /dev/sdap1 for real SCSI/SATA/virtio disks.
+    """
+    dev = device.rstrip('/')
+    sep = 'p' if dev[-1:].isdigit() else ''
+    return f"{dev}{sep}{number}"
 
 
 def get_loop_devices():
