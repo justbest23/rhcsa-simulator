@@ -241,6 +241,7 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
     def configure_nfs_server(self):
         """SSH into a user-named RHEL box and provision it as a real NFS server
         for the NFS practice tasks (or remove an existing configuration)."""
+        import getpass
         from core import nfs_server
         from utils.helpers import confirm_action
 
@@ -249,21 +250,40 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
 
         existing = nfs_server.load_config()
         if existing:
+            saved_pw = 'yes' if existing.get('password') else 'no (key-based)'
             print(f"Currently configured: {fmt.bold(existing['host'])} "
-                  f"(user: {existing.get('user', 'root')})")
+                  f"(user: {existing.get('user', 'root')}, saved password: {saved_pw})")
             print("Exports:")
             for e in existing.get('exports', []):
                 print(f"  - {e}")
             print()
             print("  R. Re-provision / change server")
-            print("  X. Remove this NFS configuration (local only)")
+            print("  T. Test connection now (re-provision + showmount)")
+            print("  X. Remove config (and tear exports off the server)")
             print("  0. Back")
             print()
             sub = input("Select: ").strip().lower()
             if sub == 'x':
+                print("Removing exports from the server…")
+                rok, rout = nfs_server.remove_exports()
+                print(fmt.success("Exports removed from server.") if rok
+                      else fmt.warning(f"Could not remove remote exports (removing local config anyway): {rout[-300:]}"))
                 nfs_server.clear_config()
-                print(fmt.success("NFS server configuration removed. NFS tasks revert "
-                                   "to placeholder servers."))
+                print(fmt.success("NFS configuration removed. NFS tasks revert to placeholders."))
+                input("\nPress Enter to return...")
+                return
+            if sub == 't':
+                print("\nRe-provisioning with saved settings…")
+                ok, exports, output = nfs_server.reprovision_from_config()
+                if ok:
+                    print(fmt.success("OK — exports active:"))
+                    for e in exports:
+                        print(f"  - {existing['host']}:{e}")
+                    vok, vout = nfs_server.verify_from_client(existing['host'])
+                    print(fmt.dim(vout) if vok else fmt.warning(vout))
+                else:
+                    print(fmt.error("Failed:"))
+                    print((output or '')[-1500:])
                 input("\nPress Enter to return...")
                 return
             if sub not in ('r',):
@@ -274,10 +294,10 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
         print("This will SSH into a RHEL machine you specify and set it up as an")
         print("NFS server: install nfs-utils, create and populate exports under")
         print(f"{fmt.bold(nfs_server.EXPORT_BASE)}, write /etc/exports.d, run exportfs,")
-        print("enable nfs-server, and open the firewall.")
+        print("enable nfs-server, and open the firewall. Exports are refreshed at the")
+        print("start of every exam and torn down afterwards, so each run is clean.")
         print()
         print(fmt.warning("This MODIFIES the remote machine. Use a practice box you control."))
-        print(fmt.dim("ssh will prompt for a password or key passphrase if needed; nothing is stored."))
         print()
 
         host = input("NFS server hostname or IP: ").strip()
@@ -287,9 +307,25 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
             return
         user = input("SSH login user [root]: ").strip() or 'root'
 
-        if confirm_action(f"Set up passwordless SSH to {user}@{host} first (ssh-copy-id)?",
-                          default=False):
-            nfs_server.copy_ssh_key(host, user)
+        # Credentials — needed so exams can re-provision unattended.
+        password = None
+        print()
+        print(fmt.bold("Authentication"))
+        print("  k. Key-based (run ssh-copy-id now; nothing stored)  [recommended]")
+        print("  p. Save a password for unattended re-provisioning")
+        auth = input("Choose [k]: ").strip().lower() or 'k'
+        if auth == 'p':
+            if not nfs_server.sshpass_available():
+                print(fmt.warning("sshpass is not installed on this machine; saved-password"))
+                print(fmt.warning("auth needs it. Install with: dnf install sshpass"))
+                if not confirm_action("Continue and save the password anyway?", default=False):
+                    print(fmt.dim("Cancelled.")); input("\nPress Enter to return..."); return
+            password = getpass.getpass(f"Password for {user}@{host}: ") or None
+            if password:
+                print(fmt.dim("Stored locally in /var/lib/rhcsa-simulator/nfs_server.conf (root-only, 0600)."))
+        else:
+            if confirm_action(f"Run ssh-copy-id to {user}@{host} now?", default=True):
+                nfs_server.copy_ssh_key(host, user)
 
         print()
         if not confirm_action(f"Provision {user}@{host} as an NFS server now?", default=True):
@@ -299,16 +335,19 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
 
         print()
         print(f"Connecting to {user}@{host}… (enter password/passphrase if prompted)")
-        ok, exports, output = nfs_server.provision(host, user)
+        ok, exports, output = nfs_server.provision(host, user, password=password)
 
         print()
         if not ok:
-            print(fmt.error("Provisioning failed. Output:"))
-            print(output[-2000:] if output else "(no output)")
+            print(fmt.error("Provisioning failed:"))
+            print((output or "(no output)")[-2000:])
+            print()
+            print(fmt.dim("Common causes: SSH/root login refused, server has no repo "
+                          "access for nfs-utils, or firewall blocking. Fix and retry."))
             input("\nPress Enter to return...")
             return
 
-        print(fmt.success("NFS server provisioned. Exports created:"))
+        print(fmt.success("NFS server provisioned. Exports active:"))
         for e in exports:
             print(f"  - {host}:{e}")
 
@@ -323,9 +362,9 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
             print(fmt.warning(f"Could not confirm via showmount: {vout}"))
             print(fmt.dim("(The server may still be fine — check the firewall on the server.)"))
 
-        nfs_server.save_config(host, user, exports)
+        nfs_server.save_config(host, user, exports, password=password)
         print()
-        print(fmt.success("Saved. NFS practice tasks will now use this server and its exports."))
+        print(fmt.success("Saved. NFS tasks will use this server; exports auto-refresh each exam."))
         print(fmt.info(f"Try it: showmount -e {host}  then  mount -t nfs {host}:{exports[0]} /mnt/test"))
         input("\nPress Enter to return...")
 
