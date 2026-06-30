@@ -208,12 +208,18 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
         fmt.clear_screen()
         fmt.print_header("SETUP")
 
+        from core import nfs_server
+        cfg = nfs_server.load_config()
+        nfs_status = (fmt.success(f"configured: {cfg['host']}") if cfg
+                      else fmt.dim("not configured"))
+
         print(fmt.bold("Options"))
         print("  1. Setup Practice Disks (loop devices for LVM)")
         print("  2. View Task Statistics")
         print("  3. Network Backup/Restore")
         print("  4. System Reset (remove practice artifacts)")
         print("  5. Populate Practice Environment (DNF history)")
+        print(f"  6. Configure remote NFS server for NFS tasks ({nfs_status})")
         print("  0. Return to Menu")
         print()
 
@@ -229,6 +235,99 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
             self.system_reset()
         elif choice == '5':
             self.populate_practice_environment()
+        elif choice == '6':
+            self.configure_nfs_server()
+
+    def configure_nfs_server(self):
+        """SSH into a user-named RHEL box and provision it as a real NFS server
+        for the NFS practice tasks (or remove an existing configuration)."""
+        from core import nfs_server
+        from utils.helpers import confirm_action
+
+        fmt.clear_screen()
+        fmt.print_header("CONFIGURE REMOTE NFS SERVER")
+
+        existing = nfs_server.load_config()
+        if existing:
+            print(f"Currently configured: {fmt.bold(existing['host'])} "
+                  f"(user: {existing.get('user', 'root')})")
+            print("Exports:")
+            for e in existing.get('exports', []):
+                print(f"  - {e}")
+            print()
+            print("  R. Re-provision / change server")
+            print("  X. Remove this NFS configuration (local only)")
+            print("  0. Back")
+            print()
+            sub = input("Select: ").strip().lower()
+            if sub == 'x':
+                nfs_server.clear_config()
+                print(fmt.success("NFS server configuration removed. NFS tasks revert "
+                                   "to placeholder servers."))
+                input("\nPress Enter to return...")
+                return
+            if sub not in ('r',):
+                return
+            fmt.clear_screen()
+            fmt.print_header("CONFIGURE REMOTE NFS SERVER")
+
+        print("This will SSH into a RHEL machine you specify and set it up as an")
+        print("NFS server: install nfs-utils, create and populate exports under")
+        print(f"{fmt.bold(nfs_server.EXPORT_BASE)}, write /etc/exports.d, run exportfs,")
+        print("enable nfs-server, and open the firewall.")
+        print()
+        print(fmt.warning("This MODIFIES the remote machine. Use a practice box you control."))
+        print(fmt.dim("ssh will prompt for a password or key passphrase if needed; nothing is stored."))
+        print()
+
+        host = input("NFS server hostname or IP: ").strip()
+        if not host:
+            print(fmt.dim("Cancelled."))
+            input("\nPress Enter to return...")
+            return
+        user = input("SSH login user [root]: ").strip() or 'root'
+
+        if confirm_action(f"Set up passwordless SSH to {user}@{host} first (ssh-copy-id)?",
+                          default=False):
+            nfs_server.copy_ssh_key(host, user)
+
+        print()
+        if not confirm_action(f"Provision {user}@{host} as an NFS server now?", default=True):
+            print(fmt.dim("Cancelled."))
+            input("\nPress Enter to return...")
+            return
+
+        print()
+        print(f"Connecting to {user}@{host}… (enter password/passphrase if prompted)")
+        ok, exports, output = nfs_server.provision(host, user)
+
+        print()
+        if not ok:
+            print(fmt.error("Provisioning failed. Output:"))
+            print(output[-2000:] if output else "(no output)")
+            input("\nPress Enter to return...")
+            return
+
+        print(fmt.success("NFS server provisioned. Exports created:"))
+        for e in exports:
+            print(f"  - {host}:{e}")
+
+        # Confirm the exports are visible from this client.
+        print()
+        print("Verifying from this machine (showmount -e)…")
+        vok, vout = nfs_server.verify_from_client(host)
+        if vok:
+            print(fmt.success("showmount sees the exports:"))
+            print(fmt.dim(vout))
+        else:
+            print(fmt.warning(f"Could not confirm via showmount: {vout}"))
+            print(fmt.dim("(The server may still be fine — check the firewall on the server.)"))
+
+        nfs_server.save_config(host, user, exports)
+        print()
+        print(fmt.success("Saved. NFS practice tasks will now use this server and its exports."))
+        print(fmt.info(f"Try it: showmount -e {host}  then  mount -t nfs {host}:{exports[0]} /mnt/test"))
+        input("\nPress Enter to return...")
 
     def show_stats(self):
         """Show task statistics."""
