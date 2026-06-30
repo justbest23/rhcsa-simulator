@@ -9,8 +9,10 @@ Features:
 - Domain breakdown in final report
 """
 
+import io
 import time
 import logging
+from contextlib import redirect_stdout
 from datetime import datetime, timedelta
 from config import settings
 from tasks.registry import TaskRegistry
@@ -217,22 +219,25 @@ class ExamSession:
         print()
 
     def _display_tasks(self):
-        """Display all exam tasks."""
-        fmt.print_header("EXAM TASKS")
-
+        """Display all exam tasks through a pager so the full question sheet is
+        scrollable (no tmux copy-mode needed for long exams)."""
         total_points = sum(task.points for task in self.tasks)
 
-        for i, task in enumerate(self.tasks, 1):
-            domain = getattr(task, 'exam_domain', 0)
-            domain_name = settings.EXAM_DOMAINS.get(domain, "")
-            domain_tag = f" [{domain_name}]" if domain_name else ""
-            fmt.print_task(i, task.description, task.points)
-            if domain_tag:
-                print(fmt.dim(f"      Domain {domain}: {domain_name}"))
-
-        print()
-        print(fmt.bold(f"Total Points: {total_points}"))
-        print("=" * 60)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            fmt.print_header("EXAM TASKS")
+            for i, task in enumerate(self.tasks, 1):
+                domain = getattr(task, 'exam_domain', 0)
+                domain_name = settings.EXAM_DOMAINS.get(domain, "")
+                domain_tag = f" [{domain_name}]" if domain_name else ""
+                fmt.print_task(i, task.description, task.points)
+                if domain_tag:
+                    print(fmt.dim(f"      Domain {domain}: {domain_name}"))
+            print()
+            print(fmt.bold(f"Total Points: {total_points}"))
+            print(fmt.dim("(Scroll with ↑/↓ or PageUp/PageDown; press q to start.)"))
+            print("=" * 60)
+        fmt.page_output(buf.getvalue())
 
     def validate_all(self):
         """Validate all tasks, run reboot simulation, save to ResultsDB."""

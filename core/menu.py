@@ -715,22 +715,17 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
             self._show_task_detail(task_list[tidx][1])
 
     def _show_task_detail(self, tr):
-        """Show full detail for one task result including failed checks and hints."""
+        """Show full detail for one task result including failed checks and hints.
+
+        The (often long) static detail is rendered through a pager so it is
+        scrollable; the interactive dispute prompt runs afterwards."""
+        import io
         import json
+        from contextlib import redirect_stdout
 
         fmt.clear_screen()
-        status = fmt.success("PASSED") if tr['passed'] else fmt.error("FAILED")
-        cat = fmt.format_category_name(tr['category'])
-        print(f"{status}  {tr['score']}/{tr['max_score']} points  [{cat} / {tr['difficulty']}]")
-        print("=" * 60)
-        print()
 
-        # Task description (what was asked)
-        print(fmt.bold("Task:"))
-        print(tr['description'] or "(no description saved)")
-        print()
-
-        # Validation checks (what the system found)
+        # Parse checks once (also used by the dispute prompt below).
         checks = []
         if tr.get('checks_json'):
             try:
@@ -738,47 +733,63 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
             except Exception:
                 pass
 
-        if checks:
-            print(fmt.bold("Validation breakdown:"))
-            for c in checks:
-                icon = fmt.success("✓") if c.get('passed') else fmt.error("✗")
-                pts = c.get('points', 0)
-                max_pts = c.get('max_points', pts)
-                msg = c.get('message', c.get('name', ''))
-                print(f"  {icon} [{pts}/{max_pts}pt]  {msg}")
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            status = fmt.success("PASSED") if tr['passed'] else fmt.error("FAILED")
+            cat = fmt.format_category_name(tr['category'])
+            print(f"{status}  {tr['score']}/{tr['max_score']} points  [{cat} / {tr['difficulty']}]")
+            print("=" * 60)
             print()
 
-        # Hints / what to study (only if task failed)
-        if not tr['passed']:
-            hints = []
-            if tr.get('hints_json'):
-                try:
-                    hints = json.loads(tr['hints_json'])
-                except Exception:
-                    pass
+            # Task description (what was asked)
+            print(fmt.bold("Task:"))
+            print(tr['description'] or "(no description saved)")
+            print()
 
-            exam_tips = []
-            if tr.get('exam_tips_json'):
-                try:
-                    exam_tips = json.loads(tr['exam_tips_json'])
-                except Exception:
-                    pass
-
-            if hints:
-                print(fmt.bold("What to study / how to fix it:"))
-                for h in hints:
-                    print(f"  • {h}")
+            # Validation checks (what the system found)
+            if checks:
+                print(fmt.bold("Validation breakdown:"))
+                for c in checks:
+                    icon = fmt.success("✓") if c.get('passed') else fmt.error("✗")
+                    pts = c.get('points', 0)
+                    max_pts = c.get('max_points', pts)
+                    msg = c.get('message', c.get('name', ''))
+                    print(f"  {icon} [{pts}/{max_pts}pt]  {msg}")
                 print()
 
-            if exam_tips:
-                print(fmt.bold("Exam tips:"))
-                for t in exam_tips:
-                    print(f"  * {t}")
-                print()
+            # Hints / what to study (only if task failed)
+            if not tr['passed']:
+                hints = []
+                if tr.get('hints_json'):
+                    try:
+                        hints = json.loads(tr['hints_json'])
+                    except Exception:
+                        pass
 
-            if not hints and not exam_tips:
-                print(fmt.dim("(No hints saved for this session — re-run a new exam to get hints)"))
-                print()
+                exam_tips = []
+                if tr.get('exam_tips_json'):
+                    try:
+                        exam_tips = json.loads(tr['exam_tips_json'])
+                    except Exception:
+                        pass
+
+                if hints:
+                    print(fmt.bold("What to study / how to fix it:"))
+                    for h in hints:
+                        print(f"  • {h}")
+                    print()
+
+                if exam_tips:
+                    print(fmt.bold("Exam tips:"))
+                    for t in exam_tips:
+                        print(f"  * {t}")
+                    print()
+
+                if not hints and not exam_tips:
+                    print(fmt.dim("(No hints saved for this session — re-run a new exam to get hints)"))
+                    print()
+
+        fmt.page_output(buf.getvalue())
 
         # Offer the dispute path when there are checks to dispute.
         if checks:
