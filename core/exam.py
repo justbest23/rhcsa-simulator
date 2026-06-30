@@ -71,6 +71,9 @@ class ExamSession:
             helpers.reset_practice_loops()
         except Exception:
             pass
+        # Remove leftover task artifacts from previous sessions (stray
+        # /tmp/*.txt, old mount points, swap files, etc.) so this exam is clean.
+        self._clean_lab_leftovers()
         try:
             pool = helpers.build_device_pool()
         except Exception:
@@ -173,6 +176,17 @@ class ExamSession:
                 # is still valid, so stay quiet to avoid alarming the candidate.
             except Exception as e:
                 print(fmt.warning(f"  ✗ {task.id}: setup error ({e})"))
+
+    def _clean_lab_leftovers(self):
+        """Remove leftover task artifacts (files/dirs/mounts the tasks ask the
+        candidate to create) so each exam starts from a clean slate."""
+        try:
+            from core import lab_cleanup
+            done = lab_cleanup.clean(dry_run=False)
+        except Exception:
+            return
+        if done:
+            print(fmt.dim(f"Removed {len(done)} leftover lab artifact(s) from a previous session."))
 
     def _has_nfs_tasks(self):
         return any(getattr(t, 'category', '') == 'network_storage' for t in self.tasks)

@@ -220,6 +220,7 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
         print("  4. System Reset (remove practice artifacts)")
         print("  5. Populate Practice Environment (DNF history)")
         print(f"  6. Configure remote NFS server for NFS tasks ({nfs_status})")
+        print("  7. Clean lab leftover files (remove task artifacts)")
         print("  0. Return to Menu")
         print()
 
@@ -237,6 +238,42 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
             self.populate_practice_environment()
         elif choice == '6':
             self.configure_nfs_server()
+        elif choice == '7':
+            self.clean_lab_leftovers()
+
+    def clean_lab_leftovers(self):
+        """Preview and remove leftover task artifacts (files/dirs/mounts the
+        tasks ask the candidate to create)."""
+        from core import lab_cleanup
+        from utils.helpers import confirm_action
+
+        fmt.clear_screen()
+        fmt.print_header("CLEAN LAB LEFTOVER FILES")
+
+        planned = lab_cleanup.clean(dry_run=True)
+        if not planned:
+            print(fmt.success("Nothing to clean — no known task artifacts present."))
+            input("\nPress Enter to return...")
+            return
+
+        print("These task-created artifacts would be removed "
+              "(/etc and your dotfiles are never touched):")
+        print()
+        for line in planned:
+            print(f"  {line}")
+        print()
+        if not confirm_action(f"Remove these {len(planned)} item(s)?", default=False):
+            print(fmt.dim("Cancelled — nothing removed."))
+            input("\nPress Enter to return...")
+            return
+
+        done = lab_cleanup.clean(dry_run=False)
+        print()
+        print(fmt.success(f"Removed {len(done)} item(s)."))
+        for line in done:
+            if line.startswith('FAILED'):
+                print(fmt.warning(f"  {line}"))
+        input("\nPress Enter to return...")
 
     def configure_nfs_server(self):
         """SSH into a user-named RHEL box and provision it as a real NFS server
