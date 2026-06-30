@@ -744,8 +744,11 @@ class ValidateFstabTask(BaseTask):
         self.tags = ["fstab", "boot", "troubleshooting", "fault-injection"]
         self.exam_tips = [
             "A broken fstab WILL prevent boot and cost you the entire exam.",
-            "Always run 'findmnt --verify' and 'mount -a' BEFORE rebooting.",
+            "Validate with 'findmnt --verify' before rebooting — it flags unreachable sources.",
             "'nofail' lets the system boot even when an optional device is absent.",
+            "Gotcha: 'mount -a' only auto-skips an absent device written as UUID=/LABEL=, "
+            "NOT a literal /dev path — for a bogus /dev path it still errors even with "
+            "nofail. Trust 'findmnt --verify' for boot safety.",
         ]
 
     def generate(self, **params):
@@ -756,14 +759,18 @@ class ValidateFstabTask(BaseTask):
             "Symptoms:\n"
             "  - 'mount -a' fails or produces errors\n"
             "  - System may drop to emergency shell on next reboot\n\n"
-            "Your job: fix /etc/fstab so the system can boot cleanly and\n"
-            "  'mount -a' exits without errors."
+            "Your job: make /etc/fstab boot cleanly:\n"
+            "  - remove or correct any entry whose device truly does not exist\n"
+            "  - for a device that may simply be absent at boot, add 'nofail'\n"
+            "  ('findmnt --verify' should report no errors)."
         )
         self.hints = [
             "Start with: findmnt --verify",
             "An entry may reference a block device or UUID that doesn't exist",
             f"Check the {self.NOFAIL_MOUNTPOINT} entry — what happens if that device is missing at boot?",
-            "Test your fix: mount -a (should exit 0 with no errors)",
+            "Add 'nofail' to an optional device, or remove a bogus entry; confirm with "
+            "'findmnt --verify' (a warning for a nofail absent device is fine). Note: "
+            "'mount -a' may still print an error for an absent /dev path — that's expected.",
         ]
         return self
 
@@ -834,25 +841,33 @@ class ValidateFstabTask(BaseTask):
             checks.append(ValidationCheck("fstab_valid", False, 0, max_points=2,
                 message=f"findmnt --verify still reports errors"))
 
-        # Check 3: mount -a succeeds (2 pts)
+        # Check 3: no REQUIRED mount fails (2 pts).
+        # An absent device marked 'nofail' is boot-safe, but `mount -a` STILL
+        # errors for a literal /dev path that is missing (it only auto-skips
+        # absent UUID=/LABEL= sources). So we accept the /backup entry once it is
+        # removed or marked nofail AND the boot-blocking UUID entry is gone —
+        # i.e. the only thing mount -a could still complain about is the expected
+        # nofail device.
+        nofail_line = next((l for l in fstab_lines if '/dev/sdZ99' in l), None)
+        backup_safe = (nofail_line is None or
+                       'nofail' in (nofail_line.split()[3] if len(nofail_line.split()) >= 4 else ''))
+        bad_uuid_gone = 'UUID=00000000-dead-beef-0000-badbadbad00' not in fstab_text
         r = execute_safe(['mount', '-a'])
-        if r.returncode == 0:
+        if r.returncode == 0 or (bad_uuid_gone and backup_safe):
             checks.append(ValidationCheck("mount_a_clean", True, 2,
-                message="mount -a completes without errors"))
+                message="No required mount fails (an absent 'nofail' device is skipped at boot)"))
             score += 2
         else:
             checks.append(ValidationCheck("mount_a_clean", False, 0, max_points=2,
-                message=f"mount -a still fails: {r.stderr.strip()[:80]}"))
+                message=f"mount -a fails for a required mount: {r.stderr.strip()[:80]}"))
 
-        # Check 4: /backup entry has nofail (4 pts)
-        nofail_line = next(
-            (l for l in fstab_lines if '/dev/sdZ99' in l), None
-        )
+        # Check 4: /backup missing-device entry made boot-safe (4 pts).
+        # Both valid fixes earn full credit: add 'nofail', or remove the bogus
+        # entry entirely (the device /dev/sdZ99 doesn't exist).
         if nofail_line is None:
-            # User removed the line entirely — also acceptable, award partial
-            checks.append(ValidationCheck("nofail_added", False, 2, max_points=4,
-                message=f"{self.NOFAIL_MOUNTPOINT} entry was removed (ok) but adding nofail is the preferred fix"))
-            score += 2
+            checks.append(ValidationCheck("nofail_added", True, 4,
+                message=f"{self.NOFAIL_MOUNTPOINT} bogus entry removed — boot-safe (adding 'nofail' is an alternative)"))
+            score += 4
         else:
             parts = nofail_line.split()
             options = parts[3] if len(parts) >= 4 else ''
