@@ -228,6 +228,11 @@ class ExamSession:
         if not nfs_server.load_config():
             return
         try:
+            # Unmount our client-side NFS mounts FIRST, while the server is
+            # still exporting, so they can't become stale when exports go away.
+            n = nfs_server.unmount_client_mounts()
+            if n:
+                print(fmt.dim(f"  Unmounted {n} client NFS mount(s)."))
             ok, _ = nfs_server.remove_exports()
             if ok:
                 print(fmt.dim("  NFS exports removed from server."))
