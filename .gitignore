@@ -34,3 +34,6 @@ Thumbs.db
 # Keep data directories but not contents
 !data/results/.gitkeep
 !data/logs/.gitkeep
+
+# Candidate dispute reports (local only)
+data/disputes/

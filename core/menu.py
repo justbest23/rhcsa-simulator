@@ -780,7 +780,132 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
                 print(fmt.dim("(No hints saved for this session — re-run a new exam to get hints)"))
                 print()
 
-        input("Press Enter to return to session view...")
+        # Offer the dispute path when there are checks to dispute.
+        if checks:
+            print(fmt.dim("Think the checker got this wrong? Type 'd' to dispute it "
+                          "(opens a GitHub issue; an AI reviews your evidence and "
+                          "pushes a fix if you're right)."))
+            choice = input("Press Enter to return to session view, or 'd' to dispute: ").strip().lower()
+            if choice == 'd':
+                self._dispute_check_flow(tr, checks)
+        else:
+            input("Press Enter to return to session view...")
+
+    def _dispute_check_flow(self, tr, checks):
+        """Let the candidate dispute a checker result: capture system-state
+        evidence + their argument and open a GitHub issue that triggers an AI
+        review (which pushes a fix PR if the checker is genuinely wrong)."""
+        from core import dispute
+        from utils.helpers import confirm_action
+
+        fmt.clear_screen()
+        print(fmt.bold("DISPUTE A CHECKER RESULT"))
+        print("=" * 60)
+        print()
+        print("If you believe the checker scored this task incorrectly, you can")
+        print("dispute it. Here is exactly what happens when you do:")
+        print()
+        print("  1. Your written argument and the relevant LIVE system state")
+        print("     (command output) are captured as evidence.")
+        print("  2. A GitHub issue is opened on this project containing that")
+        print("     evidence (so review it for anything sensitive first).")
+        print("  3. An AI reviewer inspects the validator for this task, compares")
+        print("     it against your evidence, and comments a verdict.")
+        print("  4. If the checker is wrong, it opens a fix PR automatically.")
+        print()
+        print(fmt.warning("Evidence (file paths, hostnames, command output) becomes public on GitHub."))
+        print()
+
+        if not confirm_action("Open a GitHub dispute for this task?", default=False):
+            print(fmt.dim("Cancelled — nothing was sent."))
+            input("\nPress Enter to return to session view...")
+            return
+
+        # 1. Which checks are being disputed (default: the failed ones).
+        print()
+        print(fmt.bold("Which check(s) are wrong?"))
+        for i, c in enumerate(checks, 1):
+            mark = fmt.success("✓") if c.get('passed') else fmt.error("✗")
+            print(f"  {i}. {mark} {c.get('message', c.get('name', ''))}")
+        print()
+        sel = input("Enter numbers (comma-separated), or Enter for all FAILED checks: ").strip()
+        if sel:
+            disputed = []
+            for tok in sel.replace(',', ' ').split():
+                try:
+                    idx = int(tok) - 1
+                    if 0 <= idx < len(checks):
+                        disputed.append(checks[idx])
+                except ValueError:
+                    pass
+        else:
+            disputed = [c for c in checks if not c.get('passed')]
+        if not disputed:
+            disputed = list(checks)
+
+        # 2. The candidate's argument.
+        print()
+        print(fmt.bold("Why is the checker wrong? (explain your evidence)"))
+        print(fmt.dim("Enter your argument; finish with an empty line."))
+        arg_lines = []
+        while True:
+            line = input("  ")
+            if line == '' and arg_lines:
+                break
+            if line == '' and not arg_lines:
+                continue
+            arg_lines.append(line)
+        argument = "\n".join(arg_lines)
+
+        # 3. Optional extra evidence commands.
+        print()
+        print(fmt.bold("Extra evidence commands (optional)"))
+        print(fmt.dim("Type read-only commands whose output proves your point, one per"))
+        print(fmt.dim("line (e.g. 'blkid /dev/sda1'). Finish with an empty line."))
+        extra_cmds = []
+        while True:
+            line = input("  $ ").strip()
+            if line == '':
+                break
+            extra_cmds.append(line)
+
+        # 4. Capture evidence + build + save the report.
+        print()
+        print("Capturing system state…")
+        evidence = dispute.collect_evidence(tr.get('category', ''), extra_cmds)
+        body = dispute.build_report(tr, disputed, argument, evidence)
+        path = dispute.save_report(tr, body)
+        print(fmt.success(f"Saved dispute report: {path}"))
+
+        # 5. Submit via gh (or fall back to local-only with instructions).
+        if not dispute.gh_available():
+            print()
+            print(fmt.warning("GitHub CLI ('gh') is not installed or not authenticated, so the"))
+            print(fmt.warning("issue could not be opened automatically."))
+            print("The full report was saved at the path above. To file it:")
+            print(fmt.dim(f"  gh issue create --label {dispute.DISPUTE_LABEL} "
+                          f"--title '[checker dispute] {tr.get('task_id')}' --body-file {path}"))
+            input("\nPress Enter to return to session view...")
+            return
+
+        print()
+        if not confirm_action("Open the GitHub issue now?", default=True):
+            print(fmt.dim(f"Not sent. Report kept at {path}."))
+            input("\nPress Enter to return to session view...")
+            return
+
+        ok, info = dispute.submit_issue(tr, path)
+        print()
+        if ok:
+            print(fmt.success("Dispute filed!"))
+            if info:
+                print(f"  {info}")
+            print(fmt.info("An AI reviewer will inspect the validator and, if the checker is"))
+            print(fmt.info("wrong, open a fix PR. Watch the issue for its verdict."))
+        else:
+            print(fmt.error(f"Could not open the issue: {info}"))
+            print(fmt.dim(f"The report is saved at {path} — you can file it manually."))
+        input("\nPress Enter to return to session view...")
 
     def populate_practice_environment(self):
         """Install/remove lightweight packages to build up DNF transaction history."""
