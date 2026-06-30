@@ -60,6 +60,15 @@ class ExamSession:
         # plus any spare non-system disk like /dev/sda) so the generator can cap
         # whole-disk tasks to the number of devices we can actually hand out.
         from utils import helpers
+        # Start from a clean loop-device pool. Interrupted prior sessions can
+        # leave orphan loops (attached to deleted images, stale PV/fs
+        # signatures, dangling LVM-devices-file entries) that would otherwise be
+        # handed to disk tasks and break pvcreate/mkfs. Reset wipes those and
+        # recreates fresh, signature-free practice disks.
+        try:
+            helpers.reset_practice_loops()
+        except Exception:
+            pass
         try:
             pool = helpers.build_device_pool()
         except Exception:
