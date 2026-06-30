@@ -270,6 +270,47 @@ def provision(host, user='root', password=None, batch=False):
     return _parse(rc, out)
 
 
+def unmount_client_mounts(host=None):
+    """Unmount LOCAL nfs mounts served by our configured server BEFORE the
+    server's exports are removed, so they never become stale (a stale NFS mount
+    makes stat()/cleanup hang on the next exam). Matches by server host or by an
+    export path we own (handles name-vs-IP mismatches). Returns the count.
+
+    All operations are timeout-bounded; a 'umount -l' is lazy so it returns
+    immediately even if a mount is already unreachable.
+    """
+    cfg = load_config()
+    if host is None:
+        host = cfg.get('host') if cfg else None
+    exports = set(cfg.get('exports', [])) if cfg else set()
+    if not host and not exports:
+        return 0
+
+    try:
+        res = subprocess.run(
+            ['findmnt', '-rno', 'TARGET,SOURCE', '-t', 'nfs,nfs4'],
+            capture_output=True, text=True, timeout=15
+        )
+    except Exception:
+        return 0
+
+    count = 0
+    for line in res.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        target, source = parts[0], parts[1]
+        src_host, _, src_path = source.partition(':')
+        if (host and src_host == host) or (src_path and src_path in exports):
+            try:
+                subprocess.run(['umount', '-l', '--', target],
+                               capture_output=True, timeout=15)
+                count += 1
+            except Exception:
+                pass
+    return count
+
+
 def remove_exports(host=None, user='root', password=None, batch=True):
     """Tear our exports down on the server. Returns (ok, output)."""
     cfg = load_config()
