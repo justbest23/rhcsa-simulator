@@ -97,6 +97,9 @@ class ExamSession:
         # can't pass on pre-existing/default state.
         self._setup_task_environments()
 
+        # Refresh the remote NFS server's exports so this exam starts clean.
+        self._reprovision_nfs()
+
         self._display_tasks()
 
         # Start timer
@@ -171,8 +174,56 @@ class ExamSession:
             except Exception as e:
                 print(fmt.warning(f"  ✗ {task.id}: setup error ({e})"))
 
+    def _has_nfs_tasks(self):
+        return any(getattr(t, 'category', '') == 'network_storage' for t in self.tasks)
+
+    def _reprovision_nfs(self):
+        """If a remote NFS server is configured and this exam has NFS tasks,
+        refresh its exports so the run starts from clean, seeded shares."""
+        if not self._has_nfs_tasks():
+            return
+        try:
+            from core import nfs_server
+        except Exception:
+            return
+        if not nfs_server.load_config():
+            return
+        print(fmt.bold("\nRefreshing NFS server exports..."))
+        try:
+            ok, exports, output = nfs_server.reprovision_from_config()
+        except Exception as e:
+            print(fmt.warning(f"  ✗ NFS re-provision error ({e})"))
+            return
+        if ok:
+            print(fmt.success(f"  ✓ NFS exports refreshed ({len(exports)} shares)"))
+        else:
+            print(fmt.warning("  ✗ Could not refresh NFS exports (NFS tasks may not be testable):"))
+            tail = (output or '').strip().splitlines()[-2:]
+            for line in tail:
+                print(fmt.dim(f"      {line}"))
+            print(fmt.dim("      Fix via Setup → Configure remote NFS server → Test connection."))
+
+    def _teardown_nfs(self):
+        """Tear our exports off the remote NFS server after the exam."""
+        if not self._has_nfs_tasks():
+            return
+        try:
+            from core import nfs_server
+        except Exception:
+            return
+        if not nfs_server.load_config():
+            return
+        try:
+            ok, _ = nfs_server.remove_exports()
+            if ok:
+                print(fmt.dim("  NFS exports removed from server."))
+        except Exception:
+            pass
+
     def _restore_exam_faults(self):
         """Restore any environments that were set up for the exam."""
+        # NFS teardown runs independently of local fault/setup state.
+        self._teardown_nfs()
         if not self._injected_tasks and not self._setup_tasks:
             return
         print(fmt.dim("\nCleaning up exam environment..."))
