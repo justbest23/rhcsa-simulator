@@ -1,0 +1,76 @@
+name: Checker dispute review
+
+# Triggered when a "checker-dispute" label is added to an issue (the RHCSA
+# simulator does this automatically when a candidate disputes a validator
+# result). An AI reviewer reads the issue — which contains the task, the
+# disputed check(s), the candidate's argument and captured system state —
+# inspects the validator for that task, posts a verdict comment, and opens a
+# fix PR if the checker is genuinely wrong.
+#
+# Auth: set ONE repo secret (Settings → Secrets and variables → Actions):
+#   * CLAUDE_CODE_OAUTH_TOKEN  — from `claude setup-token`, uses your existing
+#     Claude subscription (no per-token API billing), OR
+#   * ANTHROPIC_API_KEY        — pay-as-you-go Anthropic API key.
+# The step below accepts either; set whichever you have.
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  review:
+    if: github.event.label.name == 'checker-dispute'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: AI review of the disputed checker
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: >-
+            --allowedTools "Bash,Read,Edit,Write,Grep,Glob"
+          prompt: |
+            A candidate using the RHCSA exam simulator has disputed a validator
+            ("checker") result. The dispute is GitHub issue #${{ github.event.issue.number }}
+            in this repository. Its body contains: the task as presented, the
+            specific check(s) the candidate says are wrong, the candidate's
+            written argument, and captured live system-state evidence.
+
+            Your job:
+            1. Read the issue:
+                 gh issue view ${{ github.event.issue.number }}
+            2. Identify the task by its `task_id` (stated in the issue) and find
+               the corresponding task class and its `validate()` method under
+               tasks/ (and any helpers under validators/).
+            3. Decide, strictly from the evidence in the issue, whether the
+               checker logic is WRONG (e.g. wrong device-naming, wrong path,
+               wrong grep pattern, an inverted condition, an off-by-one, a bad
+               RHEL10 assumption) versus the candidate simply not having
+               completed the task. Be rigorous and skeptical — the evidence
+               must actually contradict the check.
+            4. Post a comment on the issue with your verdict and reasoning:
+                 gh issue comment ${{ github.event.issue.number }} --body "..."
+            5. If — and only if — the checker is genuinely wrong:
+                 - create a branch  fix/dispute-<task_id>-${{ github.event.issue.number }}
+                 - implement the minimal correct fix to the validator/task
+                 - run `python3 -m pytest -q` and make sure it passes
+                 - commit and open a PR whose body says
+                   "Closes #${{ github.event.issue.number }}", explaining the bug
+                   and citing the evidence, using `gh pr create`.
+               If the checker is correct, do NOT open a PR; just explain in your
+               comment what the candidate likely missed.
+
+            Do not change behaviour beyond the validator/task fix. Keep the PR
+            small and focused.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
