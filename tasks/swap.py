@@ -8,7 +8,7 @@ from tasks.base import BaseTask
 from tasks.registry import TaskRegistry
 from core.validator import ValidationCheck, ValidationResult
 from validators.safe_executor import execute_safe
-from utils.helpers import get_swap_practice_device
+from utils.helpers import get_swap_practice_device, partition_device
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +45,8 @@ class CreateSwapPartitionTask(BaseTask):
         # usable after the 1MiB alignment offset). Keep sizes comfortably below.
         self.size_mb = params.get('size_mb', random.choice([256, 400]))
         self.loop_device = params.get('loop_device') or get_swap_practice_device() or '/dev/sdb'
-        # Partition 1 on the loop device (e.g. /dev/loop2p1)
-        self.device = params.get('device') or f"{self.loop_device}p1"
+        # Partition 1 on the disk: /dev/loop2p1 but /dev/sda1 (no 'p' for sd*).
+        self.device = params.get('device') or partition_device(self.loop_device, 1)
 
         self.description = (
             f"Use {self.loop_device} to create a {self.size_mb}MB swap partition "
