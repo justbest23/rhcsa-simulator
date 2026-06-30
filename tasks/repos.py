@@ -14,6 +14,100 @@ from validators.safe_executor import execute_safe
 logger = logging.getLogger(__name__)
 
 
+# Real, reachable RHEL 10-compatible repositories. Every base_url was verified
+# to serve repodata/repomd.xml and every gpg_key_url to return 200 (2026-06).
+#
+# Why real URLs instead of http://content.example.com/... : an *enabled* repo
+# whose baseurl can't be reached makes EVERY subsequent `dnf` operation fail
+# ("Failed to download metadata for repo ..."), so configuring a fake repo
+# would silently break the package-install tasks elsewhere in the exam. With
+# real mirrors the repo the candidate configures actually works and `dnf
+# repolist` / `dnf install` keep functioning. Tasks cycle through this pool.
+#
+# gpg_key_url is None where no stable key URL was verified; those entries are
+# used only for gpgcheck=0 scenarios.
+REAL_REPOS = [
+    {'repo_id': 'rocky10-baseos', 'repo_name': 'Rocky Linux 10 - BaseOS',
+     'base_url': 'https://dl.rockylinux.org/pub/rocky/10/BaseOS/x86_64/os/',
+     'gpg_key_url': 'https://dl.rockylinux.org/pub/rocky/RPM-GPG-KEY-Rocky-10'},
+    {'repo_id': 'rocky10-appstream', 'repo_name': 'Rocky Linux 10 - AppStream',
+     'base_url': 'https://dl.rockylinux.org/pub/rocky/10/AppStream/x86_64/os/',
+     'gpg_key_url': 'https://dl.rockylinux.org/pub/rocky/RPM-GPG-KEY-Rocky-10'},
+    {'repo_id': 'rocky10-crb', 'repo_name': 'Rocky Linux 10 - CRB',
+     'base_url': 'https://dl.rockylinux.org/pub/rocky/10/CRB/x86_64/os/',
+     'gpg_key_url': 'https://dl.rockylinux.org/pub/rocky/RPM-GPG-KEY-Rocky-10'},
+    {'repo_id': 'rocky10-extras', 'repo_name': 'Rocky Linux 10 - Extras',
+     'base_url': 'https://dl.rockylinux.org/pub/rocky/10/extras/x86_64/os/',
+     'gpg_key_url': 'https://dl.rockylinux.org/pub/rocky/RPM-GPG-KEY-Rocky-10'},
+    {'repo_id': 'rocky10-devel', 'repo_name': 'Rocky Linux 10 - Devel',
+     'base_url': 'https://dl.rockylinux.org/pub/rocky/10/devel/x86_64/os/',
+     'gpg_key_url': 'https://dl.rockylinux.org/pub/rocky/RPM-GPG-KEY-Rocky-10'},
+    {'repo_id': 'alma10-baseos', 'repo_name': 'AlmaLinux 10 - BaseOS',
+     'base_url': 'https://repo.almalinux.org/almalinux/10/BaseOS/x86_64/os/',
+     'gpg_key_url': 'https://repo.almalinux.org/almalinux/RPM-GPG-KEY-AlmaLinux-10'},
+    {'repo_id': 'alma10-appstream', 'repo_name': 'AlmaLinux 10 - AppStream',
+     'base_url': 'https://repo.almalinux.org/almalinux/10/AppStream/x86_64/os/',
+     'gpg_key_url': 'https://repo.almalinux.org/almalinux/RPM-GPG-KEY-AlmaLinux-10'},
+    {'repo_id': 'alma10-crb', 'repo_name': 'AlmaLinux 10 - CRB',
+     'base_url': 'https://repo.almalinux.org/almalinux/10/CRB/x86_64/os/',
+     'gpg_key_url': 'https://repo.almalinux.org/almalinux/RPM-GPG-KEY-AlmaLinux-10'},
+    {'repo_id': 'alma10-extras', 'repo_name': 'AlmaLinux 10 - Extras',
+     'base_url': 'https://repo.almalinux.org/almalinux/10/extras/x86_64/os/',
+     'gpg_key_url': 'https://repo.almalinux.org/almalinux/RPM-GPG-KEY-AlmaLinux-10'},
+    {'repo_id': 'epel', 'repo_name': 'Extra Packages for Enterprise Linux 10',
+     'base_url': 'https://dl.fedoraproject.org/pub/epel/10/Everything/x86_64/',
+     'gpg_key_url': 'https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-10'},
+    {'repo_id': 'epel9', 'repo_name': 'Extra Packages for Enterprise Linux 9',
+     'base_url': 'https://dl.fedoraproject.org/pub/epel/9/Everything/x86_64/',
+     'gpg_key_url': 'https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-9'},
+    {'repo_id': 'grafana', 'repo_name': 'Grafana OSS',
+     'base_url': 'https://rpm.grafana.com/',
+     'gpg_key_url': 'https://rpm.grafana.com/gpg.key'},
+    {'repo_id': 'nodesource-nodejs', 'repo_name': 'Node.js 22.x',
+     'base_url': 'https://rpm.nodesource.com/pub_22.x/nodistro/nodejs/x86_64/',
+     'gpg_key_url': None},
+    {'repo_id': 'vscode', 'repo_name': 'Visual Studio Code',
+     'base_url': 'https://packages.microsoft.com/yumrepos/vscode/',
+     'gpg_key_url': 'https://packages.microsoft.com/keys/microsoft.asc'},
+    {'repo_id': 'kubernetes', 'repo_name': 'Kubernetes v1.31',
+     'base_url': 'https://pkgs.k8s.io/core:/stable:/v1.31/rpm/',
+     'gpg_key_url': 'https://pkgs.k8s.io/core:/stable:/v1.31/rpm/repodata/repomd.xml.key'},
+    {'repo_id': 'hashicorp', 'repo_name': 'HashiCorp Stable',
+     'base_url': 'https://rpm.releases.hashicorp.com/RHEL/10/x86_64/stable/',
+     'gpg_key_url': 'https://rpm.releases.hashicorp.com/gpg'},
+    {'repo_id': 'docker-ce', 'repo_name': 'Docker CE Stable',
+     'base_url': 'https://download.docker.com/linux/rhel/10/x86_64/stable/',
+     'gpg_key_url': 'https://download.docker.com/linux/rhel/gpg'},
+    {'repo_id': 'elrepo', 'repo_name': 'ELRepo.org Community Enterprise Linux Repository',
+     'base_url': 'https://elrepo.org/linux/elrepo/el10/x86_64/',
+     'gpg_key_url': 'https://www.elrepo.org/RPM-GPG-KEY-elrepo.org'},
+    {'repo_id': 'rpmfusion-free', 'repo_name': 'RPM Fusion Free Updates',
+     'base_url': 'https://download1.rpmfusion.org/free/el/updates/10/x86_64/',
+     'gpg_key_url': None},
+    {'repo_id': 'pgdg17', 'repo_name': 'PostgreSQL 17 for RHEL 10',
+     'base_url': 'https://download.postgresql.org/pub/repos/yum/17/redhat/rhel-10-x86_64/',
+     'gpg_key_url': None},
+    {'repo_id': 'mariadb', 'repo_name': 'MariaDB 11.4',
+     'base_url': 'https://yum.mariadb.org/11.4/rhel/10/x86_64/',
+     'gpg_key_url': 'https://yum.mariadb.org/RPM-GPG-KEY-MariaDB'},
+    {'repo_id': 'nginx', 'repo_name': 'nginx stable',
+     'base_url': 'https://nginx.org/packages/rhel/10/x86_64/',
+     'gpg_key_url': 'https://nginx.org/keys/nginx_signing.key'},
+    {'repo_id': 'tailscale', 'repo_name': 'Tailscale Stable',
+     'base_url': 'https://pkgs.tailscale.com/stable/rhel/10/x86_64/',
+     'gpg_key_url': 'https://pkgs.tailscale.com/stable/rhel/10/repo.gpg'},
+    {'repo_id': 'packages-microsoft-com-prod', 'repo_name': 'Microsoft Production',
+     'base_url': 'https://packages.microsoft.com/rhel/10/prod/',
+     'gpg_key_url': 'https://packages.microsoft.com/keys/microsoft.asc'},
+    {'repo_id': 'google-cloud-cli', 'repo_name': 'Google Cloud CLI',
+     'base_url': 'https://packages.cloud.google.com/yum/repos/cloud-sdk-el9-x86_64/',
+     'gpg_key_url': 'https://packages.cloud.google.com/yum/doc/yum-key.gpg'},
+]
+
+# Subset that has a verified GPG key, for tasks that require gpgcheck=1 + gpgkey.
+REAL_REPOS_WITH_GPG = [r for r in REAL_REPOS if r.get('gpg_key_url')]
+
+
 @TaskRegistry.register("repos")
 class ConfigureRepoTask(BaseTask):
     """Configure a new DNF repository with baseurl and gpgcheck."""
@@ -39,42 +133,10 @@ class ConfigureRepoTask(BaseTask):
         self.gpgcheck = None
 
     def generate(self, **params):
-        """Generate a repository configuration task with randomized parameters."""
-        # RHCSA exam-style repos — recognisable to candidates, won't break dnf
-        repo_configs = [
-            {
-                'repo_id': 'BaseOS',
-                'repo_name': 'Red Hat Enterprise Linux 10 - BaseOS',
-                'base_url': 'http://content.example.com/rhel10.0/x86_64/dvd/BaseOS/',
-            },
-            {
-                'repo_id': 'AppStream',
-                'repo_name': 'Red Hat Enterprise Linux 10 - AppStream',
-                'base_url': 'http://content.example.com/rhel10.0/x86_64/dvd/AppStream/',
-            },
-            {
-                'repo_id': 'extras',
-                'repo_name': 'RHEL 10 Extras',
-                'base_url': 'http://content.example.com/rhel10.0/x86_64/extras/',
-            },
-            {
-                'repo_id': 'supplementary',
-                'repo_name': 'RHEL 10 Supplementary',
-                'base_url': 'http://content.example.com/rhel10.0/x86_64/supplementary/',
-            },
-            {
-                'repo_id': 'internalmirror',
-                'repo_name': 'Internal Mirror Repository',
-                'base_url': 'http://mirror.internal.example.com/rhel10/BaseOS/x86_64/os',
-            },
-            {
-                'repo_id': 'examrepo',
-                'repo_name': 'Exam Content Repository',
-                'base_url': 'http://repo.lab.example.com/rhel10/packages',
-            },
-        ]
-
-        config = params.get('config', random.choice(repo_configs))
+        """Generate a repository configuration task using a real, reachable repo
+        drawn from REAL_REPOS so the configured repo actually works and does not
+        break dnf for other tasks."""
+        config = params.get('config', random.choice(REAL_REPOS))
         self.repo_id = config['repo_id']
         self.repo_name = config['repo_name']
         self.base_url = config['base_url']
@@ -224,35 +286,9 @@ class ConfigureRepoGPGTask(BaseTask):
         self.gpg_key_url = None
 
     def generate(self, **params):
-        """Generate a repository with GPG key configuration task."""
-        repo_configs = [
-            {
-                'repo_id': 'securerepo',
-                'repo_name': 'Secure Package Repository',
-                'base_url': 'http://content.example.com/rhel10/secure',
-                'gpg_key_url': 'http://content.example.com/rhel10/RPM-GPG-KEY-secure',
-            },
-            {
-                'repo_id': 'vendorrepo',
-                'repo_name': 'Vendor Software Repository',
-                'base_url': 'https://packages.vendor.example.com/rhel10/x86_64',
-                'gpg_key_url': 'https://packages.vendor.example.com/RPM-GPG-KEY-vendor',
-            },
-            {
-                'repo_id': 'signedrepo',
-                'repo_name': 'Signed Packages Repository',
-                'base_url': 'http://repo.lab.example.com/rhel10/signed',
-                'gpg_key_url': 'file:///etc/pki/rpm-gpg/RPM-GPG-KEY-lab',
-            },
-            {
-                'repo_id': 'productrepo',
-                'repo_name': 'Product Repository',
-                'base_url': 'http://mirror.internal.example.com/products/rhel10',
-                'gpg_key_url': 'http://mirror.internal.example.com/RPM-GPG-KEY-product',
-            },
-        ]
-
-        config = params.get('config', random.choice(repo_configs))
+        """Generate a repository + GPG key task using a real, reachable repo
+        (and real key URL) drawn from REAL_REPOS_WITH_GPG."""
+        config = params.get('config', random.choice(REAL_REPOS_WITH_GPG))
         self.repo_id = config['repo_id']
         self.repo_name = config['repo_name']
         self.base_url = config['base_url']
@@ -524,7 +560,7 @@ class ConfigureBaseOSAppStreamTask(BaseTask):
             "You need BOTH BaseOS and AppStream repos configured",
             "Without these repos, you cannot install packages for other tasks",
             "Configure repos FIRST on the exam before attempting other tasks",
-            "Common format: http://content.example.com/rhel10.0/x86_64/dvd/BaseOS",
+            "Common format: <server>/BaseOS/<arch>/os/ and <server>/AppStream/<arch>/os/",
         ]
         self.server_url = None
         self.baseos_url = None
@@ -534,17 +570,16 @@ class ConfigureBaseOSAppStreamTask(BaseTask):
 
     def generate(self, **params):
         """Generate BaseOS + AppStream repository configuration task."""
+        # Real distro mirror roots whose /<repo>/x86_64/os/ trees exist, so the
+        # configured repos actually resolve and `dnf repolist` shows them.
         servers = [
-            'http://content.example.com/rhel10.0/x86_64/dvd',
-            'http://repo.lab.example.com/rhel10/x86_64',
-            'http://mirror.internal.example.com/rhel10',
-            'http://classroom.example.com/content/rhel10.0/x86_64/dvd',
-            'file:///repo',
+            'https://dl.rockylinux.org/pub/rocky/10',
+            'https://repo.almalinux.org/almalinux/10',
         ]
 
         self.server_url = params.get('server_url', random.choice(servers))
-        self.baseos_url = f"{self.server_url}/BaseOS"
-        self.appstream_url = f"{self.server_url}/AppStream"
+        self.baseos_url = f"{self.server_url}/BaseOS/x86_64/os/"
+        self.appstream_url = f"{self.server_url}/AppStream/x86_64/os/"
 
         repo_id_sets = [
             ('baseos', 'appstream'),
@@ -762,41 +797,43 @@ class TroubleshootBrokenRepoTask(BaseTask):
 
     def generate(self, **params):
         """Generate a troubleshooting task for a broken repository."""
+        # Real, reachable correct URLs so a fixed repo actually resolves (and an
+        # enabled broken one doesn't poison dnf for other tasks).
         break_scenarios = [
             {
                 'repo_id': 'broken-baseos',
                 'break_type': 'wrong_url',
-                'correct_url': 'http://content.example.com/rhel10/BaseOS',
-                'broken_url': 'http://content.example.com/rhel9/BaseOS',
-                'desc': 'The BaseOS URL points to the wrong RHEL version',
+                'correct_url': 'https://dl.rockylinux.org/pub/rocky/10/BaseOS/x86_64/os/',
+                'broken_url': 'https://dl.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os/',
+                'desc': 'The BaseOS URL points to the wrong major version (9 instead of 10)',
             },
             {
                 'repo_id': 'broken-appstream',
                 'break_type': 'missing_baseurl',
-                'correct_url': 'http://content.example.com/rhel10/AppStream',
+                'correct_url': 'https://repo.almalinux.org/almalinux/10/AppStream/x86_64/os/',
                 'broken_url': '',
                 'desc': 'The AppStream repository has no baseurl configured',
             },
             {
-                'repo_id': 'broken-custom',
+                'repo_id': 'broken-epel',
                 'break_type': 'disabled',
-                'correct_url': 'http://repo.lab.example.com/rhel10/custom',
-                'broken_url': 'http://repo.lab.example.com/rhel10/custom',
-                'desc': 'The custom repository exists but is disabled (enabled=0)',
+                'correct_url': 'https://dl.fedoraproject.org/pub/epel/10/Everything/x86_64/',
+                'broken_url': 'https://dl.fedoraproject.org/pub/epel/10/Everything/x86_64/',
+                'desc': 'The EPEL repository exists but is disabled (enabled=0)',
             },
             {
                 'repo_id': 'broken-extras',
                 'break_type': 'bad_gpgkey',
-                'correct_url': 'http://mirror.internal.example.com/rhel10/extras',
-                'broken_url': 'http://mirror.internal.example.com/rhel10/extras',
+                'correct_url': 'https://dl.rockylinux.org/pub/rocky/10/extras/x86_64/os/',
+                'broken_url': 'https://dl.rockylinux.org/pub/rocky/10/extras/x86_64/os/',
                 'desc': 'The extras repository has an invalid GPG key path',
             },
             {
-                'repo_id': 'broken-local',
+                'repo_id': 'broken-crb',
                 'break_type': 'typo_enabled',
-                'correct_url': 'file:///repo/BaseOS',
-                'broken_url': 'file:///repo/BaseOS',
-                'desc': 'The local repository has a typo (enbled=1 instead of enabled=1)',
+                'correct_url': 'https://repo.almalinux.org/almalinux/10/CRB/x86_64/os/',
+                'broken_url': 'https://repo.almalinux.org/almalinux/10/CRB/x86_64/os/',
+                'desc': 'The CRB repository has a typo (enbled=1 instead of enabled=1)',
             },
         ]
 
@@ -960,43 +997,17 @@ class AddThirdPartyRepoTask(BaseTask):
         self.gpg_key_url = None
 
     def generate(self, **params):
-        """Generate a third-party repository addition task."""
-        repo_configs = [
-            {
-                'repo_id': 'epel',
-                'repo_name': 'Extra Packages for Enterprise Linux 9',
-                'base_url': 'https://dl.fedoraproject.org/pub/epel/9/Everything/x86_64/',
-                'gpgcheck': 1,
-                'gpg_key_url': 'https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-9',
-            },
-            {
-                'repo_id': 'rpmfusion-free',
-                'repo_name': 'RPM Fusion Free Repository',
-                'base_url': 'https://download1.rpmfusion.org/free/el/updates/9/x86_64/',
-                'gpgcheck': 1,
-                'gpg_key_url': 'https://rpmfusion.org/keys?action=AttachFile&do=get&target=RPM-GPG-KEY-rpmfusion-free-el-9',
-            },
-            {
-                'repo_id': 'elrepo',
-                'repo_name': 'ELRepo Repository',
-                'base_url': 'https://elrepo.org/linux/elrepo/el10/x86_64/',
-                'gpgcheck': 1,
-                'gpg_key_url': 'https://www.elrepo.org/RPM-GPG-KEY-elrepo.org',
-            },
-            {
-                'repo_id': 'docker-ce',
-                'repo_name': 'Docker CE Stable',
-                'base_url': 'https://download.docker.com/linux/rhel/9/x86_64/stable',
-                'gpgcheck': 1,
-                'gpg_key_url': 'https://download.docker.com/linux/rhel/gpg',
-            },
-        ]
+        """Generate a third-party repository addition task using a real,
+        reachable third-party repo (with a real GPG key) from REAL_REPOS."""
+        # Third-party = not the distro core rebuilds (Rocky/Alma BaseOS etc.).
+        third_party = [r for r in REAL_REPOS_WITH_GPG
+                       if not r['repo_id'].startswith(('rocky10', 'alma10'))]
 
-        config = params.get('config', random.choice(repo_configs))
+        config = params.get('config', random.choice(third_party))
         self.repo_id = config['repo_id']
         self.repo_name = config['repo_name']
         self.base_url = config['base_url']
-        self.gpgcheck = config['gpgcheck']
+        self.gpgcheck = config.get('gpgcheck', 1)
         self.gpg_key_url = config['gpg_key_url']
 
         gpg_info = ""
