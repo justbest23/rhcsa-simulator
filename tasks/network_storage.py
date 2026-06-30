@@ -14,6 +14,25 @@ from validators.file_validators import validate_file_exists, validate_file_conta
 logger = logging.getLogger(__name__)
 
 
+def _nfs_config():
+    """Return the configured remote NFS server dict, or None."""
+    try:
+        from core import nfs_server
+        return nfs_server.load_config()
+    except Exception:
+        return None
+
+
+def _nfs_source(mount_point):
+    """(source, fstype) for an exact mountpoint via findmnt, else (None, None)."""
+    res = execute_safe(['findmnt', '-n', '-o', 'SOURCE,FSTYPE', mount_point])
+    if res.success and res.stdout.strip():
+        parts = res.stdout.split()
+        if len(parts) >= 2:
+            return parts[0], parts[1]
+    return None, None
+
+
 @TaskRegistry.register("network_storage")
 class MountNFSShareTask(BaseTask):
     """Mount an NFS share manually."""
@@ -37,9 +56,15 @@ class MountNFSShareTask(BaseTask):
         self.mount_point = None
 
     def generate(self, **params):
-        """Generate NFS mount task."""
-        self.nfs_server = params.get('server', 'server1.example.com')
-        self.nfs_export = params.get('export', '/share/data')
+        """Generate NFS mount task. Uses the real configured NFS server/export
+        when Setup has provisioned one, otherwise a placeholder."""
+        cfg = _nfs_config()
+        if cfg and cfg.get('exports'):
+            self.nfs_server = params.get('server', cfg['host'])
+            self.nfs_export = params.get('export', cfg['exports'][0])
+        else:
+            self.nfs_server = params.get('server', 'server1.example.com')
+            self.nfs_export = params.get('export', '/share/data')
         self.mount_point = params.get('mount_point', '/mnt/nfsdata')
 
         self.description = (
@@ -87,35 +112,40 @@ class MountNFSShareTask(BaseTask):
             ))
             return ValidationResult(self.id, False, total_points, self.points, checks)
 
-        # Check 2: NFS is mounted (7 points)
-        result = execute_safe(['mount'])
-        if result.success and self.mount_point in result.stdout and 'nfs' in result.stdout:
+        # Check 2: NFS is mounted (7 points). With a real configured server we
+        # verify the mount actually originates from server:export; otherwise we
+        # fall back to a looser "an NFS filesystem is mounted here" check.
+        source, fstype = _nfs_source(self.mount_point)
+        is_nfs = bool(fstype) and fstype.startswith('nfs')
+        expected = f"{self.nfs_server}:{self.nfs_export}"
+
+        if is_nfs and source and source.endswith(f":{self.nfs_export}"):
             checks.append(ValidationCheck(
                 name="nfs_mounted",
                 passed=True,
                 points=7,
-                message=f"NFS share is mounted at {self.mount_point}"
+                message=f"{source} ({fstype}) is mounted at {self.mount_point}"
             ))
             total_points += 7
+        elif is_nfs:
+            checks.append(ValidationCheck(
+                name="nfs_mounted",
+                passed=False,
+                points=4,
+                max_points=7,
+                message=f"An NFS mount is present but its source ({source}) is not "
+                        f"the expected {expected}"
+            ))
+            total_points += 4
         else:
-            # Check /proc/mounts as backup
-            result2 = execute_safe(['cat', '/proc/mounts'])
-            if result2.success and self.mount_point in result2.stdout:
-                checks.append(ValidationCheck(
-                    name="nfs_mounted",
-                    passed=True,
-                    points=5,
-                    message="Something is mounted (may not be NFS)"
-                ))
-                total_points += 5
-            else:
-                checks.append(ValidationCheck(
-                    name="nfs_mounted",
-                    passed=False,
-                    points=0,
-                    max_points=7,
-                    message=f"NFS share is not mounted at {self.mount_point}"
-                ))
+            checks.append(ValidationCheck(
+                name="nfs_mounted",
+                passed=False,
+                points=0,
+                max_points=7,
+                message=f"No NFS filesystem is mounted at {self.mount_point} "
+                        f"(expected {expected})"
+            ))
 
         passed = total_points >= (self.points * 0.7)
         return ValidationResult(self.id, passed, total_points, self.points, checks)
@@ -146,9 +176,18 @@ class PersistentNFSMountTask(BaseTask):
         self.mount_point = None
 
     def generate(self, **params):
-        """Generate persistent NFS mount task."""
-        self.nfs_server = params.get('server', 'nfsserver.example.com')
-        self.nfs_export = params.get('export', '/exports/shared')
+        """Generate persistent NFS mount task (uses the real configured server
+        and export when available)."""
+        cfg = _nfs_config()
+        if cfg and cfg.get('exports'):
+            self.nfs_server = params.get('server', cfg['host'])
+            # Prefer the second export ('shared') so it differs from the basic
+            # mount task; fall back to the first.
+            default_export = cfg['exports'][1] if len(cfg['exports']) > 1 else cfg['exports'][0]
+            self.nfs_export = params.get('export', default_export)
+        else:
+            self.nfs_server = params.get('server', 'nfsserver.example.com')
+            self.nfs_export = params.get('export', '/exports/shared')
         self.mount_point = params.get('mount_point', '/mnt/shared')
 
         self.description = (
@@ -238,16 +277,27 @@ class PersistentNFSMountTask(BaseTask):
                 message="No fstab entry for this mount"
             ))
 
-        # Check 3: Actually mounted (4 points)
-        result = execute_safe(['mount'])
-        if result.success and self.mount_point in result.stdout:
+        # Check 3: Actually mounted (4 points) — verify it's really NFS from the
+        # expected export when we can, else accept any mount at the point.
+        source, fstype = _nfs_source(self.mount_point)
+        if source and fstype and fstype.startswith('nfs') and source.endswith(f":{self.nfs_export}"):
             checks.append(ValidationCheck(
                 name="is_mounted",
                 passed=True,
                 points=4,
-                message="Mount is active"
+                message=f"Mount is active: {source} ({fstype})"
             ))
             total_points += 4
+        elif source:
+            checks.append(ValidationCheck(
+                name="is_mounted",
+                passed=True,
+                points=2,
+                max_points=4,
+                message=f"Mounted ({source}) but not the expected "
+                        f"{self.nfs_server}:{self.nfs_export}"
+            ))
+            total_points += 2
         else:
             checks.append(ValidationCheck(
                 name="is_mounted",
@@ -290,8 +340,13 @@ class ConfigureAutofsTask(BaseTask):
 
     def generate(self, **params):
         """Generate autofs configuration task."""
-        self.nfs_server = params.get('server', 'nfs.example.com')
-        self.nfs_export = params.get('export', '/export/data')
+        cfg = _nfs_config()
+        if cfg and cfg.get('exports'):
+            self.nfs_server = params.get('server', cfg['host'])
+            self.nfs_export = params.get('export', cfg['exports'][0])
+        else:
+            self.nfs_server = params.get('server', 'nfs.example.com')
+            self.nfs_export = params.get('export', '/export/data')
         self.autofs_mount = params.get('mount', '/data')
         self.map_name = params.get('map', 'auto.data')
 
@@ -445,8 +500,13 @@ class AutofsHomeDirectoriesTask(BaseTask):
 
     def generate(self, **params):
         """Generate autofs home directories task."""
-        self.nfs_server = params.get('server', 'ldap.example.com')
-        self.home_export = params.get('export', '/home/guests')
+        cfg = _nfs_config()
+        if cfg and cfg.get('exports'):
+            self.nfs_server = params.get('server', cfg['host'])
+            self.home_export = params.get('export', cfg['exports'][0])
+        else:
+            self.nfs_server = params.get('server', 'ldap.example.com')
+            self.home_export = params.get('export', '/home/guests')
 
         self.description = (
             f"Configure autofs for user home directories:\n"
