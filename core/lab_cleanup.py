@@ -16,7 +16,6 @@ touches shell dotfiles, SSH keys, or anything outside the manifest.
 
 import os
 import glob
-import shutil
 import subprocess
 
 # Swap files a task may ask the candidate to create (swapoff before removing).
@@ -79,55 +78,91 @@ def _is_safe(path):
     return path.startswith(_ALLOWED_PREFIXES)
 
 
-def _is_mounted(path):
+# All filesystem touches go through a timeout-KILLABLE subprocess. A stale NFS
+# mount (server gone while still mounted) makes a plain os.stat()/shutil.rmtree()
+# block FOREVER and Python can't interrupt it — which hung the exam at start.
+# An external command can be killed by subprocess's timeout, so the worst case
+# is a few seconds per path instead of an infinite hang.
+
+def _sh(cmd, timeout_s):
+    """Run cmd, return its rc; 124 if it had to be killed for exceeding timeout."""
     try:
-        return os.path.ismount(path)
-    except OSError:
-        return False
+        return subprocess.run(cmd, capture_output=True, timeout=timeout_s).returncode
+    except subprocess.TimeoutExpired:
+        return 124
+    except Exception:
+        return 1
+
+
+def _exists(path):
+    """Existence test (incl. broken symlinks) that can't hang on a stale mount."""
+    return _sh(['bash', '-c', '[ -e "$1" ] || [ -L "$1" ]', '_', path], 6) == 0
+
+
+def _expand(pattern):
+    """Expand a glob without stat-ing matches (scandir only), else return as-is."""
+    if any(c in pattern for c in '*?['):
+        try:
+            return sorted(glob.glob(pattern))
+        except Exception:
+            return []
+    return [pattern]
 
 
 def find_leftovers():
-    """Return the sorted list of existing artifact paths that cleanup would act
-    on (after glob expansion and the safety filter)."""
+    """Existing artifact paths cleanup would act on (timeout-guarded)."""
     found = set()
     for pattern in SWAP_FILES + DIR_ARTIFACTS + FILE_ARTIFACTS:
-        for match in (glob.glob(pattern) if any(c in pattern for c in '*?[') else [pattern]):
-            if os.path.lexists(match) and _is_safe(match):
+        for match in _expand(pattern):
+            if _is_safe(match) and _exists(match):
                 found.add(os.path.normpath(match))
     return sorted(found)
 
 
-def _remove_one(path):
-    """Remove a single artifact (swapoff / unmount as needed). Returns an action
-    string describing what was done, or None on failure."""
-    if not _is_safe(path) or not os.path.lexists(path):
-        return None
-    try:
-        if path in SWAP_FILES:
-            subprocess.run(['swapoff', path], capture_output=True, timeout=15)
-        if _is_mounted(path):
-            subprocess.run(['umount', '-l', path], capture_output=True, timeout=15)
-        if os.path.islink(path) or os.path.isfile(path):
-            os.remove(path)
-            return f"removed file {path}"
-        if os.path.isdir(path):
-            shutil.rmtree(path)
-            return f"removed dir  {path}"
-    except Exception as e:
-        return f"FAILED {path}: {e}"
-    return None
-
-
 def clean(dry_run=False):
     """Remove all existing lab artifacts. With dry_run, only report them.
-    Returns a list of action strings."""
+
+    Mount points are lazily unmounted FIRST (fast even for a stale NFS mount) so
+    the subsequent existence test / removal can't hang. Every step is a
+    timeout-killable subprocess. Returns a list of action strings.
+    """
     actions = []
-    for path in find_leftovers():
-        if dry_run:
-            kind = 'dir ' if os.path.isdir(path) and not os.path.islink(path) else 'file'
-            actions.append(f"would remove {kind} {path}")
-        else:
-            result = _remove_one(path)
-            if result:
-                actions.append(result)
+
+    # 1. Swap files: swapoff then remove.
+    for pattern in SWAP_FILES:
+        for path in _expand(pattern):
+            if not _is_safe(path):
+                continue
+            if dry_run:
+                if _exists(path):
+                    actions.append(f"would remove swap {path}")
+                continue
+            _sh(['swapoff', path], 15)
+            if _exists(path) and _sh(['rm', '-f', '--', path], 15) == 0:
+                actions.append(f"removed swap {path}")
+
+    # 2. Directories / mount points: lazy-unmount first, then remove.
+    for pattern in DIR_ARTIFACTS:
+        for path in _expand(pattern):
+            if not _is_safe(path):
+                continue
+            if not dry_run:
+                # Detach a (possibly stale) mount before touching the path.
+                _sh(['umount', '-l', '--', path], 10)
+            if _exists(path):
+                if dry_run:
+                    actions.append(f"would remove dir  {path}")
+                elif _sh(['rm', '-rf', '--', path], 25) == 0:
+                    actions.append(f"removed dir  {path}")
+
+    # 3. Files (incl. glob families).
+    for pattern in FILE_ARTIFACTS:
+        for path in _expand(pattern):
+            if not _is_safe(path) or not _exists(path):
+                continue
+            if dry_run:
+                actions.append(f"would remove file {path}")
+            elif _sh(['rm', '-rf', '--', path], 15) == 0:
+                actions.append(f"removed file {path}")
+
     return actions
