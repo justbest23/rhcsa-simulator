@@ -30,7 +30,7 @@ DIR_ARTIFACTS = [
     '/mnt/lvm*',
     '/opt/appdata', '/opt/webdata',
     '/srv/nfs', '/srv/samba', '/srv/website', '/srv/web', '/srv/webapp',
-    '/srv/shares', '/srv/ftp',
+    '/srv/shares', '/srv/ftp', '/srv/acltest*',
     '/home/guests',
 ]
 

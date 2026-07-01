@@ -602,7 +602,10 @@ class DefaultACLTask(BaseTask):
     def generate(self, **params):
         """Generate default ACL task."""
         dir_suffix = random.randint(1, 99)
-        self.dir_path = params.get('dir', f'/data/acltest{dir_suffix}')
+        # Use /srv (never a mount point in this sim) rather than /data — the
+        # autofs and boot-recovery tasks claim /data as an auto/rescue mount,
+        # which would shadow an ACL directory nested under it.
+        self.dir_path = params.get('dir', f'/srv/acltest{dir_suffix}')
         self.acl_user = params.get('user', random.choice(['webadmin', 'developer', 'operator']))
         self.acl_perms = params.get('perms', random.choice(['rwx', 'rw-', 'r-x']))
 
