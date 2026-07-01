@@ -9,6 +9,7 @@ import logging
 from tasks.registry import TaskRegistry
 from core.validator import get_validator
 from core.results_db import get_results_db
+from core import task_env
 from utils import formatters as fmt
 from utils.helpers import confirm_action
 from config import settings
@@ -34,6 +35,9 @@ class AdaptiveMode:
         print("Adaptive mode selects tasks based on your performance history.")
         print("It focuses on weak areas and categories due for review.")
         print()
+
+        # Let the candidate size the session (no more 4/5-task cap).
+        self.tasks_per_session = self._select_task_count()
 
         # Determine target categories
         categories, source = self._select_categories()
@@ -64,6 +68,11 @@ class AdaptiveMode:
         if not confirm_action("Ready to start?", default=True):
             return
 
+        # Reset the box to a clean, practice-ready state (fresh loop disks +
+        # remove leftover artifacts) just like exam mode does at start.
+        print(fmt.dim("Preparing a clean practice environment..."))
+        task_env.session_reset()
+
         # Run session
         results = []
         try:
@@ -76,6 +85,26 @@ class AdaptiveMode:
         # Show session summary
         if results:
             self._show_summary(results, source)
+
+    def _select_task_count(self):
+        """Ask how many tasks this session should include (default 5, no cap)."""
+        print(fmt.bold("How many tasks this session?"))
+        print(fmt.dim("  Enter a number (e.g. 5, 10, 15). Default 5."))
+        while True:
+            raw = input("\nNumber of tasks [5]: ").strip() or '5'
+            try:
+                n = int(raw)
+            except ValueError:
+                print(fmt.error("Please enter a whole number."))
+                continue
+            if n < 1:
+                print(fmt.error("Enter at least 1."))
+                continue
+            if n > 40:
+                print(fmt.warning("Capping at 40 tasks for one session."))
+                n = 40
+            print()
+            return n
 
     def _select_categories(self):
         """Select categories based on SM-2 data. Returns (categories, source_label)."""
@@ -119,28 +148,67 @@ class AdaptiveMode:
             return 'hard'
 
     def _generate_tasks(self, categories):
-        """Generate tasks distributed across selected categories."""
+        """Generate up to tasks_per_session tasks across the focus categories.
+
+        Prefers distinct task templates from the focus categories; if the
+        requested count exceeds what those categories hold, it overflows into
+        the remaining categories, and as a last resort re-draws fresh randomized
+        instances so a large count (e.g. 15-20) is always honored.
+        """
+        import random
+
+        target = self.tasks_per_session
         tasks = []
-        exclude_ids = []
-        per_cat = max(1, self.tasks_per_session // len(categories))
-        remainder = self.tasks_per_session - (per_cat * len(categories))
+        seen_ids = set()
 
-        for i, cat in enumerate(categories):
-            count = per_cat + (1 if i < remainder else 0)
+        # Focus categories first, then everything else for overflow.
+        overflow = [c for c in TaskRegistry.get_all_categories() if c not in categories]
+        random.shuffle(overflow)
+        pool = list(categories) + overflow
+
+        def draw(cat):
             difficulty = self._get_adaptive_difficulty(cat)
+            t = TaskRegistry.get_random_task(category=cat, difficulty=difficulty)
+            if not t:
+                t = TaskRegistry.get_random_task(category=cat)
+            return t
 
-            for _ in range(count):
-                task = TaskRegistry.get_random_task(category=cat, difficulty=difficulty)
-                if not task:
-                    task = TaskRegistry.get_random_task(category=cat)
-                if task and task.id not in exclude_ids:
+        # Pass 1: round-robin distinct tasks across the pool.
+        progressed = True
+        while len(tasks) < target and progressed:
+            progressed = False
+            for cat in pool:
+                if len(tasks) >= target:
+                    break
+                task = draw(cat)
+                if task and task.id not in seen_ids:
                     tasks.append(task)
-                    exclude_ids.append(task.id)
+                    seen_ids.add(task.id)
+                    progressed = True
+
+        # Pass 2: if the distinct pool is exhausted but the candidate asked for
+        # more, top up with fresh randomized instances from the focus categories.
+        guard = 0
+        while len(tasks) < target and guard < target * 20:
+            guard += 1
+            cat = random.choice(categories if categories else pool)
+            task = draw(cat)
+            if task:
+                tasks.append(task)
 
         return tasks
 
     def _run_task(self, task, current, total):
         """Run a single adaptive task. Returns ValidationResult."""
+        import time
+
+        # Change the system for this task (inject fault + establish any negative
+        # precondition) so it requires real work — same setup exam mode runs.
+        fmt.clear_screen()
+        print(fmt.bold("Preparing task environment..."))
+        env_state = task_env.setup_task(task)
+        time.sleep(1)
+
         fmt.clear_screen()
         print(f"Adaptive Practice - Task {current}/{total}")
         print("=" * 60)
@@ -217,6 +285,12 @@ class AdaptiveMode:
         if result.passed:
             print(fmt.success("\nGreat job!"))
         print()
+
+        # Reverse this task's system changes, then wipe practice disks if it
+        # consumed one so the next task starts clean.
+        print(fmt.dim("Restoring system..."))
+        task_env.teardown_task(task, env_state)
+        task_env.reset_after_task(task)
 
         if current < total:
             if not confirm_action("Continue to next task?", default=True):
