@@ -42,19 +42,25 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_args: >-
             --allowedTools "Bash,Read,Edit,Write,Grep,Glob"
+            --max-turns 30
           prompt: |
             A candidate using the RHCSA exam simulator has disputed a validator
             ("checker") result. The dispute is GitHub issue #${{ github.event.issue.number }}
             in this repository. Its body contains: the task as presented, the
             specific check(s) the candidate says are wrong, the candidate's
-            written argument, and captured live system-state evidence.
+            written argument, captured live system-state evidence, and a
+            **"Checker source"** line naming the exact file, class and
+            `validate()` line to inspect.
+
+            Work narrowly to keep this review cheap — do NOT scan the whole repo.
 
             Your job:
             1. Read the issue:
                  gh issue view ${{ github.event.issue.number }}
-            2. Identify the task by its `task_id` (stated in the issue) and find
-               the corresponding task class and its `validate()` method under
-               tasks/ (and any helpers under validators/).
+            2. Open ONLY the file named in the issue's "Checker source" line and
+               read that task's `validate()` method (plus any single helper it
+               directly imports from validators/ if you must). Do not grep or
+               glob the wider tree unless that line is missing from the issue.
             3. Decide, strictly from the evidence in the issue, whether the
                checker logic is WRONG (e.g. wrong device-naming, wrong path,
                wrong grep pattern, an inverted condition, an off-by-one, a bad
@@ -65,7 +71,7 @@ jobs:
                  gh issue comment ${{ github.event.issue.number }} --body "..."
             5. If — and only if — the checker is genuinely wrong:
                  - create a branch  fix/dispute-<task_id>-${{ github.event.issue.number }}
-                 - implement the minimal correct fix to the validator/task
+                 - implement the minimal correct fix to that validator/task
                  - run `python3 -m pytest -q` and make sure it passes
                  - commit and open a PR whose body says
                    "Closes #${{ github.event.issue.number }}", explaining the bug

@@ -165,6 +165,42 @@ def issue_url(tr, body, max_url=7000):
     return build(title)  # extreme fallback: title only
 
 
+def resolve_source(category, task_id):
+    """Locate the task's source so the reviewer opens ONE file, not the repo.
+
+    Returns (relpath, classname, validate_line) or (None, None, None). Task ids
+    are assigned in __init__, so we instantiate candidate classes (cheap; no
+    generate()) and match on .id.
+    """
+    try:
+        import inspect
+        from tasks.registry import TaskRegistry
+        TaskRegistry.initialize()
+
+        classes = list(TaskRegistry.get_tasks_by_category(category) or [])
+        if not classes:  # unknown/blank category — fall back to a full scan
+            for cat in TaskRegistry.get_all_categories():
+                classes.extend(TaskRegistry.get_tasks_by_category(cat))
+
+        for cls in classes:
+            try:
+                if getattr(cls(), 'id', None) != task_id:
+                    continue
+            except Exception:
+                continue
+            src = inspect.getsourcefile(cls) or inspect.getfile(cls)
+            rel = os.path.relpath(src, REPO_ROOT)
+            line = None
+            try:
+                line = inspect.getsourcelines(cls.validate)[1]
+            except Exception:
+                pass
+            return rel, cls.__name__, line
+    except Exception:
+        pass
+    return None, None, None
+
+
 def collect_evidence(category, extra_commands=None):
     """Gather (display, rc, output) tuples for the category + any extra commands."""
     evidence = []
@@ -190,6 +226,14 @@ def build_report(tr, disputed, argument, evidence):
     lines.append(f"- **Scored:** {tr.get('score', '?')}/{tr.get('max_score', '?')} "
                  f"({'PASSED' if tr.get('passed') else 'FAILED'})")
     lines.append(f"- **Filed:** {datetime.now().isoformat(timespec='seconds')}")
+    # Point the reviewer straight at the checker so it reads one file, not the
+    # whole repo (keeps the review cheap).
+    rel, classname, vline = resolve_source(tr.get('category', ''), tr.get('task_id', ''))
+    if rel:
+        loc = f"`{rel}` → class `{classname}`"
+        if vline:
+            loc += f", `validate()` around line {vline}"
+        lines.append(f"- **Checker source:** {loc}")
     lines.append("")
     lines.append("### Task as presented to the candidate")
     lines.append("```")
