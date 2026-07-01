@@ -3,6 +3,8 @@ Tests for portable progress codes: codec round-trip, corruption/typo rejection,
 purely-alphanumeric output, and ResultsDB export/import (replace + merge).
 """
 
+import sys
+
 import pytest
 
 from core import progress_code as pc
@@ -94,6 +96,47 @@ class TestDBRoundTrip:
         pc.import_code(code, mode='merge', db=dst)
         # Re-importing our own state must not double the rows.
         assert dst.get_practice_count() == before
+
+
+class TestCLI:
+    def test_parser_accepts_snapshot_flags(self, monkeypatch):
+        import rhcsa_simulator as app
+        monkeypatch.setattr(sys, 'argv', ['prog', '--export-code'])
+        assert app.parse_args().export_code is True
+        monkeypatch.setattr(sys, 'argv',
+                            ['prog', '--import-code', 'ABC', '--import-mode', 'merge'])
+        args = app.parse_args()
+        assert args.import_code == 'ABC' and args.import_mode == 'merge'
+
+    def test_import_mode_defaults_to_replace(self, monkeypatch):
+        import rhcsa_simulator as app
+        monkeypatch.setattr(sys, 'argv', ['prog', '--import-code', 'X'])
+        assert app.parse_args().import_mode == 'replace'
+
+    def test_export_then_import_via_main(self, tmp_path, monkeypatch, capsys):
+        import rhcsa_simulator as app
+        from core import results_db as rdb
+
+        src = ResultsDB(db_path=str(tmp_path / 'src.db'))
+        _seed(src)
+        monkeypatch.setattr(rdb, 'get_results_db', lambda: src)
+        monkeypatch.setattr(sys, 'argv', ['prog', '--export-code'])
+        assert app.main() == 0
+        code = capsys.readouterr().out.strip()
+        assert code
+
+        dst = ResultsDB(db_path=str(tmp_path / 'dst.db'))
+        monkeypatch.setattr(rdb, 'get_results_db', lambda: dst)
+        monkeypatch.setattr(sys, 'argv',
+                            ['prog', '--import-code', code, '--import-mode', 'replace'])
+        assert app.main() == 0
+        assert dst.get_exam_count() == 1
+        assert dst.get_practice_count() == 2
+
+    def test_import_bad_code_via_main_returns_1(self, monkeypatch):
+        import rhcsa_simulator as app
+        monkeypatch.setattr(sys, 'argv', ['prog', '--import-code', 'not a code'])
+        assert app.main() == 1
 
 
 class TestPrune:
