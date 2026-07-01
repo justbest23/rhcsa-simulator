@@ -382,11 +382,15 @@ class SetSystemDateTask(BaseTask):
 
     def inject_fault(self):
         import subprocess as _sp
+        import time
         # Start from NTP-enabled state so the user must disable it to set time.
         _sp.run(['timedatectl', 'set-ntp', 'true'], capture_output=True)
         _sp.run(['systemctl', 'enable', '--now', 'chronyd'], capture_output=True)
         from tasks.troubleshooting import save_fault_state
-        save_fault_state(self.id, {'service': 'chronyd'})
+        # CLOCK_MONOTONIC is unaffected by the very clock changes this task asks
+        # the candidate to make, so it's used at validate() time to measure how
+        # much real time has passed since the clock was set (see time_set_001).
+        save_fault_state(self.id, {'service': 'chronyd', 'injected_monotonic': time.monotonic()})
         return True, "NTP is active — disable it, then set the clock to the target time"
 
     def restore_fault(self):
@@ -399,6 +403,8 @@ class SetSystemDateTask(BaseTask):
 
     def validate(self):
         import datetime
+        import time
+        from tasks.troubleshooting import load_fault_state
         checks = []
         score = 0
 
@@ -412,15 +418,30 @@ class SetSystemDateTask(BaseTask):
             checks.append(ValidationCheck("ntp_disabled", False, 0, max_points=2,
                 message="NTP is still active: run 'timedatectl set-ntp false' first"))
 
-        # Check 2: System time is approximately the target (within 5 minutes)
+        # Check 2: System time matches the target, adjusted for real time that
+        # has legitimately passed since the candidate set it. Once NTP is off
+        # and the clock is set, it free-runs forward in real time — a candidate
+        # who sets it correctly and then keeps working on other exam tasks will
+        # see current_ts drift ahead of target_ts through no fault of their own.
+        # elapsed (measured via CLOCK_MONOTONIC, which the clock change itself
+        # can't affect) bounds how much of that forward drift is legitimate.
         try:
             target_dt = datetime.datetime.strptime(self.target_time, '%Y-%m-%d %H:%M:%S')
             r2 = execute_safe(['date', '+%s'])
             if r2.success:
                 current_ts = int(r2.stdout.strip())
                 target_ts = int(target_dt.timestamp())
-                delta = abs(current_ts - target_ts)
-                if delta <= 300:
+                delta = current_ts - target_ts
+                tolerance = 300
+
+                elapsed = 0
+                fault_state = load_fault_state(self.id)
+                if fault_state and isinstance(fault_state.get('restore_info'), dict):
+                    injected_monotonic = fault_state['restore_info'].get('injected_monotonic')
+                    if injected_monotonic is not None:
+                        elapsed = max(0, time.monotonic() - injected_monotonic)
+
+                if -tolerance <= delta <= elapsed + tolerance:
                     checks.append(ValidationCheck("time_set", True, 4,
                         message=f"System time matches target ({self.target_time})"))
                     score += 4
