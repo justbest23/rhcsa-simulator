@@ -14,6 +14,7 @@ from contextlib import redirect_stdout
 from tasks.registry import TaskRegistry
 from core.validator import get_validator
 from core.results_db import get_results_db
+from core import task_env
 from utils import formatters as fmt
 from utils.helpers import confirm_action
 from config import settings
@@ -89,6 +90,12 @@ class PracticeSession:
             break  # 's' or Enter
 
         print(fmt.info(f"\nStarting session…"))
+
+        # Reset the box to a clean, practice-ready state (fresh loop disks +
+        # remove leftover artifacts) exactly like exam mode does at start, so
+        # tasks aren't polluted by a previous session.
+        print(fmt.dim("Preparing a clean practice environment..."))
+        task_env.session_reset()
 
         # Practice each task
         try:
@@ -174,21 +181,15 @@ class PracticeSession:
         import time
         attempt = 1
         db = get_results_db()
-        fault_injected = False
 
-        # Inject a real fault before showing the task (if the task supports it)
-        if getattr(task, 'has_fault_injection', False):
-            fmt.clear_screen()
-            print(fmt.bold("Injecting fault..."))
-            ok, msg = task.inject_fault()
-            if ok:
-                fault_injected = True
-                print(fmt.success(f"  Fault active: {msg}"))
-            else:
-                print(fmt.error(f"  Fault injection failed: {msg}"))
-                print(fmt.warning("  Proceeding in descriptive mode only."))
-            print()
-            time.sleep(1)
+        # Change the system for this task (inject fault + establish any negative
+        # precondition) — the same setup exam mode runs, so positive-config
+        # tasks require real work instead of passing on default state.
+        fmt.clear_screen()
+        print(fmt.bold("Preparing task environment..."))
+        env_state = task_env.setup_task(task)
+        print()
+        time.sleep(1)
 
         stop_requested = False
         while True:
@@ -302,16 +303,13 @@ class PracticeSession:
                 input("Press Enter to continue...")
                 break
 
-        # Restore fault regardless of outcome
-        if fault_injected:
-            print()
-            print(fmt.dim("Restoring system..."))
-            ok, msg = task.restore_fault()
-            if ok:
-                print(fmt.dim(f"  {msg}"))
-            else:
-                print(fmt.error(f"  Restore error: {msg}"))
-            time.sleep(1)
+        # Reverse the per-task system changes regardless of outcome, then wipe
+        # practice disks if this task consumed one so the next task starts clean.
+        print()
+        print(fmt.dim("Restoring system..."))
+        task_env.teardown_task(task, env_state)
+        task_env.reset_after_task(task)
+        time.sleep(1)
 
         if stop_requested:
             raise StopIteration
