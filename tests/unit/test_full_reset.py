@@ -53,6 +53,29 @@ class TestSystemSwapGuard:
             assert not fr._system_swap(dev), dev
 
 
+class TestMountClassification:
+    def test_nfs_and_practice_filesystems_are_unmounted(self):
+        assert fr._is_practice_mount('/mnt/nfsdata', 'nfsserver:/exports/x', 'nfs4')
+        assert fr._is_practice_mount('/mnt/shared', 'nfsserver:/exports/y', 'nfs')
+        assert fr._is_practice_mount('/mnt/data', '/dev/loop2p1', 'xfs')
+        assert fr._is_practice_mount('/srv/acltest5', '/dev/loop3', 'ext4')
+        # non-system VG-backed LVM mount
+        assert fr._is_practice_mount('/mnt/lvm', '/dev/mapper/vg_test-lv_data', 'xfs')
+
+    def test_system_mounts_are_never_unmounted(self):
+        assert not fr._is_practice_mount('/', '/dev/mapper/rhel-root', 'xfs')
+        assert not fr._is_practice_mount('/boot', '/dev/nvme0n1p2', 'xfs')
+        assert not fr._is_practice_mount('/home', '/dev/mapper/rhel-home', 'xfs')
+        assert not fr._is_practice_mount('/boot/efi', '/dev/nvme0n1p1', 'vfat')
+        # a system-VG LV mounted somewhere odd must still be protected
+        assert not fr._is_practice_mount('/mnt/whatever', '/dev/mapper/rhel-var', 'xfs')
+
+    def test_dm_vg_parsing_handles_escaped_dashes(self):
+        assert fr._dm_vg('/dev/mapper/rhel-root') == 'rhel'
+        assert fr._dm_vg('/dev/mapper/vg_test-lv_data') == 'vg_test'
+        assert fr._dm_vg('/dev/mapper/vg--x-lv') == 'vg-x'
+
+
 class TestPreviewShape:
     def test_preview_returns_expected_categories(self):
         data = fr.preview()
