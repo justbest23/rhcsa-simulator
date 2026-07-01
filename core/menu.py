@@ -221,6 +221,7 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
         print("  5. Populate Practice Environment (DNF history)")
         print(f"  6. Configure remote NFS server for NFS tasks ({nfs_status})")
         print("  7. Clean lab leftover files (remove task artifacts)")
+        print("  8. Full System Reset (strip box back to a basic RHEL install)")
         print("  0. Return to Menu")
         print()
 
@@ -240,6 +241,8 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
             self.configure_nfs_server()
         elif choice == '7':
             self.clean_lab_leftovers()
+        elif choice == '8':
+            self.full_system_reset()
 
     def clean_lab_leftovers(self):
         """Preview and remove leftover task artifacts (files/dirs/mounts the
@@ -274,6 +277,70 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
             if line.startswith('FAILED'):
                 print(fmt.warning(f"  {line}"))
         input("\nPress Enter to return...")
+
+    def full_system_reset(self):
+        """Strip the box back to a basic RHEL install: remove third-party repos,
+        Flatpak apps/remotes, lab files, practice users, scheduled jobs, autofs
+        maps, tuned changes, practice disks/swap and NFS exports. Preserves the
+        simulator, GitHub/SSH connectivity, networking, SELinux and the OS."""
+        from core import full_reset
+        from utils.helpers import confirm_action
+
+        fmt.clear_screen()
+        fmt.print_header("FULL SYSTEM RESET")
+
+        print(fmt.warning("This returns the machine to a BASIC RHEL install. It removes:"))
+        print("  - all third-party DNF repos (RHEL system repos are kept)")
+        print("  - all Flatpak apps and remotes")
+        print("  - leftover lab files, practice users/groups, practice disks & swap")
+        print("  - scheduled jobs, autofs maps, tuned changes, remote NFS exports")
+        print()
+        print(fmt.success("PRESERVED: the rhcsa-simulator, GitHub/SSH auth (gh, ~/.ssh,"))
+        print(fmt.success("git config), networking, firewall, SELinux, and the OS itself."))
+        print()
+
+        # Show exactly what will go before asking.
+        print(fmt.dim("Scanning system..."))
+        data = full_reset.preview()
+        total = 0
+        print()
+        print(fmt.bold("Will remove:"))
+        for label, items in data.items():
+            print(f"  {label}: {len(items)}")
+            for it in items[:8]:
+                print(fmt.dim(f"      {it}"))
+            if len(items) > 8:
+                print(fmt.dim(f"      … and {len(items) - 8} more"))
+            total += len(items)
+        print(fmt.dim("  (plus dnf cache, cron/at jobs, autofs, tuned, NFS exports)"))
+        print()
+
+        remove_users = confirm_action(
+            "Also delete practice users/groups (UID/GID >= 1000)?", default=True)
+
+        print()
+        print(fmt.warning("This is destructive and cannot be undone."))
+        confirm = input("Type 'RESET' to proceed (anything else cancels): ").strip()
+        if confirm != 'RESET':
+            print(fmt.dim("Cancelled — nothing changed."))
+            input("\nPress Enter to return...")
+            return
+
+        print()
+        print(fmt.bold("Running full system reset..."))
+
+        def progress(msg):
+            print(msg)
+
+        summary = full_reset.run_all(progress=progress, remove_users=remove_users)
+
+        print()
+        print("=" * 50)
+        print(fmt.success("Full system reset complete."))
+        print(fmt.info("The box is back to a basic RHEL state; simulator and GitHub"))
+        print(fmt.info("connectivity were left intact."))
+        print()
+        input("Press Enter to return...")
 
     def configure_nfs_server(self):
         """SSH into a user-named RHEL box and provision it as a real NFS server
