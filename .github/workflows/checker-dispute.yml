@@ -21,6 +21,9 @@ permissions:
   contents: write
   pull-requests: write
   issues: write
+  # Required by anthropics/claude-code-action to exchange CLAUDE_CODE_OAUTH_TOKEN
+  # via OIDC. Without it the action fails: "Could not fetch an OIDC token."
+  id-token: write
 
 jobs:
   review:
