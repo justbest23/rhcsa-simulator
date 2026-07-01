@@ -43,6 +43,7 @@ class MenuSystem:
             fmt.print_menu_option(4, "Dashboard", "Stats, history & weak areas")
             fmt.print_menu_option(5, "Export Report", "Generate progress report")
             fmt.print_menu_option(6, "Result History", "Drill into past exam results task by task")
+            fmt.print_menu_option(7, "Progress Snapshot", "Backup/restore history via a code; prune entries")
             print()
 
             # Footer
@@ -68,6 +69,8 @@ class MenuSystem:
                 return 'export'
             elif choice == '6':
                 return 'history'
+            elif choice == '7':
+                return 'snapshot'
             elif choice == 's':
                 return 'setup'
             elif choice in ('?', 'h'):
@@ -552,6 +555,193 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
 
         print()
         input("Press Enter to return...")
+
+    def progress_snapshot(self):
+        """Backup/restore task history via a portable code, and prune entries.
+
+        Designed for snapshot/reinstall workflows: export a code, keep it
+        somewhere, then import it on a fresh box — no login, no server."""
+        from core import progress_code
+        from core.results_db import get_results_db
+        from utils.helpers import confirm_action
+
+        db = get_results_db()
+
+        while True:
+            fmt.clear_screen()
+            fmt.print_header("PROGRESS SNAPSHOT")
+            print(f"  Exams recorded: {db.get_exam_count()}")
+            print(f"  Practice/adaptive attempts: {db.get_practice_count()}")
+            print(f"  Categories with SM-2 state: {len(db.get_all_category_stats())}")
+            print()
+            print("A snapshot code carries your history + adaptive state across")
+            print("reinstalls and VM reverts. Save it somewhere safe (it is the")
+            print("only copy — there is no login/server backup).")
+            print()
+            print(fmt.bold("Options"))
+            print("  1. Export a progress code (backup)")
+            print("  2. Import a progress code (restore)")
+            print("  3. Prune history (remove entries)")
+            print("  0. Back")
+            print()
+            choice = input("Select option: ").strip()
+
+            if choice == '1':
+                self._snapshot_export(progress_code, db)
+            elif choice == '2':
+                self._snapshot_import(progress_code, db, confirm_action)
+            elif choice == '3':
+                self._snapshot_prune(db, confirm_action)
+            elif choice == '0' or choice == '':
+                return
+
+    def _snapshot_export(self, progress_code, db):
+        fmt.clear_screen()
+        fmt.print_header("EXPORT PROGRESS CODE")
+        try:
+            code = progress_code.export_code(db)
+        except Exception as e:
+            print(fmt.error(f"Could not export: {e}"))
+            input("\nPress Enter to return...")
+            return
+
+        print("Copy this code and keep it safe — import it on any new install:")
+        print()
+        print(code)
+        print()
+        # Also save to a file for convenience (survives until snapshot revert).
+        try:
+            path = settings.DATA_DIR / "progress_code.txt"
+            with open(path, 'w') as f:
+                f.write(code + "\n")
+            print(fmt.dim(f"Also saved to {path} ({len(code)} chars)."))
+        except Exception:
+            pass
+        input("\nPress Enter to return...")
+
+    def _snapshot_import(self, progress_code, db, confirm_action):
+        fmt.clear_screen()
+        fmt.print_header("IMPORT PROGRESS CODE")
+        print("Paste your progress code (dashes/spaces/newlines are fine).")
+        print(fmt.dim("Enter a blank line when done, or just press Enter to cancel."))
+        print()
+        lines = []
+        while True:
+            line = input()
+            if not line.strip():
+                break
+            lines.append(line.strip())
+        code = ''.join(lines)
+        if not code:
+            print(fmt.dim("Cancelled."))
+            input("\nPress Enter to return...")
+            return
+
+        # Validate + preview before touching the DB.
+        try:
+            payload = progress_code.decode(code)
+        except progress_code.ProgressCodeError as e:
+            print(fmt.error(f"Invalid code: {e}"))
+            input("\nPress Enter to return...")
+            return
+
+        summary = progress_code.summarize(payload)
+        print()
+        print(fmt.bold("This code contains:"))
+        for k, v in summary.items():
+            print(f"  {k}: {v}")
+        print()
+
+        has_local = db.get_exam_count() > 0 or db.get_practice_count() > 0
+        mode = 'replace'
+        if has_local:
+            print(fmt.warning("You already have progress on this install."))
+            print("  R - Replace (wipe local history, then restore the code) [recommended for a fresh box]")
+            print("  M - Merge (keep local history, add the code's entries, skip duplicates)")
+            print("  C - Cancel")
+            sel = input("Choose [R]: ").strip().lower() or 'r'
+            if sel == 'c':
+                print(fmt.dim("Cancelled."))
+                input("\nPress Enter to return...")
+                return
+            mode = 'merge' if sel == 'm' else 'replace'
+            if mode == 'replace' and not confirm_action(
+                    "Really wipe local history and replace it?", default=False):
+                print(fmt.dim("Cancelled."))
+                input("\nPress Enter to return...")
+                return
+
+        counts = db.load_progress(payload, mode=mode)
+        print()
+        print(fmt.success(f"Imported ({mode}): "
+                          f"{counts['exams']} exams, {counts['tasks']} exam tasks, "
+                          f"{counts['practice']} attempts, {counts['weak']} categories."))
+        input("\nPress Enter to return...")
+
+    def _snapshot_prune(self, db, confirm_action):
+        while True:
+            fmt.clear_screen()
+            fmt.print_header("PRUNE HISTORY")
+            print(fmt.bold("Remove:"))
+            print("  1. A specific exam")
+            print("  2. All practice/adaptive attempts")
+            print("  3. Reset one category's adaptive (SM-2) state")
+            print("  4. Everything (wipe all progress)")
+            print("  0. Back")
+            print()
+            choice = input("Select option: ").strip()
+
+            if choice == '1':
+                exams = db.list_exams()
+                if not exams:
+                    print(fmt.dim("No exams recorded."))
+                    input("\nPress Enter...")
+                    continue
+                print()
+                for i, e in enumerate(exams, 1):
+                    date = (e['start_time'] or '')[:16]
+                    status = 'PASS' if e['passed'] else 'FAIL'
+                    print(f"  {i:2d}. {date}  {e['percentage']:.0f}% {status}  "
+                          f"({e['mode']})  {e['exam_id']}")
+                print()
+                sel = input("Number to delete (blank to cancel): ").strip()
+                if sel.isdigit() and 1 <= int(sel) <= len(exams):
+                    ex = exams[int(sel) - 1]
+                    if confirm_action(f"Delete exam {ex['exam_id']}?", default=False):
+                        db.delete_exam(ex['exam_id'])
+                        print(fmt.success("Deleted."))
+                        input("\nPress Enter...")
+            elif choice == '2':
+                if confirm_action("Delete ALL practice/adaptive attempts?", default=False):
+                    n = db.clear_practice_history()
+                    print(fmt.success(f"Removed {n} attempt(s)."))
+                    input("\nPress Enter...")
+            elif choice == '3':
+                stats = db.get_all_category_stats()
+                if not stats:
+                    print(fmt.dim("No category state recorded."))
+                    input("\nPress Enter...")
+                    continue
+                print()
+                for i, s in enumerate(stats, 1):
+                    print(f"  {i:2d}. {s['category']} "
+                          f"({s['success_rate'] * 100:.0f}%, {s['attempts']} attempts)")
+                print()
+                sel = input("Number to reset (blank to cancel): ").strip()
+                if sel.isdigit() and 1 <= int(sel) <= len(stats):
+                    cat = stats[int(sel) - 1]['category']
+                    if confirm_action(f"Reset SM-2 state for '{cat}'?", default=False):
+                        db.reset_category(cat)
+                        print(fmt.success("Reset."))
+                        input("\nPress Enter...")
+            elif choice == '4':
+                print(fmt.warning("This wipes ALL exams, attempts, and adaptive state."))
+                if confirm_action("Type-safe confirm: wipe everything?", default=False):
+                    db.clear_all_progress()
+                    print(fmt.success("All progress cleared."))
+                    input("\nPress Enter...")
+            elif choice == '0' or choice == '':
+                return
 
     def setup_practice_disks(self):
         """Set up or manage practice disks for LVM/partition tasks."""

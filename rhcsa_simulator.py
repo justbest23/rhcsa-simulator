@@ -313,6 +313,9 @@ def main():
             elif choice == 'history':
                 menu.show_result_history()
 
+            elif choice == 'snapshot':
+                menu.progress_snapshot()
+
             elif choice == 'setup':
                 menu.show_setup()
 
