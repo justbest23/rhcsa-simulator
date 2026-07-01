@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -42,7 +42,7 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_args: >-
             --allowedTools "Bash,Read,Edit,Write,Grep,Glob"
-            --max-turns 30
+            --max-turns 80
           prompt: |
             A candidate using the RHCSA exam simulator has disputed a validator
             ("checker") result. The dispute is GitHub issue #${{ github.event.issue.number }}
