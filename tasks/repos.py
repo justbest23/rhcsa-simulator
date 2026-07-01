@@ -4,6 +4,7 @@ Covers configuring, enabling, disabling, and troubleshooting DNF repositories.
 """
 
 import random
+import re
 import logging
 from tasks.base import BaseTask
 from tasks.registry import TaskRegistry
@@ -362,7 +363,11 @@ class ConfigureRepoGPGTask(BaseTask):
             ))
 
         # Check 3: baseurl configured (3 points)
-        result = execute_safe(['grep', '-c', f'baseurl={self.base_url}', repo_file])
+        # dnf's .repo files are parsed as INI (configparser), which allows
+        # optional whitespace around "=" (e.g. "baseurl = <url>"). Match that
+        # with -E and tolerate whitespace instead of requiring "baseurl=<url>"
+        # verbatim.
+        result = execute_safe(['grep', '-c', '-E', f'baseurl[ \\t]*=[ \\t]*{re.escape(self.base_url)}', repo_file])
         if result.success and result.stdout.strip() != '0':
             checks.append(ValidationCheck(
                 name="baseurl_correct",
@@ -381,7 +386,7 @@ class ConfigureRepoGPGTask(BaseTask):
             ))
 
         # Check 4: gpgcheck=1 (2 points)
-        result = execute_safe(['grep', '-c', 'gpgcheck=1', repo_file])
+        result = execute_safe(['grep', '-c', '-E', 'gpgcheck[ \\t]*=[ \\t]*1', repo_file])
         if result.success and result.stdout.strip() != '0':
             checks.append(ValidationCheck(
                 name="gpgcheck_enabled",
@@ -400,7 +405,7 @@ class ConfigureRepoGPGTask(BaseTask):
             ))
 
         # Check 5: gpgkey directive present (3 points)
-        result = execute_safe(['grep', '-c', f'gpgkey={self.gpg_key_url}', repo_file])
+        result = execute_safe(['grep', '-c', '-E', f'gpgkey[ \\t]*=[ \\t]*{re.escape(self.gpg_key_url)}', repo_file])
         if result.success and result.stdout.strip() != '0':
             checks.append(ValidationCheck(
                 name="gpgkey_configured",
@@ -411,7 +416,7 @@ class ConfigureRepoGPGTask(BaseTask):
             total_points += 3
         else:
             # Partial credit if gpgkey line exists but wrong URL
-            result2 = execute_safe(['grep', '-c', 'gpgkey=', repo_file])
+            result2 = execute_safe(['grep', '-c', '-E', 'gpgkey[ \\t]*=', repo_file])
             if result2.success and result2.stdout.strip() != '0':
                 checks.append(ValidationCheck(
                     name="gpgkey_configured",
