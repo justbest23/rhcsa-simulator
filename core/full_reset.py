@@ -314,6 +314,91 @@ def remove_practice_users_groups(progress=_noop):
     return n
 
 
+# ── Unmount everything practice-related ──────────────────────────────────────
+
+# Never unmount these — the OS/login/simulator depend on them.
+_PROTECTED_TARGETS = {
+    '/', '/boot', '/boot/efi', '/home', '/var', '/usr', '/opt', '/etc',
+    '/proc', '/sys', '/run', '/dev', '/dev/shm', '/tmp', '/var/tmp',
+}
+_PROTECTED_PREFIXES = ('/proc', '/sys', '/run', '/dev', '/boot', '/usr',
+                       '/var/lib/nfs', '/etc')
+# Targets where exam/practice filesystems get mounted.
+_PRACTICE_TARGET_PREFIXES = ('/mnt/', '/media/', '/srv/', '/data', '/export',
+                             '/shares', '/misc/', '/autofs')
+
+# System volume groups whose LVs must never be unmounted (mirror helpers).
+try:
+    from utils.helpers import _SYSTEM_VGS as _SYS_VGS
+except Exception:  # pragma: no cover - fallback if helpers changes
+    _SYS_VGS = {'rl', 'rl00', 'rhel', 'centos', 'fedora', 'almalinux', 'rocky'}
+
+
+def _dm_vg(source):
+    """Extract the VG name from a /dev/mapper/vg-lv or /dev/dm-* source."""
+    name = source.rsplit('/', 1)[-1]
+    # device-mapper doubles literal dashes; split on a single dash only.
+    vg = re.split(r'(?<!-)-(?!-)', name)[0].replace('--', '-')
+    return vg
+
+
+def _is_practice_mount(target, source, fstype):
+    if target in _PROTECTED_TARGETS or target.startswith(_PROTECTED_PREFIXES):
+        return False
+    if target == REPO_ROOT or target.startswith(REPO_ROOT + '/'):
+        return False
+    if fstype in ('nfs', 'nfs4'):
+        return True
+    if re.match(r'^/dev/loop\d+', source or ''):
+        return True
+    if (source or '').startswith(('/dev/mapper/', '/dev/dm-')):
+        return _dm_vg(source) not in _SYS_VGS
+    if target.startswith(_PRACTICE_TARGET_PREFIXES):
+        return True
+    return False
+
+
+def list_practice_mounts():
+    """Return [(target, source, fstype)] for non-system mounts, deepest first."""
+    rc, out = _run(['findmnt', '-rno', 'TARGET,SOURCE,FSTYPE'], timeout=15)
+    if rc != 0:
+        return []
+    mounts = []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        target, source, fstype = parts[0], parts[1], parts[2]
+        if _is_practice_mount(target, source, fstype):
+            mounts.append((target, source, fstype))
+    # Unmount the deepest paths first so nested mounts come off cleanly.
+    mounts.sort(key=lambda m: m[0].count('/'), reverse=True)
+    return mounts
+
+
+def unmount_practice_mounts(progress=_noop):
+    """Unmount all exam/practice mounts (NFS, loop/LVM filesystems, practice
+    mount points) before disks are torn down. NFS goes straight to force+lazy so
+    a stale server can't hang us; others try a clean umount then fall back."""
+    mounts = list_practice_mounts()
+    n = 0
+    for target, source, fstype in mounts:
+        if fstype in ('nfs', 'nfs4'):
+            rc, _ = _run(['umount', '-f', '-l', '--', target], timeout=30)
+        else:
+            rc, _ = _run(['umount', '--', target], timeout=30)
+            if rc != 0:
+                rc, _ = _run(['umount', '-l', '--', target], timeout=30)
+        if rc == 0:
+            n += 1
+            progress(f"  unmounted {target} ({fstype} <- {source})")
+        else:
+            progress(f"  could not unmount {target}")
+    if not mounts:
+        progress("  no practice mounts active")
+    return n
+
+
 # ── Practice swap + fstab ────────────────────────────────────────────────────
 
 def _system_swap(device):
@@ -378,6 +463,7 @@ def preview():
     confirmation screen. Non-enumerable steps (dnf clean, tuned) are omitted."""
     from core import lab_cleanup
     data = {
+        'Active mounts to unmount': [f"{t}  ({fs})" for t, s, fs in list_practice_mounts()],
         'Third-party repos': list_nondefault_repos(),
         'Flatpak apps': list_flatpak_apps(),
         'Flatpak remotes': list_flatpak_remotes(),
@@ -404,6 +490,10 @@ def run_all(progress=_noop, remove_users=True):
         except Exception as e:
             progress(f"  step failed: {e}")
             summary[name] = None
+
+    # 0. Unmount every exam/practice mount first (NFS, loop/LVM filesystems,
+    #    practice mount points) so later steps aren't blocked by busy devices.
+    step("Unmount practice mounts", lambda: unmount_practice_mounts(progress))
 
     # 1. Known lab artifacts (files, dirs, mounts).
     def _lab():
