@@ -128,8 +128,8 @@ Main menu options:
 | `3` | **Adaptive Mode** | SM-2 spaced repetition — focuses your weak/overdue areas |
 | `4` | **Dashboard** | Stats, history, weak areas |
 | `5` | **Export Report** | Write a progress report (text) to `data/` |
-| `6` | **Result History** | Drill into past exams task by task |
-| `S` | **Setup** | Practice disks, system reset, DNF-history setup |
+| `6` | **Result History** | Drill into past exams task by task (press `d` on a task to dispute a check) |
+| `S` | **Setup** | Practice disks, system reset, full system reset, remote NFS server, lab cleanup, DNF-history |
 | `0` | Exit | |
 
 ### Command-line shortcuts
@@ -160,9 +160,29 @@ Under the hood, every whole-disk task in an exam is handed a **distinct** device
 from the pool, so an LVM task and a partitioning task never collide on the same
 disk. Loop-device images live in `/var/lib/rhcsa-simulator/loops/`.
 
-**Setup also offers:** *System Reset* (remove practice artifacts — LVM, swap
-files, practice repos, cron/at jobs, scripts — without touching SSH/network/users)
-and *Populate Practice Environment* (build DNF transaction history).
+**Setup also offers:**
+
+- **System Reset** — remove practice artifacts (LVM, swap files, practice repos,
+  cron/at jobs, scripts) without touching SSH/network/users.
+- **Full System Reset** — strip the box back to a *basic RHEL install*: removes
+  all third-party DNF repos, all Flatpak apps/remotes, leftover lab files,
+  practice users/groups, practice disks/swap, scheduled jobs, autofs maps, tuned
+  changes, and any remote NFS exports — then unmounts every non-system mount
+  first so nothing is left over from a previous session. **Preserves** the
+  simulator itself, your GitHub/SSH connectivity (`~/.config/gh`, `~/.ssh`, git
+  config), networking, firewall, SELinux, the OS, and all real accounts. It
+  previews everything and requires typing `RESET` to proceed.
+- **Configure remote NFS server** — SSH into a RHEL box you control and have the
+  simulator provision real, seeded NFS exports so the network-storage tasks test
+  against an actual server (credentials optionally saved; exports refreshed each
+  exam and torn down after).
+- **Clean lab leftover files** — preview/remove just the task-created files.
+- **Populate Practice Environment** — build DNF transaction history.
+
+> **Training modes reset too.** Practice and Adaptive modes now reset the box at
+> the start of a session and prepare/tear down each task's state per iteration,
+> the same way the Mock Exam does — so tasks aren't polluted by earlier work.
+> Adaptive mode also lets you choose how many tasks to run (not a fixed 5).
 
 ---
 
@@ -201,6 +221,56 @@ SM-2 schedule (per-category easiness factor, 1→6→interval×EF progression).
 
 ---
 
+## Disputing a validator result (AI checker disputes)
+
+Think a check ("the checker") graded you wrong? You can dispute it, and an AI
+reviewer will investigate and fix the checker if you're right.
+
+**How to file one:** after an exam or from **Result History**, open a task's
+detail and press **`d`**. The simulator then:
+
+1. captures **read-only** evidence of the relevant live system state
+   (category-specific diagnostics — e.g. `getfacl`, `lsblk -f`, `swapon --show`
+   — plus any command you add) and your written argument,
+2. saves a full Markdown report locally under `data/disputes/`, and
+3. opens a **labelled GitHub issue** (`checker-dispute`). The issue includes a
+   **"Checker source"** line pointing at the exact task file, class, and
+   `validate()` line, so the reviewer goes straight to the code.
+
+If the `gh` CLI isn't installed/authenticated on your exam box, it prints a
+**pre-filled GitHub "new issue" URL** instead — open it in any browser where
+you're logged into GitHub and click *Submit*. No `gh` or token needed on the box.
+
+**What happens next (the automation):** a GitHub Action
+(`.github/workflows/checker-dispute.yml`) fires on the `checker-dispute` label
+and runs [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action).
+The AI reviewer reads the issue, opens **only** the named validator file, and
+decides — strictly from your evidence — whether the checker logic is genuinely
+wrong (bad device-naming, wrong path/grep, inverted condition, off-by-one, a bad
+RHEL 10 assumption) or you simply hadn't completed the task. It then:
+
+- posts a **verdict comment** on the issue, and
+- **only if the checker is actually wrong**, creates a branch, makes the minimal
+  fix, runs `pytest`, and opens a **fix PR** that closes the issue.
+
+### Enabling the automation on your own fork
+
+The workflow is included but needs one secret and is already scoped correctly:
+
+1. Generate a token with `claude setup-token` (uses your Claude subscription — no
+   per-call API billing), **or** use a pay-as-you-go Anthropic API key.
+2. In your fork: **Settings → Secrets and variables → Actions → New repository
+   secret**, add **`CLAUDE_CODE_OAUTH_TOKEN`** (or **`ANTHROPIC_API_KEY`**).
+3. That's it. The workflow already grants `id-token: write` (required for the
+   OAuth token exchange) and reads either secret automatically.
+
+> The review is scoped to one file and capped at a bounded number of turns to
+> keep credit usage low. To re-run a dispute, remove and re-add the
+> `checker-dispute` label on the issue (issue-triggered workflows always run
+> from the default branch).
+
+---
+
 ## Architecture
 
 ```
@@ -208,11 +278,14 @@ rhcsa-simulator/
 ├── rhcsa_simulator.py   # entry point / CLI
 ├── config/              # settings, exam objectives
 ├── core/                # exam, practice, learn, adaptive, menu, results_db, reboot engine
+│                        #   dispute (checker disputes), full_reset, nfs_server,
+│                        #   lab_cleanup, task_env (per-task setup/teardown)
 ├── tasks/               # task definitions by category (+ fault injection/teardown)
 ├── validators/          # safe read-only validation framework
 ├── device/              # loop-device / practice-disk management
 ├── utils/               # helpers, formatting, logging, device pool/allocator
-└── data/                # SQLite progress DB
+├── .github/workflows/   # checker-dispute.yml — AI reviews disputed validators
+└── data/                # SQLite progress DB (+ disputes/ reports)
 ```
 
 ## Extending — adding a task
@@ -238,6 +311,9 @@ Set `ANTHROPIC_API_KEY` to enable line-by-line command analysis. See
   limited; use a real RHEL/Rocky/Alma VM.
 - **Left in a messy state after a crash** — run **Setup → System Reset**; it also
   restores any practice "faults" that were still active.
+- **Want a truly clean box (stale mounts, extra repos/flatpaks, leftover users)**
+  — run **Setup → Full System Reset**. It unmounts every non-system mount first,
+  so leftovers from a previous exam/NFS session are cleared too.
 - **Reinstall from scratch** — re-run `./install.sh --yes`.
 
 ## License
