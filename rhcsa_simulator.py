@@ -48,6 +48,13 @@ Quick Start Examples:
                         help='Start adaptive practice (SM-2 driven)')
     parser.add_argument('--list-categories', action='store_true',
                         help='List available categories and domains')
+    parser.add_argument('--export-code', action='store_true',
+                        help='Print a portable progress code (backup) and exit')
+    parser.add_argument('--import-code', metavar='CODE',
+                        help='Restore progress from a code (use "-" to read from stdin)')
+    parser.add_argument('--import-mode', choices=['replace', 'merge'],
+                        default='replace',
+                        help='How --import-code applies (default: replace)')
     parser.add_argument('--version', action='version',
                         version=f'%(prog)s {settings.VERSION}')
 
@@ -195,6 +202,37 @@ def main():
                 print()
         return 0
 
+    # Progress snapshot codes — operate only on the local results DB, so they
+    # run without the full root/system checks (handy for scripting a snapshot
+    # save/restore around a VM revert or reinstall).
+    if getattr(args, 'export_code', False):
+        from core import progress_code
+        try:
+            print(progress_code.export_code())
+            return 0
+        except Exception as e:
+            print(f"Error exporting progress code: {e}", file=sys.stderr)
+            return 1
+
+    if getattr(args, 'import_code', None):
+        from core import progress_code
+        code = args.import_code
+        if code == '-':
+            code = sys.stdin.read()
+        try:
+            counts, summary = progress_code.import_code(
+                code, mode=getattr(args, 'import_mode', 'replace'))
+        except progress_code.ProgressCodeError as e:
+            print(f"Invalid progress code: {e}", file=sys.stderr)
+            return 1
+        except Exception as e:
+            print(f"Error importing progress code: {e}", file=sys.stderr)
+            return 1
+        print(f"Imported ({args.import_mode}): {counts['exams']} exams, "
+              f"{counts['tasks']} exam tasks, {counts['practice']} attempts, "
+              f"{counts['weak']} categories.")
+        return 0
+
     # Check root privileges
     try:
         from utils.helpers import require_root
@@ -312,6 +350,9 @@ def main():
 
             elif choice == 'history':
                 menu.show_result_history()
+
+            elif choice == 'snapshot':
+                menu.progress_snapshot()
 
             elif choice == 'setup':
                 menu.show_setup()

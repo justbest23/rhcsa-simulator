@@ -142,8 +142,48 @@ rhcsa-simulator --practice lvm     # practice a specific category
 rhcsa-simulator --learn            # study mode
 rhcsa-simulator --adaptive         # SM-2 weak-area practice
 rhcsa-simulator --list-categories  # list categories/domains (no root needed)
+rhcsa-simulator --export-code      # print a progress backup code (no root needed)
+rhcsa-simulator --import-code CODE # restore progress from a code
+rhcsa-simulator --import-code -    # restore from a code piped on stdin
 rhcsa-simulator --version
 ```
+
+---
+
+## Progress snapshots (backup & restore, no login)
+
+Your task history and adaptive (SM-2) spaced-repetition state live in a local
+SQLite DB. To carry them across a **reinstall** or a **VM snapshot revert**,
+export a **progress code** — a self-contained, copy-pasteable string — and
+import it on the fresh box. No account, no server.
+
+**In the app:** main menu → **7. Progress Snapshot**:
+- **Export** a code (also saved to `data/progress_code.txt`). Keep it somewhere
+  that survives the revert — it's the only copy.
+- **Import** a code — you get a preview of what it contains, then choose
+  **Replace** (wipe local history and restore — best for a fresh box) or
+  **Merge** (keep local, add the code's entries, skip duplicates).
+- **Prune** — remove a specific exam, clear all practice attempts, reset one
+  category's adaptive state, or wipe everything (handy before exporting a clean
+  snapshot).
+
+**From the command line** (scripting a snapshot around a revert):
+
+```bash
+# Back up before reverting / reinstalling
+rhcsa-simulator --export-code > my-progress.code
+
+# Restore on the fresh box (default mode is replace)
+rhcsa-simulator --import-code "$(cat my-progress.code)"
+
+# ...or pipe it in, and merge instead of replace
+cat my-progress.code | rhcsa-simulator --import-code - --import-mode merge
+```
+
+The code is purely uppercase-alphanumeric and carries a checksum, so a
+mistyped or truncated code is rejected rather than importing garbage. Its length
+grows with your history (a light user is a short string; a very active user can
+reach a few KB — fine to copy/paste).
 
 ---
 

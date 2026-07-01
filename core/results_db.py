@@ -348,6 +348,168 @@ class ResultsDB:
         finally:
             conn.close()
 
+    # ── Portable progress (snapshot code) ────────────────────────────────────
+
+    def dump_progress(self):
+        """Return all progress needed to reconstruct history + SM-2 state as a
+        plain dict. Large regenerable text (descriptions, checks, hints) is
+        omitted to keep the exported code small."""
+        conn = self._get_conn()
+        try:
+            exams = [dict(r) for r in conn.execute(
+                "SELECT exam_id, start_time, end_time, duration_seconds, "
+                "total_score, max_score, percentage, passed, reboot_passed, "
+                "task_count, mode FROM exam_results").fetchall()]
+            tasks = [dict(r) for r in conn.execute(
+                "SELECT exam_id, task_id, category, difficulty, domain, score, "
+                "max_score, passed, persistence_passed, created_at "
+                "FROM task_results").fetchall()]
+            practice = [dict(r) for r in conn.execute(
+                "SELECT task_id, category, difficulty, domain, score, max_score, "
+                "passed, persistence_passed, mode, created_at "
+                "FROM practice_history").fetchall()]
+            weak = [dict(r) for r in conn.execute(
+                "SELECT category, attempts, passes, total_score, total_max_score, "
+                "success_rate, last_attempt, spaced_repetition_due, "
+                "easiness_factor, interval_days, repetitions "
+                "FROM weak_areas").fetchall()]
+            return {'exams': exams, 'tasks': tasks,
+                    'practice': practice, 'weak': weak}
+        finally:
+            conn.close()
+
+    def load_progress(self, data, mode='replace'):
+        """Insert progress from a dump_progress() dict. mode='replace' wipes
+        existing history first; mode='merge' keeps it and skips duplicates.
+        Returns a dict of how many rows were added per table."""
+        counts = {'exams': 0, 'tasks': 0, 'practice': 0, 'weak': 0}
+        conn = self._get_conn()
+        try:
+            if mode == 'replace':
+                for t in ('task_results', 'exam_results',
+                          'practice_history', 'weak_areas'):
+                    conn.execute(f"DELETE FROM {t}")
+
+            for e in data.get('exams', []):
+                conn.execute("""
+                    INSERT OR REPLACE INTO exam_results
+                    (exam_id, start_time, end_time, duration_seconds, total_score,
+                     max_score, percentage, passed, reboot_passed, task_count, mode)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (e.get('exam_id'), e.get('start_time'), e.get('end_time'),
+                      e.get('duration_seconds'), e.get('total_score'),
+                      e.get('max_score'), e.get('percentage'), e.get('passed'),
+                      e.get('reboot_passed'), e.get('task_count'),
+                      e.get('mode', 'exam')))
+                counts['exams'] += 1
+
+            for t in data.get('tasks', []):
+                if mode == 'merge' and conn.execute(
+                        "SELECT 1 FROM task_results WHERE exam_id=? AND task_id=? "
+                        "LIMIT 1", (t.get('exam_id'), t.get('task_id'))).fetchone():
+                    continue
+                conn.execute("""
+                    INSERT INTO task_results
+                    (exam_id, task_id, category, difficulty, domain, score,
+                     max_score, passed, persistence_passed, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (t.get('exam_id'), t.get('task_id'), t.get('category'),
+                      t.get('difficulty'), t.get('domain'), t.get('score'),
+                      t.get('max_score'), t.get('passed'),
+                      t.get('persistence_passed'), t.get('created_at')))
+                counts['tasks'] += 1
+
+            for p in data.get('practice', []):
+                if mode == 'merge' and conn.execute(
+                        "SELECT 1 FROM practice_history WHERE task_id=? AND "
+                        "created_at=? AND score=? LIMIT 1",
+                        (p.get('task_id'), p.get('created_at'),
+                         p.get('score'))).fetchone():
+                    continue
+                conn.execute("""
+                    INSERT INTO practice_history
+                    (task_id, category, difficulty, domain, score, max_score,
+                     passed, persistence_passed, mode, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (p.get('task_id'), p.get('category'), p.get('difficulty'),
+                      p.get('domain'), p.get('score'), p.get('max_score'),
+                      p.get('passed'), p.get('persistence_passed'),
+                      p.get('mode', 'practice'), p.get('created_at')))
+                counts['practice'] += 1
+
+            # SM-2 state is authoritative in the snapshot — take the imported row.
+            for w in data.get('weak', []):
+                conn.execute("""
+                    INSERT OR REPLACE INTO weak_areas
+                    (category, attempts, passes, total_score, total_max_score,
+                     success_rate, last_attempt, spaced_repetition_due,
+                     easiness_factor, interval_days, repetitions)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (w.get('category'), w.get('attempts'), w.get('passes'),
+                      w.get('total_score'), w.get('total_max_score'),
+                      w.get('success_rate'), w.get('last_attempt'),
+                      w.get('spaced_repetition_due'), w.get('easiness_factor'),
+                      w.get('interval_days'), w.get('repetitions')))
+                counts['weak'] += 1
+
+            conn.commit()
+        finally:
+            conn.close()
+        return counts
+
+    def list_exams(self):
+        """All exams (id, date, score) for a prune/selection UI."""
+        conn = self._get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT exam_id, start_time, percentage, passed, mode "
+                "FROM exam_results ORDER BY created_at DESC").fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    def delete_exam(self, exam_id):
+        """Remove one exam and its per-task rows. Returns rows deleted."""
+        conn = self._get_conn()
+        try:
+            conn.execute("DELETE FROM task_results WHERE exam_id=?", (exam_id,))
+            cur = conn.execute("DELETE FROM exam_results WHERE exam_id=?", (exam_id,))
+            conn.commit()
+            return cur.rowcount
+        finally:
+            conn.close()
+
+    def clear_practice_history(self):
+        """Delete all practice/adaptive attempts. Returns rows deleted."""
+        conn = self._get_conn()
+        try:
+            cur = conn.execute("DELETE FROM practice_history")
+            conn.commit()
+            return cur.rowcount
+        finally:
+            conn.close()
+
+    def reset_category(self, category):
+        """Clear the SM-2 / weak-area state for one category."""
+        conn = self._get_conn()
+        try:
+            cur = conn.execute("DELETE FROM weak_areas WHERE category=?", (category,))
+            conn.commit()
+            return cur.rowcount
+        finally:
+            conn.close()
+
+    def clear_all_progress(self):
+        """Wipe every progress table (used before a full restore)."""
+        conn = self._get_conn()
+        try:
+            for t in ('task_results', 'exam_results',
+                      'practice_history', 'weak_areas'):
+                conn.execute(f"DELETE FROM {t}")
+            conn.commit()
+        finally:
+            conn.close()
+
 
 _results_db = None
 

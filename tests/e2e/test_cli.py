@@ -10,6 +10,20 @@ from unittest.mock import patch, MagicMock
 pytestmark = pytest.mark.e2e
 
 
+def _args(**overrides):
+    """Build a complete parsed-args stub. Every CLI flag defaults to its
+    inactive value so a test only sets the one it cares about — and adding a
+    new flag can't accidentally fire (MagicMock would otherwise fabricate a
+    truthy attribute)."""
+    defaults = dict(
+        list_categories=False, quick=None, exam=False, learn=None,
+        practice=None, adaptive=False,
+        export_code=False, import_code=None, import_mode='replace',
+    )
+    defaults.update(overrides)
+    return MagicMock(**defaults)
+
+
 @pytest.fixture(autouse=True)
 def mock_subprocess():
     mock_result = MagicMock(returncode=0, stdout="", stderr="")
@@ -37,7 +51,7 @@ class TestListCategories:
         from rhcsa_simulator import main
 
         with patch("rhcsa_simulator.parse_args") as mock_args:
-            mock_args.return_value = MagicMock(
+            mock_args.return_value = _args(
                 list_categories=True,
                 quick=None,
                 exam=False,
@@ -62,7 +76,7 @@ class TestCLIDispatch:
         with patch("rhcsa_simulator.parse_args") as mock_args, \
              patch("utils.helpers.require_root"), \
              patch("core.exam.run_exam_mode") as mock_exam:
-            mock_args.return_value = MagicMock(
+            mock_args.return_value = _args(
                 list_categories=False,
                 quick=None,
                 exam=True,
@@ -79,7 +93,7 @@ class TestCLIDispatch:
         with patch("rhcsa_simulator.parse_args") as mock_args, \
              patch("utils.helpers.require_root"), \
              patch("core.adaptive.run_adaptive_mode") as mock_adaptive:
-            mock_args.return_value = MagicMock(
+            mock_args.return_value = _args(
                 list_categories=False,
                 quick=None,
                 exam=False,
@@ -96,7 +110,7 @@ class TestCLIDispatch:
         with patch("rhcsa_simulator.parse_args") as mock_args, \
              patch("utils.helpers.require_root"), \
              patch("core.learn.run_learn_mode") as mock_learn:
-            mock_args.return_value = MagicMock(
+            mock_args.return_value = _args(
                 list_categories=False,
                 quick=None,
                 exam=False,
@@ -116,7 +130,7 @@ class TestCLIDispatch:
             mock_session = MagicMock()
             mock_session_cls.return_value = mock_session
 
-            mock_args.return_value = MagicMock(
+            mock_args.return_value = _args(
                 list_categories=False,
                 quick=None,
                 exam=False,
@@ -133,7 +147,7 @@ class TestCLIDispatch:
 
         with patch("rhcsa_simulator.parse_args") as mock_args, \
              patch("utils.helpers.require_root"):
-            mock_args.return_value = MagicMock(
+            mock_args.return_value = _args(
                 list_categories=False,
                 quick=None,
                 exam=False,
@@ -152,7 +166,7 @@ class TestCLIDispatch:
         with patch("rhcsa_simulator.parse_args") as mock_args, \
              patch("utils.helpers.require_root"), \
              patch("rhcsa_simulator.run_quick_practice") as mock_quick:
-            mock_args.return_value = MagicMock(
+            mock_args.return_value = _args(
                 list_categories=False,
                 quick="all",
                 exam=False,
