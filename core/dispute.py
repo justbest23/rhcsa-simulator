@@ -22,6 +22,7 @@ Nothing here changes system state; it only reads it.
 import os
 import shutil
 import subprocess
+import urllib.parse
 from datetime import datetime
 
 from utils import formatters as fmt  # noqa: F401  (kept for callers/consistency)
@@ -31,6 +32,10 @@ from utils import formatters as fmt  # noqa: F401  (kept for callers/consistency
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DISPUTE_DIR = os.path.join(REPO_ROOT, 'data', 'disputes')
 DISPUTE_LABEL = 'checker-dispute'
+
+# Used to build the browser fallback URL when the git remote can't be read
+# (e.g. a tarball copy on an exam box with no origin remote).
+GITHUB_REPO_FALLBACK = 'justbest23/rhcsa-simulator'
 
 _MAX_OUTPUT = 4000  # chars kept per command, to keep issues readable
 
@@ -101,6 +106,63 @@ def gh_available():
         return res.returncode == 0
     except Exception:
         return False
+
+
+def repo_slug():
+    """Return 'owner/repo' from the git origin remote, or a sensible fallback.
+
+    Works for both SSH (git@github.com:owner/repo.git) and HTTPS remotes; falls
+    back to GITHUB_REPO_FALLBACK when there's no git remote (tarball copy).
+    """
+    try:
+        res = subprocess.run(['git', 'remote', 'get-url', 'origin'],
+                             capture_output=True, text=True, cwd=REPO_ROOT, timeout=10)
+        url = (res.stdout or '').strip()
+        if url:
+            if url.startswith('git@') or ('@' in url and '://' not in url):
+                path = url.split(':', 1)[1] if ':' in url else url
+            else:
+                path = urllib.parse.urlsplit(url).path
+            path = path.strip('/')
+            if path.endswith('.git'):
+                path = path[:-4]
+            if path and '/' in path:
+                return path
+    except Exception:
+        pass
+    return GITHUB_REPO_FALLBACK
+
+
+def issue_url(tr, body, max_url=7000):
+    """Build a pre-filled GitHub 'new issue' URL — no gh, no auth on this box.
+
+    The candidate opens it in any browser where they're logged into GitHub and
+    just clicks 'Submit'. GitHub truncates very long GET URLs, so if the full
+    report doesn't fit the body is trimmed (the complete report is always kept
+    locally by save_report()).
+    """
+    title = f"[checker dispute] {tr.get('task_id', 'task')}: scored " \
+            f"{tr.get('score', '?')}/{tr.get('max_score', '?')}"
+    base = f"https://github.com/{repo_slug()}/issues/new"
+
+    def build(b):
+        q = urllib.parse.urlencode(
+            {'title': title, 'body': b, 'labels': DISPUTE_LABEL})
+        return f"{base}?{q}"
+
+    url = build(body)
+    if len(url) <= max_url:
+        return url
+
+    note = ("\n\n_(Evidence truncated to fit the URL — the full report is saved "
+            "on the exam host; paste it in if you can.)_")
+    budget = len(body)
+    while budget > 400:
+        budget = int(budget * 0.8)
+        url = build(body[:budget] + note)
+        if len(url) <= max_url:
+            return url
+    return build(title)  # extreme fallback: title only
 
 
 def collect_evidence(category, extra_commands=None):

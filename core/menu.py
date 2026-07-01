@@ -1063,20 +1063,19 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
         path = dispute.save_report(tr, body)
         print(fmt.success(f"Saved dispute report: {path}"))
 
-        # 5. Submit via gh (or fall back to local-only with instructions).
+        # 5. Submit via gh (or fall back to a no-auth browser URL).
         if not dispute.gh_available():
             print()
-            print(fmt.warning("GitHub CLI ('gh') is not installed or not authenticated, so the"))
-            print(fmt.warning("issue could not be opened automatically."))
-            print("The full report was saved at the path above. To file it:")
-            print(fmt.dim(f"  gh issue create --label {dispute.DISPUTE_LABEL} "
-                          f"--title '[checker dispute] {tr.get('task_id')}' --body-file {path}"))
+            print(fmt.warning("GitHub CLI ('gh') isn't installed/authenticated on this host, so"))
+            print(fmt.warning("the issue can't be opened automatically from here."))
+            self._offer_manual_dispute(dispute, tr, path, body)
             input("\nPress Enter to return to session view...")
             return
 
         print()
         if not confirm_action("Open the GitHub issue now?", default=True):
             print(fmt.dim(f"Not sent. Report kept at {path}."))
+            self._offer_manual_dispute(dispute, tr, path, body)
             input("\nPress Enter to return to session view...")
             return
 
@@ -1089,9 +1088,29 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
             print(fmt.info("An AI reviewer will inspect the validator and, if the checker is"))
             print(fmt.info("wrong, open a fix PR. Watch the issue for its verdict."))
         else:
-            print(fmt.error(f"Could not open the issue: {info}"))
-            print(fmt.dim(f"The report is saved at {path} — you can file it manually."))
+            print(fmt.error(f"Could not open the issue via gh: {info}"))
+            self._offer_manual_dispute(dispute, tr, path, body)
         input("\nPress Enter to return to session view...")
+
+    def _offer_manual_dispute(self, dispute, tr, path, body):
+        """Show no-auth ways to file the dispute when gh can't do it here:
+        a pre-filled browser URL (open on any machine logged into GitHub) plus
+        the exact gh command, with the full report kept locally either way."""
+        print()
+        print(fmt.bold("File it without gh — open this URL in any browser where you're"))
+        print(fmt.bold("logged into GitHub, then click 'Submit new issue':"))
+        print()
+        try:
+            print(dispute.issue_url(tr, body))
+        except Exception:
+            print(fmt.dim("  (could not build issue URL)"))
+        print()
+        print(fmt.dim("The label is pre-set, so the AI reviewer triggers automatically."))
+        print(fmt.dim(f"Full report saved locally: {path}"))
+        print(fmt.dim("Or, on a host with gh authenticated:"))
+        print(fmt.dim(f"  gh issue create --repo {dispute.repo_slug()} "
+                      f"--label {dispute.DISPUTE_LABEL} "
+                      f"--title '[checker dispute] {tr.get('task_id')}' --body-file {path}"))
 
     def populate_practice_environment(self):
         """Install/remove lightweight packages to build up DNF transaction history."""
