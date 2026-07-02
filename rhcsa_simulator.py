@@ -252,6 +252,16 @@ def main():
     except Exception:
         pass
 
+    # Preflight: warn about exam-relevant packages (httpd, vsftpd, nfs-utils,
+    # ...) that aren't installed, so a task that assumes one is present
+    # doesn't silently fail to set up its scenario. Best-effort, never fails
+    # the launch.
+    try:
+        from core import preflight
+        preflight.warn_missing()
+    except Exception:
+        pass
+
     # CLI quick modes
     if args.quick:
         run_quick_practice(args.quick)
