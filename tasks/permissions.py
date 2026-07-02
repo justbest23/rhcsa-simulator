@@ -503,7 +503,10 @@ class SharedDirectoryTask(BaseTask):
 
         # Check 3: SGID bit set (3 points)
         actual_perms = get_file_permissions(self.dir_path)
-        sgid_set = actual_perms and len(actual_perms) == 4 and actual_perms[0] in ['2', '3', '6', '7']
+        # get_file_permissions() returns Python 3's oct() format (e.g. '0o3770'),
+        # which is prefixed with '0o' — strip it before inspecting digit count/position.
+        perm_digits = actual_perms[2:] if actual_perms and actual_perms.startswith('0o') else actual_perms
+        sgid_set = perm_digits and len(perm_digits) == 4 and perm_digits[0] in ['2', '3', '6', '7']
         if sgid_set:
             checks.append(ValidationCheck(
                 name="sgid_set",
@@ -522,7 +525,7 @@ class SharedDirectoryTask(BaseTask):
             ))
 
         # Check 4: Sticky bit set (2 points)
-        sticky_set = actual_perms and len(actual_perms) == 4 and actual_perms[0] in ['1', '3', '5', '7']
+        sticky_set = perm_digits and len(perm_digits) == 4 and perm_digits[0] in ['1', '3', '5', '7']
         if sticky_set:
             checks.append(ValidationCheck(
                 name="sticky_set",
