@@ -381,6 +381,46 @@ def _restore_env_setup(info, msgs):
             msgs.append(f"Reinstalled flatpak {app}")
 
 
+# ── httpd preflight (RHEL/Rocky minimal installs don't ship httpd) ───────────
+#
+# Several fault-injection tasks describe an "httpd is running but ..." symptom
+# and manipulate SELinux/firewall/service state around it. On a minimal
+# install httpd is absent, so those manipulations silently no-op and the
+# candidate never sees the intended symptom (issue #37). These helpers install
+# and start httpd on demand, tracked separately from the task's own fault
+# record, so restore_fault() can put the host back exactly as it found it.
+
+def _httpd_pkg_key(task_id):
+    return f'{task_id}__httpd_pkg'
+
+
+def _httpd_svc_key(task_id):
+    return f'{task_id}__httpd_svc'
+
+
+def _ensure_httpd_installed(task_id):
+    """Install httpd if missing. Returns True once httpd is present."""
+    from tasks.env_setup import ensure_package_installed
+    ensure_package_installed(_httpd_pkg_key(task_id), 'httpd')
+    return _run(['rpm', '-q', 'httpd']).returncode == 0
+
+
+def _ensure_httpd_running(task_id):
+    """Start+enable httpd if it isn't already (httpd must be installed first)."""
+    from tasks.env_setup import make_service_present
+    make_service_present(_httpd_svc_key(task_id), 'httpd')
+
+
+def _restore_httpd_setup(task_id, msgs):
+    """Undo whatever _ensure_httpd_installed()/_ensure_httpd_running() did for
+    this task — service state first, then the package."""
+    for key in (_httpd_svc_key(task_id), _httpd_pkg_key(task_id)):
+        state = load_fault_state(key)
+        if state:
+            _restore_env_setup(state['restore_info'], msgs)
+            clear_fault_state(key)
+
+
 # ── Base class ────────────────────────────────────────────────────────────────
 
 class TroubleshootingTask(BaseTask):
@@ -444,6 +484,9 @@ class SELinuxHttpdContextFaultTask(TroubleshootingTask):
         return self
 
     def inject_fault(self):
+        if not _ensure_httpd_installed(self.id):
+            return False, "httpd package is not installed and could not be installed (check repo access)"
+
         # Create a test file so there's actually content to serve
         os.makedirs(self.web_root, exist_ok=True)
         test_file = f'{self.web_root}/index.html'
@@ -457,7 +500,7 @@ class SELinuxHttpdContextFaultTask(TroubleshootingTask):
             return False, f"chcon failed: {r.stderr.strip()}"
 
         # Also ensure httpd is running so the symptom is visible
-        _run(['systemctl', 'start', 'httpd'])
+        _ensure_httpd_running(self.id)
 
         save_fault_state(self.id, {'path': self.web_root})
         return True, f"Set wrong SELinux context (etc_t) on {self.web_root}"
@@ -465,6 +508,7 @@ class SELinuxHttpdContextFaultTask(TroubleshootingTask):
     def restore_fault(self):
         msgs = []
         _restore_selinux_context({'path': self.web_root}, msgs)
+        _restore_httpd_setup(self.id, msgs)
         clear_fault_state()
         return True, '; '.join(msgs)
 
@@ -553,6 +597,10 @@ class SELinuxHttpdBooleanFaultTask(TroubleshootingTask):
         return self
 
     def inject_fault(self):
+        if not _ensure_httpd_installed(self.id):
+            return False, "httpd package is not installed and could not be installed (check repo access)"
+        _ensure_httpd_running(self.id)
+
         # Save current value first
         r = _run(['getsebool', self.boolean_name])
         if r.returncode == 0 and '->' in r.stdout:
@@ -575,6 +623,7 @@ class SELinuxHttpdBooleanFaultTask(TroubleshootingTask):
     def restore_fault(self):
         msgs = []
         _restore_selinux_boolean({'boolean': self.boolean_name, 'original_value': self._original_value}, msgs)
+        _restore_httpd_setup(self.id, msgs)
         clear_fault_state()
         return True, '; '.join(msgs)
 
@@ -654,6 +703,17 @@ class FirewallHttpBlockedFaultTask(TroubleshootingTask):
         return self
 
     def inject_fault(self):
+        if not _ensure_httpd_installed(self.id):
+            return False, "httpd package is not installed and could not be installed (check repo access)"
+
+        # Content + a running httpd so "curl localhost works" is actually true
+        os.makedirs('/var/www/html', exist_ok=True)
+        test_file = '/var/www/html/index.html'
+        if not os.path.exists(test_file):
+            with open(test_file, 'w') as f:
+                f.write('<html><body>RHCSA test</body></html>\n')
+        _ensure_httpd_running(self.id)
+
         # Only remove if currently present (avoid injecting into already-broken state)
         r = _run(['firewall-cmd', '--zone=public', '--query-service=http'])
         was_present = r.returncode == 0
@@ -671,6 +731,7 @@ class FirewallHttpBlockedFaultTask(TroubleshootingTask):
     def restore_fault(self):
         msgs = []
         _restore_firewall({'zone': self.zone, 'service': self.service}, msgs)
+        _restore_httpd_setup(self.id, msgs)
         clear_fault_state()
         return True, '; '.join(msgs)
 
@@ -837,6 +898,9 @@ class HttpdDisabledFaultTask(TroubleshootingTask):
         return self
 
     def inject_fault(self):
+        if not _ensure_httpd_installed(self.id):
+            return False, "httpd package is not installed and could not be installed (check repo access)"
+
         r = _run(['systemctl', 'is-active', self.service])
         self._was_active = r.returncode == 0
         r = _run(['systemctl', 'is-enabled', self.service])
@@ -859,6 +923,7 @@ class HttpdDisabledFaultTask(TroubleshootingTask):
             'was_active': self._was_active,
             'was_enabled': self._was_enabled,
         }, msgs)
+        _restore_httpd_setup(self.id, msgs)
         clear_fault_state()
         return True, '; '.join(msgs)
 
