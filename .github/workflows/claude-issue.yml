@@ -7,7 +7,14 @@ name: Claude issue worker
 #
 # Two ways to trigger it:
 #   * Add the  claude  label to an issue, OR
-#   * Mention  @claude  in the issue body or in any issue comment.
+#   * Mention  @claude  in an issue comment.
+#
+# SECURITY: on a public repo anyone can open issues and comment. To stop the
+# public from spending your Claude credits, the job below runs ONLY when the
+# actor who added the label / wrote the comment is the repo owner (see the
+# github.actor check). We deliberately do NOT trigger on issue "opened" body
+# mentions, because any stranger can open an issue. (Disputes are a separate,
+# always-automatic workflow and are unaffected.)
 #
 # NOTE: label/mention-triggered workflows run from the DEFAULT branch, so this
 # file must be merged to the default branch before the trigger will fire.
@@ -19,7 +26,7 @@ name: Claude issue worker
 
 on:
   issues:
-    types: [labeled, opened]
+    types: [labeled]
   issue_comment:
     types: [created]
 
@@ -32,12 +39,19 @@ permissions:
 
 jobs:
   work:
-    # Fire on the "claude" label, or on an @claude mention in the issue body or
-    # a comment. Ignore comments on pull requests (issue_comment fires for both).
+    # Fire on the "claude" label or an @claude comment — but ONLY when the
+    # triggering actor is the repo owner. github.actor is who added the label /
+    # wrote the comment, so a stranger's @claude comment is ignored. Ignore
+    # comments on pull requests (issue_comment fires for both).
+    #
+    # To authorise more people, swap the actor check for e.g.:
+    #   contains(fromJSON('["justbest23","someone-else"]'), github.actor)
     if: >-
-      (github.event_name == 'issues' && github.event.action == 'labeled' && github.event.label.name == 'claude') ||
-      (github.event_name == 'issues' && github.event.action == 'opened' && contains(github.event.issue.body, '@claude')) ||
-      (github.event_name == 'issue_comment' && !github.event.issue.pull_request && contains(github.event.comment.body, '@claude'))
+      github.actor == 'justbest23' &&
+      (
+        (github.event_name == 'issues' && github.event.label.name == 'claude') ||
+        (github.event_name == 'issue_comment' && !github.event.issue.pull_request && contains(github.event.comment.body, '@claude'))
+      )
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repository
