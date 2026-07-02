@@ -13,7 +13,11 @@ import pytest
 from unittest.mock import patch
 
 from validators.safe_executor import ExecutionResult
-from tasks.packages import DowngradePackageTask
+from tasks.packages import (
+    DowngradePackageTask,
+    _package_installed,
+    _downgrade_recorded,
+)
 
 
 pytestmark = pytest.mark.unit
@@ -104,22 +108,22 @@ class TestGenuineFailures:
 class TestHelpers:
     def test_package_installed_tristate(self):
         with patch("tasks.packages.execute_safe", return_value=_res(0, "pkg-1.0")):
-            assert DowngradePackageTask._package_installed("pkg") is True
+            assert _package_installed("pkg") is True
         with patch("tasks.packages.execute_safe",
                    return_value=_res(1, "package pkg is not installed")):
-            assert DowngradePackageTask._package_installed("pkg") is False
+            assert _package_installed("pkg") is False
         with patch("tasks.packages.execute_safe", return_value=_res(-1, stderr="timeout")):
-            assert DowngradePackageTask._package_installed("pkg") is None
+            assert _package_installed("pkg") is None
 
     def test_downgrade_recorded_is_scoped(self):
         # A Downgrade row for the queried package => True.
         with patch("tasks.packages.execute_safe",
                    return_value=_res(0, "229 | dg pkg | Downgrade | 4")):
-            assert DowngradePackageTask._downgrade_recorded("pkg") is True
+            assert _downgrade_recorded("pkg") is True
         # dnf history list returns rc=0 with no matches => False, not a false pass.
         with patch("tasks.packages.execute_safe",
                    return_value=_res(0, "No transaction which manipulates package 'pkg' was found.")):
-            assert DowngradePackageTask._downgrade_recorded("pkg") is False
+            assert _downgrade_recorded("pkg") is False
         # Query itself failed => inconclusive.
         with patch("tasks.packages.execute_safe", return_value=_res(-1, stderr="timeout")):
-            assert DowngradePackageTask._downgrade_recorded("pkg") is None
+            assert _downgrade_recorded("pkg") is None

@@ -13,6 +13,58 @@ from validators.safe_executor import execute_safe
 logger = logging.getLogger(__name__)
 
 
+# --- shared, transient-failure-aware package queries -------------------------
+# execute_safe returns success=False for a *timeout* too (COMMAND_TIMEOUT is 5s),
+# not only for a clean "package absent". rpm/dnf block on the rpmdb lock a
+# just-finished dnf transaction / subscription-manager still holds, so under the
+# 5s cap a transient timeout would otherwise be scored as a definitive verdict —
+# a candidate who did the work gets a false "not installed", and (worse) a
+# remove-task candidate gets a false "removed" for free. These helpers give the
+# query room (30s), retry once, and return a TRI-STATE:
+#   True  = confirmed (installed / matched)
+#   False = query ran cleanly and did not match (genuinely absent / no match)
+#   None  = the query itself could not be trusted (timed out / errored) — callers
+#           must treat this as "cannot grade yet", never as a pass or a fail.
+
+def _package_installed(pkg):
+    """rpm -q tri-state. rpm exits 1 with 'is not installed' only when it truly
+    ran and the package is absent; any other non-zero rc is inconclusive."""
+    for _ in range(2):
+        r = execute_safe(['rpm', '-q', pkg], timeout=30)
+        if r.returncode == 0 and pkg in r.stdout:
+            return True
+        if r.returncode == 1 and 'not installed' in (r.stdout + r.stderr).lower():
+            return False
+    return None
+
+
+def _group_installed(group_name, group_id):
+    """`dnf group list installed` tri-state (rc=0 even with no matches, so rc=0
+    output is authoritative; any non-zero rc is a failed query)."""
+    for _ in range(2):
+        r = execute_safe(['dnf', 'group', 'list', 'installed'], timeout=30)
+        if r.returncode == 0:
+            text = r.stdout.lower()
+            return (group_name.lower() in text) or (bool(group_id) and group_id in text)
+    return None
+
+
+def _downgrade_recorded(pkg):
+    """dnf history tri-state, scoped to pkg. `dnf history list <pkg>` returns
+    rc=0 even with no matches, so 'downgrade'/'undo' in rc=0 output can only come
+    from a transaction that touched this package."""
+    for _ in range(2):
+        r = execute_safe(['dnf', 'history', 'list', pkg], timeout=30)
+        if r.returncode == 0:
+            text = r.stdout.lower()
+            return ('downgrade' in text) or ('undo' in text)
+    return None
+
+
+_INCONCLUSIVE = ("query failed or timed out (rpmdb may be busy right after a dnf "
+                 "transaction). Wait a few seconds and grade again.")
+
+
 @TaskRegistry.register("packages")
 class InstallPackageTask(BaseTask):
     """Install a package using dnf."""
@@ -51,14 +103,16 @@ class InstallPackageTask(BaseTask):
 
     def validate(self):
         checks = []
-        total_points = 0
-        result = execute_safe(['rpm', '-q', self.package_name])
-        if result.success and self.package_name in result.stdout:
+        installed = _package_installed(self.package_name)
+        if installed is None:
+            checks.append(ValidationCheck("package_installed", False, 0,
+                                          f"Could not verify {self.package_name} — {_INCONCLUSIVE}", max_points=6))
+            return ValidationResult(self.id, False, 0, self.points, checks)
+        if installed:
             checks.append(ValidationCheck("package_installed", True, 6, f"Package {self.package_name} is installed"))
-            total_points += 6
-        else:
-            checks.append(ValidationCheck("package_installed", False, 0, f"Package {self.package_name} is not installed", max_points=6))
-        return ValidationResult(self.id, total_points >= 4, total_points, self.points, checks)
+            return ValidationResult(self.id, True, 6, self.points, checks)
+        checks.append(ValidationCheck("package_installed", False, 0, f"Package {self.package_name} is not installed", max_points=6))
+        return ValidationResult(self.id, False, 0, self.points, checks)
 
 
 @TaskRegistry.register("packages")
@@ -97,8 +151,14 @@ class RemovePackageTask(BaseTask):
 
     def validate(self):
         checks = []
-        result = execute_safe(['rpm', '-q', self.package_name])
-        if not result.success or 'not installed' in result.stdout.lower():
+        installed = _package_installed(self.package_name)
+        # None (query failed/timed out) must NOT be scored as "removed" — that
+        # would hand full points for work not done. Only a clean "absent" passes.
+        if installed is None:
+            checks.append(ValidationCheck("package_removed", False, 0,
+                                          f"Could not verify {self.package_name} — {_INCONCLUSIVE}", max_points=6))
+            return ValidationResult(self.id, False, 0, self.points, checks)
+        if installed is False:
             checks.append(ValidationCheck("package_removed", True, 6, f"Package {self.package_name} removed"))
             return ValidationResult(self.id, True, 6, self.points, checks)
         checks.append(ValidationCheck("package_removed", False, 0, f"Package {self.package_name} still installed", max_points=6))
@@ -148,15 +208,16 @@ class InstallPackageGroupTask(BaseTask):
 
     def validate(self):
         checks = []
-        total_points = 0
-        result = execute_safe(['dnf', 'group', 'list', 'installed'])
-        if result.success and (self.group_name.lower() in result.stdout.lower() or
-                               self.group_id in result.stdout.lower()):
+        state = _group_installed(self.group_name, self.group_id)
+        if state is None:
+            checks.append(ValidationCheck("group_installed", False, 0,
+                                          f"Could not verify group '{self.group_name}' — {_INCONCLUSIVE}", max_points=8))
+            return ValidationResult(self.id, False, 0, self.points, checks)
+        if state:
             checks.append(ValidationCheck("group_installed", True, 8, f"Package group '{self.group_name}' installed"))
-            total_points = 8
-        else:
-            checks.append(ValidationCheck("group_installed", False, 0, f"Package group '{self.group_name}' not installed", max_points=8))
-        return ValidationResult(self.id, total_points >= 6, total_points, self.points, checks)
+            return ValidationResult(self.id, True, 8, self.points, checks)
+        checks.append(ValidationCheck("group_installed", False, 0, f"Package group '{self.group_name}' not installed", max_points=8))
+        return ValidationResult(self.id, False, 0, self.points, checks)
 
 
 @TaskRegistry.register("packages")
@@ -355,11 +416,15 @@ class VerifyPackageIntegrityTask(BaseTask):
         checks = []
         total_points = 0
 
-        # Check package is installed
-        result = execute_safe(['rpm', '-q', self.package_name])
-        if result.success:
+        # Check package is installed (transient-failure aware)
+        installed = _package_installed(self.package_name)
+        if installed:
             checks.append(ValidationCheck("pkg_installed", True, 3, f"{self.package_name} is installed"))
             total_points += 3
+        elif installed is None:
+            checks.append(ValidationCheck("pkg_installed", False, 0,
+                                          f"Could not verify {self.package_name} — {_INCONCLUSIVE}", max_points=3))
+            return ValidationResult(self.id, False, 0, self.points, checks)
         else:
             checks.append(ValidationCheck("pkg_installed", False, 0, f"{self.package_name} not installed", max_points=3))
             return ValidationResult(self.id, False, 0, self.points, checks)
@@ -409,55 +474,16 @@ class DowngradePackageTask(BaseTask):
         ]
         return self
 
-    @staticmethod
-    def _package_installed(pkg):
-        """True/False if rpm answers cleanly, None if the query itself could not
-        be trusted (timeout on a busy rpmdb lock, exec error).
-
-        rpm exits 1 *and* prints "is not installed" only when it actually ran and
-        the package is genuinely absent. Any other outcome (the default 5s cap
-        blown by a lock a just-finished `dnf downgrade` / subscription-manager
-        still holds, rc=-1 exec error, rc=127) means the CHECK failed, not that
-        the package is missing — never score that 0 with "not installed". Give
-        rpm room (30s) and retry once before returning inconclusive.
-        """
-        for _ in range(2):
-            r = execute_safe(['rpm', '-q', pkg], timeout=30)
-            if r.returncode == 0:
-                return True
-            if r.returncode == 1 and 'not installed' in (r.stdout + r.stderr).lower():
-                return False
-        return None
-
-    @staticmethod
-    def _downgrade_recorded(pkg):
-        """True/False if dnf history shows a downgrade/undo for THIS package,
-        None if the history query itself could not be run.
-
-        Scoped with `dnf history list <pkg>` (returns rc=0 even with no matches),
-        so "Downgrade"/"Undo" in the output can only come from a transaction that
-        touched this package — unlike grepping all of `dnf history`, which
-        false-passes on any unrelated historical downgrade.
-        """
-        for _ in range(2):
-            r = execute_safe(['dnf', 'history', 'list', pkg], timeout=30)
-            if r.returncode == 0:
-                text = r.stdout.lower()
-                return ('downgrade' in text) or ('undo' in text)
-        return None
-
     def validate(self):
         checks = []
         total_points = 0
 
-        # Check package is installed (transient-failure aware — see helper).
-        installed = self._package_installed(self.package_name)
+        # Check package is installed (transient-failure aware — see module helpers).
+        installed = _package_installed(self.package_name)
         if installed is None:
             checks.append(ValidationCheck(
                 "pkg_installed", False, 0,
-                f"Could not verify {self.package_name} — rpm query failed or timed "
-                f"out (rpmdb may be busy right after a dnf transaction). Wait a few "
-                f"seconds and grade again.", max_points=4))
+                f"Could not verify {self.package_name} — {_INCONCLUSIVE}", max_points=4))
             return ValidationResult(self.id, False, 0, self.points, checks)
         if not installed:
             checks.append(ValidationCheck("pkg_installed", False, 0, f"{self.package_name} not installed", max_points=4))
@@ -467,7 +493,7 @@ class DowngradePackageTask(BaseTask):
         total_points += 4
 
         # Check dnf history for a downgrade action scoped to this package.
-        downgraded = self._downgrade_recorded(self.package_name)
+        downgraded = _downgrade_recorded(self.package_name)
         if downgraded is None:
             checks.append(ValidationCheck(
                 "downgrade_done", False, 0,
