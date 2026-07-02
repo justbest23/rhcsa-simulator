@@ -1,0 +1,83 @@
+name: Claude issue worker
+
+# General-purpose "hand this issue to Claude" workflow. Unlike the narrow
+# checker-dispute reviewer, this one works a full feature/bug issue: it reads
+# the issue, implements the change across the repo, runs the tests, and opens a
+# PR that closes the issue.
+#
+# Two ways to trigger it:
+#   * Add the  claude  label to an issue, OR
+#   * Mention  @claude  in the issue body or in any issue comment.
+#
+# NOTE: label/mention-triggered workflows run from the DEFAULT branch, so this
+# file must be merged to the default branch before the trigger will fire.
+#
+# Auth: same repo secret as the dispute workflow — set ONE of:
+#   * CLAUDE_CODE_OAUTH_TOKEN  — from `claude setup-token` (uses your Claude
+#     subscription), OR
+#   * ANTHROPIC_API_KEY        — pay-as-you-go Anthropic API key.
+
+on:
+  issues:
+    types: [labeled, opened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  # Required to exchange CLAUDE_CODE_OAUTH_TOKEN via OIDC.
+  id-token: write
+
+jobs:
+  work:
+    # Fire on the "claude" label, or on an @claude mention in the issue body or
+    # a comment. Ignore comments on pull requests (issue_comment fires for both).
+    if: >-
+      (github.event_name == 'issues' && github.event.action == 'labeled' && github.event.label.name == 'claude') ||
+      (github.event_name == 'issues' && github.event.action == 'opened' && contains(github.event.issue.body, '@claude')) ||
+      (github.event_name == 'issue_comment' && !github.event.issue.pull_request && contains(github.event.comment.body, '@claude'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Work the issue with Claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: >-
+            --allowedTools "Bash,Read,Edit,Write,Grep,Glob"
+            --max-turns 80
+          prompt: |
+            You are working GitHub issue #${{ github.event.issue.number }} in
+            this repository — the RHCSA EX200 v10 exam simulator (Python,
+            standard library only, tests via `python3 -m pytest -q`).
+
+            Steps:
+            1. Read the issue and any discussion:
+                 gh issue view ${{ github.event.issue.number }} --comments
+            2. Understand what is being asked. If it is a bug, reproduce/locate
+               it; if it is a feature, find the right module (core/, tasks/,
+               validators/, utils/). Follow the conventions already in the file
+               you are editing.
+            3. Implement the smallest correct change that satisfies the issue.
+               Do not make unrelated changes.
+            4. Add or update tests under tests/ to cover the change, then run
+               `python3 -m pytest -q` and make sure the whole suite passes.
+            5. Create a branch  claude/issue-${{ github.event.issue.number }},
+               commit, and open a PR whose body starts with
+               "Closes #${{ github.event.issue.number }}" and explains what you
+               changed and why, using `gh pr create`.
+            6. Post a short comment on the issue linking the PR:
+                 gh issue comment ${{ github.event.issue.number }} --body "..."
+
+            If the issue is unclear, under-specified, or you are not confident a
+            change is correct, do NOT open a speculative PR — instead post a
+            comment asking the specific clarifying question(s) and stop.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
