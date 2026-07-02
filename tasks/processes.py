@@ -3,6 +3,7 @@ Process management tasks for RHCSA exam.
 """
 
 import random
+import re
 import logging
 from tasks.base import BaseTask
 from tasks.registry import TaskRegistry
@@ -347,6 +348,7 @@ class FindProcessByUserTask(BaseTask):
         self.username = None
         self.action = None
         self._created_user = False
+        self.output_file = None
 
     def generate(self, **params):
         """Generate find process by user task."""
@@ -358,15 +360,26 @@ class FindProcessByUserTask(BaseTask):
         actions = ['list', 'count', 'kill']
         self.action = params.get('action', random.choice(actions))
 
+        # list/count are read-only: without a required artifact there is
+        # nothing to validate, so both must be saved to a file the candidate
+        # names.
+        if self.action in ('list', 'count'):
+            self.output_file = params.get(
+                'output', f'/tmp/{self.username}-{self.action}-{random.randint(100, 999)}.txt'
+            )
+
         if self.action == 'list':
-            task_desc = f"List all processes owned by user '{self.username}'"
-            verify = "Use: ps -u {username}"
+            task_desc = (
+                f"List all processes owned by user '{self.username}'\n"
+                f"  - Save the output to: {self.output_file}"
+            )
         elif self.action == 'count':
-            task_desc = f"Count processes owned by user '{self.username}'"
-            verify = "Use: ps -u {username} --no-headers | wc -l"
+            task_desc = (
+                f"Count processes owned by user '{self.username}'\n"
+                f"  - Save the count to: {self.output_file}"
+            )
         else:  # kill
             task_desc = f"Terminate all processes owned by user '{self.username}'"
-            verify = "Use: pkill -u {username}"
 
         self.description = (
             f"Process management by user:\n"
@@ -375,13 +388,25 @@ class FindProcessByUserTask(BaseTask):
             f"  - Use appropriate ps/pkill commands"
         )
 
-        self.hints = [
-            f"List user processes: ps -u {self.username}",
-            f"Kill user processes: pkill -u {self.username}",
-            f"Or: killall -u {self.username}",
-            f"Find PIDs: pgrep -u {self.username}",
-            f"Verify: ps -u {self.username} (should show nothing if killed)"
-        ]
+        if self.action == 'list':
+            self.hints = [
+                f"List user processes: ps -u {self.username}",
+                f"Save to file: ps -u {self.username} > {self.output_file}",
+                f"Find PIDs: pgrep -u {self.username}",
+            ]
+        elif self.action == 'count':
+            self.hints = [
+                f"Count user processes: ps -u {self.username} --no-headers | wc -l",
+                f"Save to file: ps -u {self.username} --no-headers | wc -l > {self.output_file}",
+                f"Or: pgrep -u {self.username} | wc -l > {self.output_file}",
+            ]
+        else:  # kill
+            self.hints = [
+                f"Kill user processes: pkill -u {self.username}",
+                f"Or: killall -u {self.username}",
+                f"Find PIDs: pgrep -u {self.username}",
+                f"Verify: ps -u {self.username} (should show nothing if killed)"
+            ]
 
         return self
 
@@ -445,25 +470,103 @@ class FindProcessByUserTask(BaseTask):
                     max_points=12,
                     message=f"User '{self.username}' still has {len(pids)} process(es) running"
                 ))
-        else:
-            # For list/count, just verify the user exists and command works
-            result = execute_safe(['id', self.username])
-
-            if result.success:
+        elif self.action == 'list':
+            if validate_file_exists(self.output_file):
                 checks.append(ValidationCheck(
-                    name="user_exists",
+                    name="output_file_exists",
                     passed=True,
-                    points=12,
-                    message=f"User '{self.username}' exists (task verification)"
+                    points=5,
+                    message=f"Output file exists at {self.output_file}"
                 ))
-                total_points += 12
+                total_points += 5
+
+                try:
+                    with open(self.output_file, 'r') as f:
+                        content = f.read().strip()
+                    if content:
+                        checks.append(ValidationCheck(
+                            name="output_has_content",
+                            passed=True,
+                            points=7,
+                            message="Output file contains the process listing"
+                        ))
+                        total_points += 7
+                    else:
+                        checks.append(ValidationCheck(
+                            name="output_has_content",
+                            passed=False,
+                            points=0,
+                            max_points=7,
+                            message="Output file is empty"
+                        ))
+                except Exception as e:
+                    checks.append(ValidationCheck(
+                        name="output_has_content",
+                        passed=False,
+                        points=0,
+                        max_points=7,
+                        message=f"Could not read output file: {e}"
+                    ))
             else:
                 checks.append(ValidationCheck(
-                    name="user_exists",
+                    name="output_file_exists",
                     passed=False,
                     points=0,
                     max_points=12,
-                    message=f"User '{self.username}' not found"
+                    message=f"Output file not found: {self.output_file}"
+                ))
+        else:  # count
+            if validate_file_exists(self.output_file):
+                checks.append(ValidationCheck(
+                    name="output_file_exists",
+                    passed=True,
+                    points=5,
+                    message=f"Output file exists at {self.output_file}"
+                ))
+                total_points += 5
+
+                pgrep_result = execute_safe(['pgrep', '-u', self.username])
+                actual_count = (
+                    len(pgrep_result.stdout.strip().split('\n'))
+                    if pgrep_result.success and pgrep_result.stdout.strip() else 0
+                )
+
+                try:
+                    with open(self.output_file, 'r') as f:
+                        content = f.read().strip()
+                    match = re.search(r'\d+', content)
+                    if match and int(match.group()) == actual_count:
+                        checks.append(ValidationCheck(
+                            name="correct_count",
+                            passed=True,
+                            points=7,
+                            message=f"Correct count ({actual_count}) recorded"
+                        ))
+                        total_points += 7
+                    else:
+                        found = match.group() if match else "no number"
+                        checks.append(ValidationCheck(
+                            name="correct_count",
+                            passed=False,
+                            points=0,
+                            max_points=7,
+                            message=f"Expected count {actual_count}, found '{found}' in file"
+                        ))
+                except Exception as e:
+                    checks.append(ValidationCheck(
+                        name="correct_count",
+                        passed=False,
+                        points=0,
+                        max_points=7,
+                        message=f"Could not read output file: {e}"
+                    ))
+            else:
+                checks.append(ValidationCheck(
+                    name="output_file_exists",
+                    passed=False,
+                    points=0,
+                    max_points=12,
+                    message=f"Output file not found: {self.output_file}"
                 ))
 
         passed = total_points >= (self.points * 0.7)
