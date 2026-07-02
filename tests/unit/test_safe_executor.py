@@ -100,6 +100,12 @@ class TestSpecificCommandRules:
     def test_bash_execute_blocked(self, executor):
         assert executor.can_execute(["bash", "script.sh"]) is False
 
+    def test_sshd_test_config_allowed(self, executor):
+        assert executor.can_execute(["sshd", "-t"]) is True
+
+    def test_sshd_without_t_blocked(self, executor):
+        assert executor.can_execute(["sshd"]) is False
+
 
 class TestCommandExecution:
     """Test actual command execution with mocked subprocess."""
