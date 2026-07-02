@@ -60,6 +60,33 @@ FILE_ARTIFACTS = [
     '/home/loglink',
 ]
 
+# Candidate-created systemd units. Timer/service tasks ask the learner to build
+# a .timer + .service pair under /etc/systemd/system, so nothing tracks them for
+# teardown and they linger after an exam (the reported "scheduled-rotate"
+# leftovers). Fixed names plus the randomised families the generators emit.
+# Well-known system timers (fstrim, logrotate, dnf-makecache,
+# systemd-tmpfiles-clean) live under /usr/lib and never match these, so they are
+# never touched.
+_UNIT_DIR = '/etc/systemd/system'
+_UNIT_NAMES = ['backup-logs', 'cleanup-tmp', 'sync-data', 'health-check']
+_UNIT_PREFIXES = ['scheduled-', 'post-boot-', 'repeat-', 'converted-cron-']
+
+# Helper scripts those units reference (ExecStart=/usr/local/bin/*.sh). Removed
+# by EXACT match only — /usr/local/bin is not a simulator-owned scratch dir, so
+# we never glob it.
+LOCAL_SCRIPTS = [
+    '/usr/local/bin/backup-logs.sh', '/usr/local/bin/cleanup-tmp.sh',
+    '/usr/local/bin/sync-data.sh', '/usr/local/bin/health-check.sh',
+    '/usr/local/bin/generate-report.sh', '/usr/local/bin/rotate-logs.sh',
+    '/usr/local/bin/audit-check.sh', '/usr/local/bin/daily-digest.sh',
+    '/usr/local/bin/post-boot-init.sh', '/usr/local/bin/system-warmup.sh',
+    '/usr/local/bin/boot-check.sh', '/usr/local/bin/system-monitor.sh',
+    '/usr/local/bin/service-poll.sh', '/usr/local/bin/cache-sweep.sh',
+    '/usr/local/bin/health-ping.sh', '/usr/local/bin/migrated-task.sh',
+    '/usr/local/bin/maintenance.sh',
+]
+_LOCAL_SCRIPT_SET = set(LOCAL_SCRIPTS)
+
 # Hard safety floor: a target must live under one of these and not BE one of
 # them. Guards against a bad glob ever matching '/', '/etc', a top-level dir, etc.
 _ALLOWED_PREFIXES = ('/tmp/', '/mnt/', '/opt/', '/srv/', '/root/', '/home/', '/var/swap')
@@ -109,6 +136,25 @@ def _expand(pattern):
     return [pattern]
 
 
+def _find_units():
+    """Candidate-created unit files (.timer/.service) present under _UNIT_DIR."""
+    found, seen = [], set()
+    for ext in ('timer', 'service'):
+        patterns = [f'{_UNIT_DIR}/{name}.{ext}' for name in _UNIT_NAMES]
+        patterns += [f'{_UNIT_DIR}/{prefix}*.{ext}' for prefix in _UNIT_PREFIXES]
+        for pattern in patterns:
+            for path in _expand(pattern):
+                np = os.path.normpath(path)
+                # Confine to _UNIT_DIR itself (no nested drop-in dirs) and
+                # require the file to actually exist.
+                if np in seen or os.path.dirname(np) != _UNIT_DIR:
+                    continue
+                seen.add(np)
+                if _exists(np):
+                    found.append(np)
+    return sorted(found)
+
+
 def find_leftovers():
     """Existing artifact paths cleanup would act on (timeout-guarded)."""
     found = set()
@@ -116,6 +162,10 @@ def find_leftovers():
         for match in _expand(pattern):
             if _is_safe(match) and _exists(match):
                 found.add(os.path.normpath(match))
+    found.update(_find_units())
+    for path in LOCAL_SCRIPTS:
+        if _exists(path):
+            found.add(os.path.normpath(path))
     return sorted(found)
 
 
@@ -164,5 +214,41 @@ def clean(dry_run=False):
                 actions.append(f"would remove file {path}")
             elif _sh(['rm', '-rf', '--', path], 15) == 0:
                 actions.append(f"removed file {path}")
+
+    # 4. Candidate-created systemd units + their helper scripts.
+    actions.extend(clean_units(dry_run=dry_run))
+
+    return actions
+
+
+def clean_units(dry_run=False):
+    """Stop, disable and remove candidate-created systemd timers/services and
+    the helper scripts they reference, then daemon-reload. Returns action
+    strings. Every step is timeout-killable."""
+    actions = []
+    unit_files = _find_units()
+
+    if dry_run:
+        for path in unit_files:
+            actions.append(f"would remove unit {os.path.basename(path)}")
+    else:
+        for path in unit_files:
+            unit = os.path.basename(path)
+            # --now stops the running unit; disable clears enablement symlinks.
+            _sh(['systemctl', 'disable', '--now', unit], 15)
+            if _sh(['rm', '-f', '--', path], 10) == 0:
+                actions.append(f"removed unit {unit}")
+        if unit_files:
+            _sh(['systemctl', 'daemon-reload'], 20)
+            _sh(['systemctl', 'reset-failed'], 15)
+
+    # Helper scripts (exact-match guard — never glob /usr/local/bin).
+    for path in LOCAL_SCRIPTS:
+        if path not in _LOCAL_SCRIPT_SET or not _exists(path):
+            continue
+        if dry_run:
+            actions.append(f"would remove file {path}")
+        elif _sh(['rm', '-f', '--', path], 10) == 0:
+            actions.append(f"removed file {path}")
 
     return actions
