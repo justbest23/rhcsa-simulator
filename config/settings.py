@@ -133,6 +133,9 @@ SAFE_VALIDATION_COMMANDS = {
     # Service/systemd info
     'systemctl', 'journalctl',
 
+    # SSH config test (read-only, -t only — see _validate_specific_commands)
+    'sshd',
+
     # Process info
     'ps', 'top', 'pgrep', 'pidof',
 

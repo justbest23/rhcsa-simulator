@@ -367,6 +367,13 @@ class SafeCommandExecutor:
                     "bash is only allowed with -n (syntax check) option"
                 )
 
+        # Ensure sshd is only used to test config, never to start/reload the daemon
+        elif base_cmd == 'sshd':
+            if '-t' not in command:
+                raise SecurityError(
+                    "sshd is only allowed with -t (test configuration) option"
+                )
+
     def can_execute(self, command):
         """
         Check if a command can be executed without actually running it.
