@@ -409,24 +409,74 @@ class DowngradePackageTask(BaseTask):
         ]
         return self
 
+    @staticmethod
+    def _package_installed(pkg):
+        """True/False if rpm answers cleanly, None if the query itself could not
+        be trusted (timeout on a busy rpmdb lock, exec error).
+
+        rpm exits 1 *and* prints "is not installed" only when it actually ran and
+        the package is genuinely absent. Any other outcome (the default 5s cap
+        blown by a lock a just-finished `dnf downgrade` / subscription-manager
+        still holds, rc=-1 exec error, rc=127) means the CHECK failed, not that
+        the package is missing — never score that 0 with "not installed". Give
+        rpm room (30s) and retry once before returning inconclusive.
+        """
+        for _ in range(2):
+            r = execute_safe(['rpm', '-q', pkg], timeout=30)
+            if r.returncode == 0:
+                return True
+            if r.returncode == 1 and 'not installed' in (r.stdout + r.stderr).lower():
+                return False
+        return None
+
+    @staticmethod
+    def _downgrade_recorded(pkg):
+        """True/False if dnf history shows a downgrade/undo for THIS package,
+        None if the history query itself could not be run.
+
+        Scoped with `dnf history list <pkg>` (returns rc=0 even with no matches),
+        so "Downgrade"/"Undo" in the output can only come from a transaction that
+        touched this package — unlike grepping all of `dnf history`, which
+        false-passes on any unrelated historical downgrade.
+        """
+        for _ in range(2):
+            r = execute_safe(['dnf', 'history', 'list', pkg], timeout=30)
+            if r.returncode == 0:
+                text = r.stdout.lower()
+                return ('downgrade' in text) or ('undo' in text)
+        return None
+
     def validate(self):
         checks = []
         total_points = 0
 
-        # Check package is installed
-        result = execute_safe(['rpm', '-q', self.package_name])
-        if result.success:
-            checks.append(ValidationCheck("pkg_installed", True, 4, f"{self.package_name} is installed"))
-            total_points += 4
-
-            # Check dnf history for downgrade action
-            result2 = execute_safe(['dnf', 'history'])
-            if result2.success and ('downgrad' in result2.stdout.lower() or 'undo' in result2.stdout.lower()):
-                checks.append(ValidationCheck("downgrade_done", True, 8, "Downgrade action found in history"))
-                total_points += 8
-            else:
-                checks.append(ValidationCheck("downgrade_done", False, 0, "No downgrade action found in dnf history", max_points=8))
-        else:
+        # Check package is installed (transient-failure aware — see helper).
+        installed = self._package_installed(self.package_name)
+        if installed is None:
+            checks.append(ValidationCheck(
+                "pkg_installed", False, 0,
+                f"Could not verify {self.package_name} — rpm query failed or timed "
+                f"out (rpmdb may be busy right after a dnf transaction). Wait a few "
+                f"seconds and grade again.", max_points=4))
+            return ValidationResult(self.id, False, 0, self.points, checks)
+        if not installed:
             checks.append(ValidationCheck("pkg_installed", False, 0, f"{self.package_name} not installed", max_points=4))
+            return ValidationResult(self.id, False, 0, self.points, checks)
+
+        checks.append(ValidationCheck("pkg_installed", True, 4, f"{self.package_name} is installed"))
+        total_points += 4
+
+        # Check dnf history for a downgrade action scoped to this package.
+        downgraded = self._downgrade_recorded(self.package_name)
+        if downgraded is None:
+            checks.append(ValidationCheck(
+                "downgrade_done", False, 0,
+                f"Could not read dnf history for {self.package_name} (query failed "
+                f"or timed out). Wait a few seconds and grade again.", max_points=8))
+        elif downgraded:
+            checks.append(ValidationCheck("downgrade_done", True, 8, f"Downgrade/undo of {self.package_name} found in dnf history"))
+            total_points += 8
+        else:
+            checks.append(ValidationCheck("downgrade_done", False, 0, f"No downgrade of {self.package_name} found in dnf history", max_points=8))
 
         return ValidationResult(self.id, total_points >= 8, total_points, self.points, checks)
