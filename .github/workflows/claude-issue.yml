@@ -5,9 +5,11 @@ name: Claude issue worker
 # the issue, implements the change across the repo, runs the tests, and opens a
 # PR that closes the issue.
 #
-# Two ways to trigger it:
+# Two ways to trigger it — RESTRICTED TO THE REPO OWNER. Anyone may open
+# issues, but only the owner can hand one to Claude (the checker-dispute
+# workflow is separate and stays fully automatic):
 #   * Add the  claude  label to an issue, OR
-#   * Mention  @claude  in the issue body or in any issue comment.
+#   * Comment  @claude  on an issue.
 #
 # NOTE: label/mention-triggered workflows run from the DEFAULT branch, so this
 # file must be merged to the default branch before the trigger will fire.
@@ -19,7 +21,7 @@ name: Claude issue worker
 
 on:
   issues:
-    types: [labeled, opened]
+    types: [labeled]
   issue_comment:
     types: [created]
 
@@ -32,12 +34,15 @@ permissions:
 
 jobs:
   work:
-    # Fire on the "claude" label, or on an @claude mention in the issue body or
-    # a comment. Ignore comments on pull requests (issue_comment fires for both).
+    # Owner-only: strangers may open issues, but only justbest23 can trigger a
+    # Claude run (via the "claude" label or an @claude comment). Ignore comments
+    # on pull requests (issue_comment fires for both).
     if: >-
-      (github.event_name == 'issues' && github.event.action == 'labeled' && github.event.label.name == 'claude') ||
-      (github.event_name == 'issues' && github.event.action == 'opened' && contains(github.event.issue.body, '@claude')) ||
-      (github.event_name == 'issue_comment' && !github.event.issue.pull_request && contains(github.event.comment.body, '@claude'))
+      github.actor == 'justbest23' &&
+      (
+        (github.event_name == 'issues' && github.event.action == 'labeled' && github.event.label.name == 'claude') ||
+        (github.event_name == 'issue_comment' && !github.event.issue.pull_request && contains(github.event.comment.body, '@claude'))
+      )
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repository
