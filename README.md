@@ -41,48 +41,84 @@ and press Enter to validate → review per-check feedback and score.
 
 | | Minimum |
 |---|---|
-| **OS** | RHEL 10, Rocky Linux 9/10, or AlmaLinux 9/10 |
+| **OS** | RHEL 10, Rocky Linux 9/10, or AlmaLinux 9/10 (EX200 v10 targets RHEL 10) |
 | **Python** | 3.6+ (ships with the OS) |
-| **Privileges** | root (validation reads users, services, mounts, SELinux, …) |
+| **Privileges** | root (validation reads users, services, mounts, SELinux, etc.) |
 | **Dependencies** | none — Python standard library only |
-| **Disk** | a few hundred MB under `/var/lib/rhcsa-simulator` for loop images |
-| **Network** | not required (only for the optional DNF-history setup) |
+| **Disk** | a few hundred MB free under `/var/lib/rhcsa-simulator` for loop-device images |
+| **Network** | not required (optional, only for the DNF-history practice setup) |
 
-**Use a throwaway VM you can snapshot/revert** — tasks change real system state
-(users, partitions, services, firewall, SELinux). 2 vCPU, 2–4 GB RAM, 20 GB OS
-disk is plenty. A spare disk is optional (loop devices cover storage practice; a
-small spare like `/dev/sda` is auto-added if present). Keep SELinux
-**Enforcing**; snapshot before each session. Cloud VMs (AWS/Azure/GCP) work well.
+### Recommended VM configuration
 
-### Packages for task scenarios
+Practice on a **throwaway VM you can snapshot/revert**, never a machine you care
+about — tasks change real system state (users, partitions, services, firewall,
+SELinux).
 
-A **minimal install doesn't ship `httpd`, `vsftpd`, `samba`, `tuned`** and a few
-others that Domain 6/7 tasks use to build a realistic scenario. If a package is
-missing, the task's fault-injection silently no-ops and the scenario looks empty
-when you go to work on it. Every launch runs a read-only `rpm -q` preflight and
-warns about what's missing — **nothing is installed automatically**.
+- **vCPUs:** 2
+- **RAM:** 2–4 GB
+- **Primary disk:** 20 GB (OS)
+- **A spare disk for storage practice:** optional. The simulator auto-creates
+  500 MB loop devices, so you don't *need* one. If you add a small spare disk
+  (e.g. a 1–2 GB `/dev/sda`), it is detected and added to the practice device
+  pool automatically — handy for realistic `fdisk`/`parted` partitioning.
+- **Install type:** minimal install is fine to launch the simulator, but see
+  [Package & service requirements for task scenarios](#package--service-requirements-for-task-scenarios)
+  below — several troubleshooting tasks expect packages a minimal install
+  doesn't ship with.
+- **Snapshot first:** take a VM snapshot before a session so you can revert.
+- **SELinux:** leave it **Enforcing** for realistic SELinux tasks.
+- **Networking:** any NAT/bridged setup; only needed if you want the optional
+  DNF transaction-history practice data.
+
+> Cloud VMs (AWS/Azure/GCP) work well — loop devices mean you don't have to
+> attach extra block storage to practice LVM/partitioning.
+
+### Package & service requirements for task scenarios
+
+The simulator itself needs nothing beyond the Python standard library. But a
+**minimal RHEL/Rocky/Alma install doesn't ship `httpd`, `vsftpd`, or several
+other services** that specific tasks (mostly Domain 7 Troubleshooting and
+Domain 6 Services) use to build a realistic scenario. If a package is
+missing, the task's fault-injection step still reports "active" — its own
+`systemctl`/`chcon`/etc. calls just no-op — so the scenario looks like
+nothing happened when you go to work on it in a second terminal.
+
+Every launch of `rhcsa-simulator` (any mode) runs a **read-only preflight
+check** (`rpm -q`) and prints a warning listing anything missing, along with
+a ready-to-run `dnf install` command. Nothing is installed automatically.
 
 | Package | Used by |
 |---|---|
-| `httpd` | Apache SELinux context/boolean, firewall, service troubleshooting |
+| `httpd` | Apache SELinux context/boolean, firewall, and service troubleshooting tasks |
 | `vsftpd` | FTP service tasks |
 | `nfs-utils` | NFS server/client and network storage tasks |
 | `samba` | Samba/SMB file sharing tasks |
 | `chrony` | time synchronization tasks |
-| `firewalld` | firewall management/troubleshooting tasks |
-| `bind-utils` | DNS lookup tooling for networking tasks |
+| `firewalld` | firewall management and troubleshooting tasks |
+| `bind-utils` | DNS lookup tooling used by networking tasks |
 | `tuned` | tuning profile (`tuned-adm`) tasks |
+
+Install everything up front so no task scenario silently fails to set up:
 
 ```bash
 dnf install -y httpd vsftpd nfs-utils samba chrony firewalld bind-utils tuned
 ```
 
-**Baseline services** tasks start/stop/enable (install the package, then leave
-the service as a fresh install sets it): `httpd`, `vsftpd`, `nfs-server`, `smb`,
-`chronyd`, `firewalld`, `sshd`, `crond`, `rsyslog`.
+**Baseline services** the simulator expects to be able to start/stop/enable —
+install the corresponding package above first, then leave the service in
+whatever state a fresh install puts it in (tasks manage state themselves):
+`httpd`, `vsftpd`, `nfs-server`, `smb`, `chronyd`, `firewalld`, `sshd`,
+`crond`, `rsyslog`.
 
-On **RHEL 10**, `firewalld` and `chrony` are enabled by default; the rest above
-are not — install them before a session that may draw a Domain 6/7 or NFS task.
+**RHEL 10.x notes:**
+- A minimal RHEL 10 install does not include `httpd`, `vsftpd`, `samba`, or
+  `tuned` — install them with the command above before an exam/practice
+  session that may draw a Domain 6/7 task.
+- `firewalld` and `chrony` are installed and enabled by default on RHEL 10, so
+  those two are usually already satisfied.
+- `nfs-utils` is not installed by default; NFS tasks that provision a
+  *remote* server (see the in-app NFS server setup) install it on the
+  remote box automatically, but local NFS client tasks still need it here.
 
 ---
 
