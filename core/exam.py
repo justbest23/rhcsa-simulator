@@ -100,6 +100,10 @@ class ExamSession:
         # can't pass on pre-existing/default state.
         self._setup_task_environments()
 
+        # Sanity-check that setup actually put the box into each task's scenario
+        # (no task should already be passing before the candidate starts).
+        self._sanity_check_tasks()
+
         # Refresh the remote NFS server's exports so this exam starts clean.
         self._reprovision_nfs()
 
@@ -176,6 +180,21 @@ class ExamSession:
                 # is still valid, so stay quiet to avoid alarming the candidate.
             except Exception as e:
                 print(fmt.warning(f"  ✗ {task.id}: setup error ({e})"))
+
+    def _sanity_check_tasks(self):
+        """After setup, verify no task is already passing before the candidate
+        starts. A pass at t=0 means its fault/precondition no-op'd (or it passes
+        on default state) — a free pass. Print only a non-spoiling count here (so
+        we don't reveal WHICH tasks need no work); full details go to the log."""
+        try:
+            from core import task_sanity
+            warnings = task_sanity.check_tasks(self.tasks, verbose_console=False)
+        except Exception:
+            return
+        if warnings:
+            print(fmt.warning(
+                f"  ⚠ {len(warnings)} task(s) may not have initialized correctly "
+                f"(see the log). They'll still be scored normally."))
 
     def _clean_lab_leftovers(self):
         """Remove leftover task artifacts (files/dirs/mounts the tasks ask the

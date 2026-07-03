@@ -73,6 +73,19 @@ def setup_task(task, verbose=True):
             if verbose:
                 print(fmt.warning(f"  Setup error: {e}"))
 
+    # Sanity check: with setup done and nothing done by the candidate yet, the
+    # task must NOT already be passing. If it is, the fault/precondition no-op'd
+    # (or it passes on default state) and the candidate would get a free pass.
+    try:
+        from core import task_sanity
+        warning = task_sanity.check_task(task)
+        if warning:
+            logger.warning("SANITY: %s", warning)
+            if verbose:
+                print(fmt.warning(f"  ⚠ {warning}"))
+    except Exception as e:
+        logger.debug("sanity check skipped for %s: %s", getattr(task, 'id', '?'), e)
+
     return state
 
 
