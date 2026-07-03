@@ -140,6 +140,28 @@ def confirm_action(prompt, default=False):
         print("Please answer 'y' or 'n'")
 
 
+def select_task_count(default=5, minimum=4, maximum=20):
+    """Ask how many tasks this session should include (clamped to a sane
+    range). Shared by quick practice, practice, and adaptive modes."""
+    prompt = f"How many tasks this session? ({minimum}-{maximum}) [{default}]: "
+    while True:
+        raw = input(prompt).strip()
+        if not raw:
+            return default
+        try:
+            n = int(raw)
+        except ValueError:
+            print("Please enter a whole number.")
+            continue
+        if n < minimum:
+            print(f"Minimum is {minimum}.")
+            continue
+        if n > maximum:
+            print(f"Maximum is {maximum}.")
+            continue
+        return n
+
+
 def get_terminal_width():
     """
     Get the current terminal width.

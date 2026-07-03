@@ -27,7 +27,7 @@ class MenuSystem:
 
             # Quick Start section
             print(fmt.bold("QUICK START"))
-            fmt.print_menu_option('Q', "Quick Practice", "5 random tasks")
+            fmt.print_menu_option('Q', "Quick Practice", "Short session, 4-20 random tasks")
             fmt.print_menu_option('E', "Mock Exam", f"20–25 tasks, {settings.DEFAULT_EXAM_DURATION} min, reboot sim")
             print()
 
@@ -168,7 +168,7 @@ class MenuSystem:
 {settings.APP_NAME} v{settings.VERSION} - Quick Guide
 
 QUICK START
-  Q - Quick Practice: 5 random tasks with validation.
+  Q - Quick Practice: a short session (4-20 random tasks) with validation.
       Perfect for daily practice sessions.
 
   E - Mock Exam: {settings.DEFAULT_EXAM_TASKS}-task exam with {settings.DEFAULT_EXAM_DURATION}-min timer.
@@ -220,11 +220,9 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
         print("  1. Setup Practice Disks (loop devices for LVM)")
         print("  2. View Task Statistics")
         print("  3. Network Backup/Restore")
-        print("  4. System Reset (remove practice artifacts)")
+        print("  4. Reset Machine (undo ALL practice changes, back to a clean box)")
         print("  5. Populate Practice Environment (DNF history)")
         print(f"  6. Configure remote NFS server for NFS tasks ({nfs_status})")
-        print("  7. Clean lab leftover files (remove task artifacts)")
-        print("  8. Full System Reset (strip box back to a basic RHEL install)")
         print("  0. Return to Menu")
         print()
 
@@ -237,62 +235,30 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
         elif choice == '3':
             self.network_management()
         elif choice == '4':
-            self.system_reset()
+            self.reset_machine()
         elif choice == '5':
             self.populate_practice_environment()
         elif choice == '6':
             self.configure_nfs_server()
-        elif choice == '7':
-            self.clean_lab_leftovers()
-        elif choice == '8':
-            self.full_system_reset()
 
-    def clean_lab_leftovers(self):
-        """Preview and remove leftover task artifacts (files/dirs/mounts the
-        tasks ask the candidate to create)."""
-        from core import lab_cleanup
-        from utils.helpers import confirm_action
+    def reset_machine(self):
+        """THE single reset. Restores any active faults/preconditions, removes
+        every practice artifact (lab files, disks, swap, repos, flatpaks,
+        scheduled jobs, autofs, tuned, NFS exports, practice users) and returns
+        the box to a clean basic-RHEL state. Preserves the simulator,
+        GitHub/SSH connectivity, networking, SELinux and the OS.
 
-        fmt.clear_screen()
-        fmt.print_header("CLEAN LAB LEFTOVER FILES")
-
-        planned = lab_cleanup.clean(dry_run=True)
-        if not planned:
-            print(fmt.success("Nothing to clean — no known task artifacts present."))
-            input("\nPress Enter to return...")
-            return
-
-        print("These task-created artifacts would be removed "
-              "(/etc and your dotfiles are never touched):")
-        print()
-        for line in planned:
-            print(f"  {line}")
-        print()
-        if not confirm_action(f"Remove these {len(planned)} item(s)?", default=False):
-            print(fmt.dim("Cancelled — nothing removed."))
-            input("\nPress Enter to return...")
-            return
-
-        done = lab_cleanup.clean(dry_run=False)
-        print()
-        print(fmt.success(f"Removed {len(done)} item(s)."))
-        for line in done:
-            if line.startswith('FAILED'):
-                print(fmt.warning(f"  {line}"))
-        input("\nPress Enter to return...")
-
-    def full_system_reset(self):
-        """Strip the box back to a basic RHEL install: remove third-party repos,
-        Flatpak apps/remotes, lab files, practice users, scheduled jobs, autofs
-        maps, tuned changes, practice disks/swap and NFS exports. Preserves the
-        simulator, GitHub/SSH connectivity, networking, SELinux and the OS."""
+        Replaces the old System Reset / Clean lab leftovers / Full System Reset
+        trio — one button, one behavior."""
         from core import full_reset
         from utils.helpers import confirm_action
 
         fmt.clear_screen()
-        fmt.print_header("FULL SYSTEM RESET")
+        fmt.print_header("RESET MACHINE")
 
-        print(fmt.warning("This returns the machine to a BASIC RHEL install. It removes:"))
+        print(fmt.warning("This undoes ALL practice changes and returns the machine to a"))
+        print(fmt.warning("clean basic-RHEL state. It removes:"))
+        print("  - injected faults & task starting-states (restored to original)")
         print("  - all third-party DNF repos (RHEL system repos are kept)")
         print("  - all Flatpak apps and remotes")
         print("  - leftover lab files, practice users/groups, practice disks & swap")
@@ -330,7 +296,7 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
             return
 
         print()
-        print(fmt.bold("Running full system reset..."))
+        print(fmt.bold("Resetting machine..."))
 
         def progress(msg):
             print(msg)
@@ -339,8 +305,8 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
 
         print()
         print("=" * 50)
-        print(fmt.success("Full system reset complete."))
-        print(fmt.info("The box is back to a basic RHEL state; simulator and GitHub"))
+        print(fmt.success("Reset complete."))
+        print(fmt.info("The box is back to a clean state; simulator and GitHub"))
         print(fmt.info("connectivity were left intact."))
         print()
         input("Press Enter to return...")
@@ -1411,486 +1377,3 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
         print()
         input("Press Enter to return...")
 
-    def system_reset(self):
-        """Reset system to barebones practice-ready state without touching SSH or network."""
-        import subprocess
-        import os
-        import re
-        from utils.helpers import (
-            cleanup_practice_devices, get_loop_devices, confirm_action
-        )
-
-        fmt.clear_screen()
-        fmt.print_header("SYSTEM RESET")
-
-        print(fmt.warning("This removes practice artifacts: LVM, swap files, practice repos,"))
-        print(fmt.warning("cron/at jobs, tuned profile, and scripts in /usr/local/bin/."))
-        print(fmt.info("SSH, network, firewall, SELinux, and users will NOT be touched."))
-        print()
-
-        if not confirm_action("Continue with system reset?", default=False):
-            print(fmt.dim("Reset cancelled."))
-            print()
-            input("Press Enter to return...")
-            return
-
-        # ── Step 1: Loop devices / LVM ───────────────────────────────────────
-        print()
-        print(fmt.bold("Step 1: Practice Disks (loop devices / LVM)"))
-        loop_devices = get_loop_devices()
-        if loop_devices:
-            # Unmount any loop partitions (e.g. loop1p1 mounted at /mnt/...)
-            # Use -rno (raw) to avoid tree-drawing characters that break split()
-            lsblk = subprocess.run(
-                ['lsblk', '-rno', 'NAME,MOUNTPOINT'],
-                capture_output=True, text=True
-            )
-            for line in lsblk.stdout.splitlines():
-                parts = line.split()
-                if len(parts) == 2:
-                    name, mnt = parts
-                    if 'loop' in name and 'p' in name and mnt.startswith('/'):
-                        subprocess.run(['umount', '-f', f'/dev/{name}'], capture_output=True)
-            print(f"  Found: {', '.join(loop_devices)}")
-            if confirm_action("  Remove all LVM structures and practice disks?", default=True):
-                if cleanup_practice_devices():
-                    print(fmt.success("  Practice disks cleaned up"))
-                else:
-                    print(fmt.error("  Cleanup had errors — check manually"))
-        else:
-            print(fmt.dim("  No loop practice disks found"))
-
-        # ── Step 1b: Real practice disks (wipe partitions) ───────────────────
-        from utils.helpers import list_all_block_devices, wipe_disk
-        real_practice = [
-            d for d in list_all_block_devices()
-            if not d['is_system'] and d['has_partitions'] and not d['mounted']
-        ]
-        if real_practice:
-            print()
-            print(fmt.bold("Step 1b: Real Disk Partitions"))
-            for d in real_practice:
-                swap_note = " (has swap)" if d.get('has_swap') else ""
-                print(f"  {d['device']}  {d['size']}{swap_note} — has partitions")
-            print(fmt.warning("  Wiping will destroy ALL partitions and data on these disks."))
-            if confirm_action("  Wipe all partitions and LVM from these disks?", default=True):
-                for d in real_practice:
-                    print(f"  Wiping {d['device']}...")
-                    ok, msgs = wipe_disk(d['device'])
-                    for msg in msgs:
-                        print(f"    {msg}")
-
-        # ── Step 2: Active swap (files + loop-device partitions) ─────────────
-        print()
-        print(fmt.bold("Step 2: Practice Swap"))
-        swap_entries = []   # (device, type)
-        try:
-            with open('/proc/swaps', 'r') as f:
-                for line in f.readlines()[1:]:   # skip header
-                    parts = line.split()
-                    if len(parts) < 2:
-                        continue
-                    device, stype = parts[0], parts[1]
-                    # Skip the real system swap (nvme/rhel-swap)
-                    is_system = '/dev/nvme' in device or 'rhel' in device or 'dm-' in device
-                    if is_system:
-                        continue
-                    if stype == 'file':
-                        swap_entries.append((device, 'file'))
-                    elif stype == 'partition':
-                        swap_entries.append((device, 'partition'))
-        except Exception:
-            pass
-
-        if swap_entries:
-            for device, stype in swap_entries:
-                label = 'swap file' if stype == 'file' else 'swap partition'
-                print(f"  Active {label}: {device}")
-            if confirm_action("  Deactivate and remove these swap entries?", default=True):
-                for device, stype in swap_entries:
-                    subprocess.run(['swapoff', device], capture_output=True)
-                    if stype == 'file' and os.path.exists(device):
-                        try:
-                            os.remove(device)
-                            print(fmt.success(f"  Removed {device}"))
-                        except OSError as e:
-                            print(fmt.error(f"  Could not remove {device}: {e}"))
-                    else:
-                        print(fmt.success(f"  Deactivated {device}"))
-        else:
-            print(fmt.dim("  No practice swap found"))
-
-        # ── Step 3: /etc/fstab cleanup ───────────────────────────────────────
-        print()
-        print(fmt.bold("Step 3: /etc/fstab Cleanup"))
-        # Build device-specific patterns from the practice device config so we
-        # never accidentally nuke fstab entries for legitimate non-practice disks.
-        from utils.helpers import get_practice_device_config
-        _practice_cfg = get_practice_device_config()
-        _practice_devs = []
-        if _practice_cfg and _practice_cfg.get('mode') == 'real':
-            _practice_devs = _practice_cfg.get('devices', [])
-
-        _fstab_patterns = [
-            re.compile(r'/var/lib/rhcsa-simulator/loops/'),
-            re.compile(r'/dev/loop\d+'),
-            re.compile(r'\s/tmp/swap\S*'),
-            re.compile(r'\s/root/swapfile'),
-            re.compile(r'\s/swapfile\b'),
-            re.compile(r'\s/var/swap\b'),
-            re.compile(r'\s/opt/swap\S*'),
-            re.compile(r'RHCSA-FAULT'),   # injected by fault tasks
-        ] + [re.compile(re.escape(dev)) for dev in _practice_devs]
-
-        # Also flag any UUID entries that resolve to non-system block devices
-        def _is_practice_uuid(token):
-            if not token.startswith('UUID='):
-                return False
-            uuid = token[5:]
-            r = subprocess.run(['blkid', '-U', uuid], capture_output=True, text=True)
-            if r.returncode != 0:
-                return False  # unresolvable UUID — leave it alone
-            dev = r.stdout.strip()
-            # If it resolves to nvme or known LVM, it's system
-            return not any(x in dev for x in ['nvme', 'rhel', 'dm-'])
-
-        try:
-            with open('/etc/fstab', 'r') as f:
-                fstab_lines = f.readlines()
-
-            practice_lines, clean_lines = [], []
-            for line in fstab_lines:
-                stripped = line.strip()
-                if not stripped or stripped.startswith('#'):
-                    clean_lines.append(line)
-                    continue
-                fields = stripped.split()
-                is_practice = any(p.search(line) for p in _fstab_patterns)
-                # Also catch UUID-based practice swap/mount entries
-                if not is_practice and fields:
-                    is_practice = _is_practice_uuid(fields[0])
-                if is_practice:
-                    practice_lines.append(line.rstrip())
-                else:
-                    clean_lines.append(line)
-
-            if practice_lines:
-                print("  Practice entries to remove:")
-                for pl in practice_lines:
-                    print(f"    {pl}")
-                if confirm_action("  Remove these entries from /etc/fstab?", default=True):
-                    with open('/etc/fstab', 'w') as f:
-                        f.writelines(clean_lines)
-                    print(fmt.success("  /etc/fstab cleaned"))
-            else:
-                print(fmt.dim("  No practice entries in /etc/fstab"))
-        except Exception as e:
-            print(fmt.error(f"  Error reading /etc/fstab: {e}"))
-
-        # ── Step 4: Non-default repos ────────────────────────────────────────
-        print()
-        print(fmt.bold("Step 4: Non-Default Repos (/etc/yum.repos.d/)"))
-        # Keep only files managed by subscription-manager or clearly RHEL system repos
-        _keep_repo_patterns = [
-            'redhat.repo',          # subscription-manager managed
-        ]
-        def _is_system_repo(fname):
-            if fname in _keep_repo_patterns:
-                return True
-            # rhel-* repos managed by sub-manager
-            if fname.startswith('rhel-') or fname.startswith('redhat-'):
-                return True
-            return False
-
-        repo_dir = '/etc/yum.repos.d'
-        repo_files_to_remove = []
-        try:
-            for fname in sorted(os.listdir(repo_dir)):
-                if fname.endswith('.repo') and not _is_system_repo(fname):
-                    repo_files_to_remove.append(os.path.join(repo_dir, fname))
-        except Exception:
-            pass
-
-        if repo_files_to_remove:
-            print("  Non-default repo files found:")
-            for rf in repo_files_to_remove:
-                print(f"    {rf}")
-            if confirm_action("  Remove these repo files?", default=True):
-                for rf in repo_files_to_remove:
-                    try:
-                        os.remove(rf)
-                    except OSError as e:
-                        print(fmt.error(f"  Could not remove {rf}: {e}"))
-                print(fmt.success("  Non-default repos removed"))
-        else:
-            print(fmt.dim("  No non-default repos found"))
-
-        # ── Step 5: Root crontab ─────────────────────────────────────────────
-        print()
-        print(fmt.bold("Step 5: Root Crontab"))
-        try:
-            result = subprocess.run(
-                ['crontab', '-l', '-u', 'root'],
-                capture_output=True, text=True
-            )
-            crontab_content = result.stdout.strip()
-            if result.returncode == 0 and crontab_content:
-                print("  Current root crontab:")
-                for line in crontab_content.splitlines():
-                    print(f"    {line}")
-                if confirm_action("  Clear root crontab?", default=True):
-                    subprocess.run(['crontab', '-r', '-u', 'root'], capture_output=True)
-                    print(fmt.success("  Root crontab cleared"))
-            else:
-                print(fmt.dim("  Root crontab is empty"))
-        except Exception as e:
-            print(fmt.error(f"  Error accessing crontab: {e}"))
-
-        # ── Step 6: At jobs ──────────────────────────────────────────────────
-        print()
-        print(fmt.bold("Step 6: Scheduled 'at' Jobs"))
-        try:
-            result = subprocess.run(['atq'], capture_output=True, text=True)
-            if result.stdout.strip():
-                print("  Pending at jobs:")
-                for line in result.stdout.strip().splitlines():
-                    print(f"    {line}")
-                if confirm_action("  Remove all pending at jobs?", default=True):
-                    job_ids = [
-                        line.split()[0]
-                        for line in result.stdout.strip().splitlines()
-                        if line.strip()
-                    ]
-                    for jid in job_ids:
-                        subprocess.run(['atrm', jid], capture_output=True)
-                    print(fmt.success("  At jobs removed"))
-            else:
-                print(fmt.dim("  No pending at jobs"))
-        except FileNotFoundError:
-            print(fmt.dim("  'at' not installed — skipping"))
-        except Exception as e:
-            print(fmt.error(f"  Error: {e}"))
-
-        # ── Step 7: Tuned profile ────────────────────────────────────────────
-        print()
-        print(fmt.bold("Step 7: Tuned Profile"))
-        try:
-            active_result = subprocess.run(
-                ['tuned-adm', 'active'], capture_output=True, text=True
-            )
-            current = active_result.stdout.strip() if active_result.returncode == 0 else "unknown"
-            print(f"  Current: {current}")
-
-            rec_result = subprocess.run(
-                ['tuned-adm', 'recommend'], capture_output=True, text=True
-            )
-            recommended = rec_result.stdout.strip() if rec_result.returncode == 0 else 'balanced'
-            print(f"  Recommended for this system: {recommended}")
-
-            if confirm_action(f"  Reset tuned to '{recommended}'?", default=True):
-                subprocess.run(['tuned-adm', 'profile', recommended], capture_output=True)
-                print(fmt.success(f"  Tuned profile set to '{recommended}'"))
-        except FileNotFoundError:
-            print(fmt.dim("  tuned-adm not installed — skipping"))
-        except Exception as e:
-            print(fmt.error(f"  Error: {e}"))
-
-        # ── Step 8: Practice scripts in /usr/local/bin ───────────────────────
-        print()
-        print(fmt.bold("Step 8: Practice Scripts (/usr/local/bin/*.sh)"))
-        try:
-            scripts = [
-                os.path.join('/usr/local/bin', f)
-                for f in os.listdir('/usr/local/bin')
-                if f.endswith('.sh') and os.path.isfile(os.path.join('/usr/local/bin', f))
-            ]
-            if scripts:
-                print("  Shell scripts found:")
-                for s in scripts:
-                    print(f"    {s}")
-                if confirm_action("  Remove these scripts?", default=True):
-                    for s in scripts:
-                        try:
-                            os.remove(s)
-                        except OSError as e:
-                            print(fmt.error(f"  Could not remove {s}: {e}"))
-                    print(fmt.success("  Scripts removed"))
-            else:
-                print(fmt.dim("  No .sh scripts in /usr/local/bin"))
-        except Exception as e:
-            print(fmt.error(f"  Error: {e}"))
-
-        # ── Step 9: Autofs cleanup ───────────────────────────────────────────
-        print()
-        print(fmt.bold("Step 9: Autofs Cleanup"))
-        autofs_dirty = False
-
-        # Stop autofs first so active mounts are cleanly torn down before
-        # we modify or remove any map files — otherwise removal fails (EBUSY)
-        autofs_active = subprocess.run(
-            ['systemctl', 'is-active', '--quiet', 'autofs'],
-            capture_output=True
-        ).returncode == 0
-        if autofs_active:
-            print("  Stopping autofs service to unmount active maps...")
-            subprocess.run(['systemctl', 'stop', 'autofs'], capture_output=True)
-
-        # auto.master — remove any uncommented non-system lines
-        auto_master = '/etc/auto.master'
-        _auto_master_defaults = {'+dir:/etc/auto.master.d', '+auto.master'}
-        try:
-            with open(auto_master) as f:
-                master_lines = f.readlines()
-            practice_master, clean_master = [], []
-            for line in master_lines:
-                s = line.strip()
-                if not s or s.startswith('#') or s in _auto_master_defaults:
-                    clean_master.append(line)
-                else:
-                    practice_master.append(line.rstrip())
-            if practice_master:
-                autofs_dirty = True
-                print("  Non-default entries in /etc/auto.master:")
-                for pl in practice_master:
-                    print(f"    {pl}")
-                if confirm_action("  Remove these entries?", default=True):
-                    with open(auto_master, 'w') as f:
-                        f.writelines(clean_master)
-                    print(fmt.success("  /etc/auto.master cleaned"))
-        except FileNotFoundError:
-            pass
-        except Exception as e:
-            print(fmt.error(f"  Could not read {auto_master}: {e}"))
-
-        # /etc/auto.master.d/ — remove any .autofs drop-in files
-        master_d = '/etc/auto.master.d'
-        try:
-            drop_ins = [
-                os.path.join(master_d, f)
-                for f in os.listdir(master_d)
-                if f.endswith('.autofs')
-            ]
-            if drop_ins:
-                autofs_dirty = True
-                print("  Drop-in autofs files found:")
-                for di in drop_ins:
-                    print(f"    {di}")
-                if confirm_action("  Remove these files?", default=True):
-                    for di in drop_ins:
-                        try:
-                            os.remove(di)
-                        except OSError as e:
-                            print(fmt.error(f"  Could not remove {di}: {e}"))
-                    print(fmt.success("  Drop-in files removed"))
-        except FileNotFoundError:
-            pass
-
-        # /etc/auto.* map files (other than auto.master and auto.misc)
-        try:
-            extra_maps = [
-                f'/etc/{f}'
-                for f in os.listdir('/etc')
-                if f.startswith('auto.')
-                and f not in ('auto.master', 'auto.misc', 'auto.master.d')
-                and os.path.isfile(f'/etc/{f}')
-            ]
-            if extra_maps:
-                autofs_dirty = True
-                print("  Extra autofs map files found:")
-                for em in extra_maps:
-                    print(f"    {em}")
-                if confirm_action("  Remove these map files?", default=True):
-                    for em in extra_maps:
-                        try:
-                            os.remove(em)
-                        except OSError as e:
-                            print(fmt.error(f"  Could not remove {em}: {e}"))
-                    print(fmt.success("  Extra map files removed"))
-        except Exception as e:
-            print(fmt.error(f"  Error scanning /etc/auto.*: {e}"))
-
-        if not autofs_dirty:
-            print(fmt.dim("  Autofs config is clean"))
-
-        # ── Step 10: Practice users and groups ───────────────────────────────
-        print()
-        print(fmt.bold("Step 10: Practice Users & Groups"))
-
-        # Regex patterns derived from every username/groupname generator in tasks/.
-        # Only matches: known prefix + exactly 2 digit suffix (the randint range),
-        # or a fixed practice name. Does NOT match plain words without digits.
-        import re as _re
-        # Name-based pattern: prefix + 1-2 digit suffix (randint range is 10-99 or 1-99)
-        _USER_PAT_NUMBERED = _re.compile(
-            r'^('
-            r'alice|bob|carol|dave|eve|frank|grace|hank|'
-            r'anna|ben|clara|dan|ella|finn|gina|hugo|iris|jake|'
-            r'staffuser|ageuser|operator|locktest|removeuser|shelluser|troubleuser|'
-            r'(?:nginx|redis|tomcat|grafana|prometheus|elasticsearch|kafka|rabbitmq|consul|vault)svc|'
-            r'appsvc|mailsvc|websvc|dbsvc|ftpsvc|logsvc|'
-            r'loginuser|sudouser|'
-            r'user'
-            r')\d{1,2}$'
-        )
-        # Fixed names with no numeric suffix
-        _USER_PAT_FIXED = _re.compile(r'^sudopractice$')
-
-        def _is_practice_user(name):
-            return bool(_USER_PAT_NUMBERED.match(name) or _USER_PAT_FIXED.match(name))
-        _GROUP_PAT = _re.compile(
-            r'^(devteam|qagroup|opsgroup|infrateam|secteam|datateam|cloudops)\d{2}$'
-        )
-
-        practice_users, practice_groups = [], []
-        try:
-            import pwd, grp as _grp
-            for pw in pwd.getpwall():
-                if pw.pw_uid >= 1000 and _is_practice_user(pw.pw_name):
-                    practice_users.append(pw.pw_name)
-            for gr in _grp.getgrall():
-                if gr.gr_gid >= 1000 and _GROUP_PAT.match(gr.gr_name):
-                    practice_groups.append(gr.gr_name)
-        except Exception as e:
-            print(fmt.error(f"  Error scanning users/groups: {e}"))
-
-        if practice_users:
-            print("  Practice users found:")
-            for u in practice_users:
-                print(f"    {u}")
-            if confirm_action("  Delete these users (and their home dirs)?", default=True):
-                for u in practice_users:
-                    subprocess.run(['userdel', '-r', u], capture_output=True)
-                print(fmt.success(f"  Removed {len(practice_users)} practice user(s)"))
-        else:
-            print(fmt.dim("  No practice users found"))
-
-        if practice_groups:
-            print("  Practice groups found:")
-            for g in practice_groups:
-                print(f"    {g}")
-            if confirm_action("  Delete these groups?", default=True):
-                for g in practice_groups:
-                    subprocess.run(['groupdel', g], capture_output=True)
-                print(fmt.success(f"  Removed {len(practice_groups)} practice group(s)"))
-
-        # ── Step 11: Restore any active troubleshooting fault ────────────────
-        try:
-            from tasks.troubleshooting import restore_any_active_fault
-            had_fault, msg = restore_any_active_fault()
-            if had_fault:
-                print()
-                print(fmt.bold("Step 11: Active Fault Restore"))
-                print(fmt.success(f"  Restored: {msg}"))
-        except Exception as e:
-            print()
-            print(fmt.error(f"Step 10: Fault restore failed — {e}"))
-            print(fmt.warning("  Check /var/lib/rhcsa-simulator/active_fault.json manually"))
-
-        # ── Done ─────────────────────────────────────────────────────────────
-        print()
-        print("=" * 50)
-        print(fmt.success("System reset complete!"))
-        print(fmt.info("SSH and network were not modified."))
-        print(fmt.info("Firewall, SELinux, and users were not modified."))
-        print()
-        input("Press Enter to return...")

@@ -47,7 +47,6 @@ class ExamSession:
         self.timer = None
         self._injected_tasks = []
         self._setup_tasks = []
-        self._torn_down = False
 
     def start(self):
         """Start the exam session."""
@@ -63,18 +62,11 @@ class ExamSession:
         # plus any spare non-system disk like /dev/sda) so the generator can cap
         # whole-disk tasks to the number of devices we can actually hand out.
         from utils import helpers
-        # Start from a clean loop-device pool. Interrupted prior sessions can
-        # leave orphan loops (attached to deleted images, stale PV/fs
-        # signatures, dangling LVM-devices-file entries) that would otherwise be
-        # handed to disk tasks and break pvcreate/mkfs. Reset wipes those and
-        # recreates fresh, signature-free practice disks.
-        try:
-            helpers.reset_practice_loops()
-        except Exception:
-            pass
-        # Remove leftover task artifacts from previous sessions (stray
-        # /tmp/*.txt, old mount points, swap files, etc.) so this exam is clean.
-        self._clean_lab_leftovers()
+        from core import task_env
+        # Start from a clean box: restore anything a previous session left in
+        # place (exams keep their environment for review/disputes), wipe orphan
+        # loop devices, and remove leftover task artifacts.
+        task_env.session_reset()
         try:
             pool = helpers.build_device_pool()
         except Exception:
@@ -93,6 +85,15 @@ class ExamSession:
 
         # Give each whole-disk task a distinct device (no two share one disk)
         self._provision_devices()
+
+        # Offer to install any packages the drawn scenarios rely on. Nothing is
+        # installed without the user's consent; tasks whose packages remain
+        # missing degrade gracefully (reduced scenario / fabricated evidence).
+        from core import preflight
+        try:
+            preflight.offer_task_packages(self.tasks)
+        except Exception:
+            pass
 
         # Inject faults / set up environments for tasks that require it
         self._inject_exam_faults()
@@ -145,42 +146,56 @@ class ExamSession:
             helpers.end_device_allocation()
 
     def _inject_exam_faults(self):
-        """Inject faults / create practice environments for all tasks that need it."""
-        import time
+        """Inject faults / create practice environments for all tasks that need
+        it. Output is deliberately generic — printing the task id or the
+        injection message would hand the candidate the answer (e.g. "Set wrong
+        SELinux context (etc_t) on /var/www/html"). Details go to the log."""
         fault_tasks = [t for t in self.tasks if getattr(t, 'has_fault_injection', False)]
         if not fault_tasks:
             return
         print(fmt.bold("\nPreparing exam environment..."))
+        armed = skipped = 0
         for task in fault_tasks:
             try:
                 ok, msg = task.inject_fault()
                 if ok:
-                    print(fmt.success(f"  ✓ {task.id}: {msg}"))
                     self._injected_tasks.append(task)
+                    armed += 1
+                    logger.info("fault armed: %s: %s", task.id, msg)
                 else:
-                    print(fmt.warning(f"  ✗ {task.id}: {msg} (task will be descriptive only)"))
+                    skipped += 1
+                    logger.warning("fault skipped (descriptive only): %s: %s", task.id, msg)
             except Exception as e:
-                print(fmt.warning(f"  ✗ {task.id}: setup error ({e})"))
-        time.sleep(1)
+                skipped += 1
+                logger.warning("fault setup error: %s: %s", task.id, e)
+        line = f"  {armed} scenario(s) prepared"
+        if skipped:
+            line += f", {skipped} skipped (details in the log)"
+        print(fmt.dim(line))
         print()
 
     def _setup_task_environments(self):
         """Run setup_environment() for positive-config tasks so they establish a
         negative precondition (stop a default-on service, move an artifact aside)
-        and therefore require real work to pass."""
+        and therefore require real work to pass. Output stays generic — the
+        setup message describes exactly what was changed (i.e. the answer)."""
         setup_tasks = [t for t in self.tasks if getattr(t, 'has_setup', False)]
         if not setup_tasks:
             return
+        prepared = 0
         for task in setup_tasks:
             try:
                 ok, msg = task.setup_environment()
                 if ok:
-                    print(fmt.success(f"  ✓ {task.id}: {msg}"))
                     self._setup_tasks.append(task)
+                    prepared += 1
+                    logger.info("precondition set: %s: %s", task.id, msg)
                 # A False result just means no precondition was needed; the task
                 # is still valid, so stay quiet to avoid alarming the candidate.
             except Exception as e:
-                print(fmt.warning(f"  ✗ {task.id}: setup error ({e})"))
+                logger.warning("precondition error: %s: %s", task.id, e)
+        if prepared:
+            print(fmt.dim(f"  {prepared} starting state(s) prepared"))
 
     def _sanity_check_tasks(self):
         """After setup, verify no task is already passing before the candidate
@@ -196,17 +211,6 @@ class ExamSession:
             print(fmt.warning(
                 f"  ⚠ {len(warnings)} task(s) may not have initialized correctly "
                 f"(see the log). They'll still be scored normally."))
-
-    def _clean_lab_leftovers(self):
-        """Remove leftover task artifacts (files/dirs/mounts the tasks ask the
-        candidate to create) so each exam starts from a clean slate."""
-        try:
-            from core import lab_cleanup
-            done = lab_cleanup.clean(dry_run=False)
-        except Exception:
-            return
-        if done:
-            print(fmt.dim(f"Removed {len(done)} leftover lab artifact(s) from a previous session."))
 
     def _has_nfs_tasks(self):
         return any(getattr(t, 'category', '') == 'network_storage' for t in self.tasks)
@@ -237,67 +241,12 @@ class ExamSession:
                 print(fmt.dim(f"      {line}"))
             print(fmt.dim("      Fix via Setup → Configure remote NFS server → Test connection."))
 
-    def _teardown_nfs(self):
-        """Tear our exports off the remote NFS server after the exam."""
-        if not self._has_nfs_tasks():
-            return
-        try:
-            from core import nfs_server
-        except Exception:
-            return
-        if not nfs_server.load_config():
-            return
-        try:
-            # Unmount our client-side NFS mounts FIRST, while the server is
-            # still exporting, so they can't become stale when exports go away.
-            n = nfs_server.unmount_client_mounts()
-            if n:
-                print(fmt.dim(f"  Unmounted {n} client NFS mount(s)."))
-            ok, _ = nfs_server.remove_exports()
-            if ok:
-                print(fmt.dim("  NFS exports removed from server."))
-        except Exception:
-            pass
-
-    def _restore_exam_faults(self):
-        """Restore any environments that were set up for the exam."""
-        # NFS teardown runs independently of local fault/setup state.
-        self._teardown_nfs()
-        if not self._injected_tasks and not self._setup_tasks:
-            return
-        print(fmt.dim("\nCleaning up exam environment..."))
-        for task in self._injected_tasks:
-            try:
-                task.restore_fault()
-            except Exception:
-                pass
-        for task in self._setup_tasks:
-            try:
-                task.teardown_environment()
-            except Exception:
-                pass
-
-    def teardown(self):
-        """Return the box to a clean state — safe to call on ANY exit path
-        (graded normally, quit early, or Ctrl-C) and idempotent.
-
-        Reverses the exam's injected faults / preconditions and tears down the
-        remote NFS exports, then removes the candidate's own lab artifacts and
-        resets practice disks so returning to the menu leaves a vanilla box. The
-        _torn_down guard makes a second call (e.g. from an outer finally after a
-        normal finish) a no-op."""
-        if self._torn_down:
-            return
-        self._torn_down = True
-        try:
-            self._restore_exam_faults()
-        except Exception:
-            pass
-        try:
-            from core import task_env
-            task_env.session_reset(verbose=False)
-        except Exception:
-            pass
+    # NOTE: there is deliberately NO automatic teardown at exam end. The
+    # environment (injected faults, the candidate's work, NFS mounts) is left
+    # in place so scores can be reviewed against live state and checker
+    # disputes can capture real evidence. Cleanup happens explicitly via the
+    # menu's single "Reset Machine" action, or automatically at the start of
+    # the next session.
 
     def _count_domains(self):
         """Count unique domains in generated tasks."""
@@ -418,8 +367,13 @@ class ExamSession:
             duration, validation_results, reboot_result
         )
 
-        # Scoring is done — return the box to a clean, vanilla state.
-        self.teardown()
+        # Deliberately NO cleanup here — the environment stays exactly as the
+        # candidate left it so they can re-inspect their work against the
+        # scores and file checker disputes with live evidence.
+        print()
+        print(fmt.info("The exam environment has been left in place so you can "
+                       "review your work and dispute any check (Result History → task → 'd')."))
+        print(fmt.info("When you're done, run  Setup → Reset Machine  to clean up."))
 
         # Save to ResultsDB
         db = get_results_db()
@@ -580,17 +534,13 @@ def run_exam_mode():
     task_count = _select_exam_task_count()
     reboot_sim = _select_reboot_simulation()
     session = ExamSession(task_count=task_count, reboot_simulation=reboot_sim)
-    try:
-        session.start()
+    session.start()
 
-        if not session.tasks:
-            return None
+    if not session.tasks:
+        return None
 
-        input("\nPress Enter when you're ready to validate your work...")
+    input("\nPress Enter when you're ready to validate your work...")
 
-        return session.validate_all()
-    finally:
-        # However this exits — graded, quit early, or Ctrl-C at the prompt —
-        # reverse the injected faults/preconditions and clean up. Idempotent, so
-        # a normal finish (which already tore down in validate_all) is unaffected.
-        session.teardown()
+    # No teardown on any exit path — the environment persists for review and
+    # disputes. The next session start (or Setup → Reset Machine) cleans up.
+    return session.validate_all()

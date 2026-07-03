@@ -381,14 +381,14 @@ def _restore_env_setup(info, msgs):
             msgs.append(f"Reinstalled flatpak {app}")
 
 
-# ── httpd preflight (RHEL/Rocky minimal installs don't ship httpd) ───────────
+# ── httpd availability (RHEL/Rocky minimal installs don't ship httpd) ────────
 #
-# Several fault-injection tasks describe an "httpd is running but ..." symptom
-# and manipulate SELinux/firewall/service state around it. On a minimal
-# install httpd is absent, so those manipulations silently no-op and the
-# candidate never sees the intended symptom (issue #37). These helpers install
-# and start httpd on demand, tracked separately from the task's own fault
-# record, so restore_fault() can put the host back exactly as it found it.
+# Several fault-injection tasks describe an "httpd is running but ..." symptom.
+# Session prep OFFERS to install missing packages (tasks declare them via
+# required_packages) — nothing is ever installed silently here. If httpd is
+# still absent when a fault is injected, the task degrades: SELinux faults
+# fabricate the log evidence a real denial would have left (see
+# _seed_avc_denial), service/firewall faults fall back to descriptive-only.
 
 def _httpd_pkg_key(task_id):
     return f'{task_id}__httpd_pkg'
@@ -398,10 +398,8 @@ def _httpd_svc_key(task_id):
     return f'{task_id}__httpd_svc'
 
 
-def _ensure_httpd_installed(task_id):
-    """Install httpd if missing. Returns True once httpd is present."""
-    from tasks.env_setup import ensure_package_installed
-    ensure_package_installed(_httpd_pkg_key(task_id), 'httpd')
+def _httpd_present():
+    """True if the httpd package is installed. Never installs anything."""
     return _run(['rpm', '-q', 'httpd']).returncode == 0
 
 
@@ -412,13 +410,50 @@ def _ensure_httpd_running(task_id):
 
 
 def _restore_httpd_setup(task_id, msgs):
-    """Undo whatever _ensure_httpd_installed()/_ensure_httpd_running() did for
-    this task — service state first, then the package."""
+    """Undo whatever _ensure_httpd_running() did for this task (and replay any
+    package record left by an older version) — service state first."""
     for key in (_httpd_svc_key(task_id), _httpd_pkg_key(task_id)):
         state = load_fault_state(key)
         if state:
             _restore_env_setup(state['restore_info'], msgs)
             clear_fault_state(key)
+
+
+# ── Synthetic AVC evidence ────────────────────────────────────────────────────
+#
+# When a real denial can't be triggered (httpd not installed, so nothing ever
+# hits the mislabelled file / blocked port), the candidate would find empty
+# audit logs and the troubleshooting trail would go cold. In that case we write
+# the same records a real denial would have produced — an AVC line into
+# /var/log/audit/audit.log (so `ausearch -m AVC | audit2why` works) and a
+# setroubleshoot-style journal entry — so the documented diagnosis path still
+# leads to the root cause.
+
+_AUDIT_LOG = '/var/log/audit/audit.log'
+
+
+def _seed_avc_denial(avc_body, journal_msg):
+    """Append one AVC record to the audit log and mirror it to the journal.
+    Best-effort: failures are silent (the fault itself is still in place)."""
+    import time as _time
+    import random as _random
+    ts = f"{_time.time():.3f}"
+    serial = _random.randint(9000, 99999)
+    line = f"type=AVC msg=audit({ts}:{serial}): avc:  denied  {avc_body}\n"
+    try:
+        existed = os.path.exists(_AUDIT_LOG)
+        os.makedirs(os.path.dirname(_AUDIT_LOG), exist_ok=True)
+        with open(_AUDIT_LOG, 'a') as f:
+            f.write(line)
+        if not existed:
+            os.chmod(_AUDIT_LOG, 0o600)
+    except OSError:
+        pass
+    try:
+        _run(['logger', '-p', 'daemon.err', '-t', 'setroubleshoot', journal_msg],
+             timeout=10)
+    except Exception:
+        pass
 
 
 # ── Base class ────────────────────────────────────────────────────────────────
@@ -446,6 +481,8 @@ class TroubleshootingTask(BaseTask):
 
 @TaskRegistry.register("troubleshooting")
 class SELinuxHttpdContextFaultTask(TroubleshootingTask):
+
+    required_packages = ['httpd']
 
     def __init__(self):
         super().__init__(
@@ -484,9 +521,6 @@ class SELinuxHttpdContextFaultTask(TroubleshootingTask):
         return self
 
     def inject_fault(self):
-        if not _ensure_httpd_installed(self.id):
-            return False, "httpd package is not installed and could not be installed (check repo access)"
-
         # Create a test file so there's actually content to serve
         os.makedirs(self.web_root, exist_ok=True)
         test_file = f'{self.web_root}/index.html'
@@ -499,10 +533,27 @@ class SELinuxHttpdContextFaultTask(TroubleshootingTask):
         if r.returncode != 0:
             return False, f"chcon failed: {r.stderr.strip()}"
 
-        # Also ensure httpd is running so the symptom is visible
-        _ensure_httpd_running(self.id)
-
         save_fault_state(self.id, {'path': self.web_root})
+
+        if _httpd_present():
+            # Real symptom: run httpd and hit it so a genuine AVC denial lands
+            # in the audit log for the candidate to find.
+            _ensure_httpd_running(self.id)
+            _run(['curl', '-s', '-o', '/dev/null', '--max-time', '3',
+                  'http://localhost'], timeout=8)
+        else:
+            # httpd isn't installed (user declined the install offer) — leave
+            # the evidence a real denial would have produced so the documented
+            # diagnosis path (ausearch/audit2why, journal) still works.
+            _seed_avc_denial(
+                '{ read } for  pid=2841 comm="httpd" name="index.html" '
+                f'dev="dm-0" ino=17825828 '
+                'scontext=system_u:system_r:httpd_t:s0 '
+                'tcontext=unconfined_u:object_r:etc_t:s0 tclass=file permissive=0',
+                'SELinux is preventing /usr/sbin/httpd from read access on the '
+                f'file {self.web_root}/index.html. For complete SELinux messages '
+                'run: ausearch -m AVC | audit2why')
+
         return True, f"Set wrong SELinux context (etc_t) on {self.web_root}"
 
     def restore_fault(self):
@@ -560,6 +611,8 @@ class SELinuxHttpdContextFaultTask(TroubleshootingTask):
 @TaskRegistry.register("troubleshooting")
 class SELinuxHttpdBooleanFaultTask(TroubleshootingTask):
 
+    required_packages = ['httpd']
+
     def __init__(self):
         super().__init__(
             id="fault_selinux_boolean_httpd_001",
@@ -597,10 +650,6 @@ class SELinuxHttpdBooleanFaultTask(TroubleshootingTask):
         return self
 
     def inject_fault(self):
-        if not _ensure_httpd_installed(self.id):
-            return False, "httpd package is not installed and could not be installed (check repo access)"
-        _ensure_httpd_running(self.id)
-
         # Save current value first
         r = _run(['getsebool', self.boolean_name])
         if r.returncode == 0 and '->' in r.stdout:
@@ -611,13 +660,28 @@ class SELinuxHttpdBooleanFaultTask(TroubleshootingTask):
         if r.returncode != 0:
             return False, f"setsebool failed: {r.stderr.strip()}"
 
-        # Trigger an actual denial so audit logs have something real
-        _run(['curl', '-s', '--max-time', '2', 'http://localhost:8080'], timeout=5)
-
         save_fault_state(self.id, {
             'boolean': self.boolean_name,
             'original_value': self._original_value,
         })
+
+        if _httpd_present():
+            _ensure_httpd_running(self.id)
+            # Trigger an actual denial so audit logs have something real
+            _run(['curl', '-s', '--max-time', '2', 'http://localhost:8080'], timeout=5)
+        else:
+            # No httpd to generate the denial (user declined the install offer)
+            # — leave the records a real one would have produced so
+            # ausearch/audit2why still point at the boolean.
+            _seed_avc_denial(
+                '{ name_connect } for  pid=2841 comm="httpd" dest=8080 '
+                'scontext=system_u:system_r:httpd_t:s0 '
+                'tcontext=system_u:object_r:http_cache_port_t:s0 '
+                'tclass=tcp_socket permissive=0',
+                'SELinux is preventing /usr/sbin/httpd from name_connect access '
+                'on the tcp_socket port 8080. For complete SELinux messages '
+                'run: ausearch -m AVC | audit2why')
+
         return True, f"Set {self.boolean_name}=off (was {self._original_value})"
 
     def restore_fault(self):
@@ -666,6 +730,8 @@ class SELinuxHttpdBooleanFaultTask(TroubleshootingTask):
 @TaskRegistry.register("troubleshooting")
 class FirewallHttpBlockedFaultTask(TroubleshootingTask):
 
+    required_packages = ['httpd']
+
     def __init__(self):
         super().__init__(
             id="fault_firewall_http_001",
@@ -703,8 +769,8 @@ class FirewallHttpBlockedFaultTask(TroubleshootingTask):
         return self
 
     def inject_fault(self):
-        if not _ensure_httpd_installed(self.id):
-            return False, "httpd package is not installed and could not be installed (check repo access)"
+        if not _httpd_present():
+            return False, "httpd is not installed (declined at the install offer) — skipping this scenario"
 
         # Content + a running httpd so "curl localhost works" is actually true
         os.makedirs('/var/www/html', exist_ok=True)
@@ -862,6 +928,8 @@ class SshdBadConfigFaultTask(TroubleshootingTask):
 @TaskRegistry.register("troubleshooting")
 class HttpdDisabledFaultTask(TroubleshootingTask):
 
+    required_packages = ['httpd']
+
     def __init__(self):
         super().__init__(
             id="fault_service_httpd_001",
@@ -898,8 +966,8 @@ class HttpdDisabledFaultTask(TroubleshootingTask):
         return self
 
     def inject_fault(self):
-        if not _ensure_httpd_installed(self.id):
-            return False, "httpd package is not installed and could not be installed (check repo access)"
+        if not _httpd_present():
+            return False, "httpd is not installed (declined at the install offer) — skipping this scenario"
 
         r = _run(['systemctl', 'is-active', self.service])
         self._was_active = r.returncode == 0

@@ -62,13 +62,13 @@ Quick Start Examples:
 
 
 def run_quick_practice(category=None):
-    """Run quick practice - 5 tasks with ResultsDB tracking."""
+    """Run quick practice - a short session (4-20 tasks) with ResultsDB tracking."""
     from tasks.registry import TaskRegistry
     from core.validator import get_validator
     from core.results_db import get_results_db
     from core import task_env
     from utils import formatters as fmt
-    from utils.helpers import confirm_action
+    from utils.helpers import confirm_action, select_task_count
 
     TaskRegistry.initialize()
     db = get_results_db()
@@ -77,9 +77,12 @@ def run_quick_practice(category=None):
     fmt.print_header("QUICK PRACTICE")
 
     if category and category != 'all':
-        print(f"5 {fmt.format_category_name(category)} tasks.")
+        print(f"{fmt.format_category_name(category)} tasks.")
     else:
-        print("5 random tasks across all categories.")
+        print("Random tasks across all categories.")
+    print()
+
+    count = select_task_count(default=5)
     print()
 
     if not confirm_action("Ready to start?", default=True):
@@ -87,9 +90,9 @@ def run_quick_practice(category=None):
 
     # Get tasks
     if category and category != 'all':
-        tasks = TaskRegistry.get_practice_tasks(category, 'exam', 5)
+        tasks = TaskRegistry.get_practice_tasks(category, 'exam', count)
     else:
-        tasks = TaskRegistry.get_exam_tasks(5)
+        tasks = TaskRegistry.get_exam_tasks(count)
 
     if not tasks:
         print(fmt.error("Could not generate tasks"))
@@ -100,19 +103,17 @@ def run_quick_practice(category=None):
     passed = 0
 
     # Put the box into the same real state exam/practice/adaptive modes do:
-    # fresh practice disks + no leftover artifacts up front, then inject each
-    # task's fault / negative precondition per iteration (and reverse it after).
-    # Without this, quick practice validates against default state — troubleshooting
-    # tasks have nothing to fix and positive-config tasks pass with no work done.
+    # clean slate + package offer up front, then inject each task's fault /
+    # negative precondition right before the candidate works on it. All system
+    # changes are reverted ONCE, at the end of the session (finally below).
     print(fmt.dim("Preparing a clean practice environment..."))
-    task_env.session_reset()
+    task_env.prepare_session(tasks)
 
-    for i, task in enumerate(tasks, 1):
-        # Break something to fix / establish the precondition BEFORE the candidate
-        # works on it. Wipe screen after so setup chatter doesn't precede the task.
-        env_state = task_env.setup_task(task)
-        stop = False
-        try:
+    try:
+        for i, task in enumerate(tasks, 1):
+            # Break something to fix / establish the precondition BEFORE the
+            # candidate works on it (setup output is generic — no spoilers).
+            task_env.setup_task(task)
             fmt.clear_screen()
             print(f"Quick Practice - Task {i}/{len(tasks)}")
             print("=" * 60)
@@ -171,17 +172,19 @@ def run_quick_practice(category=None):
                 for tip in exam_tips:
                     print(f"  * {tip}")
 
-            print()
-            stop = i < len(tasks) and not confirm_action("Continue to next task?", default=True)
-        finally:
-            # Always reverse this task's system changes, even on error / early
-            # exit, then wipe practice disks if the task consumed one.
-            print(fmt.dim("Restoring system..."))
-            task_env.teardown_task(task, env_state)
-            task_env.reset_after_task(task)
+            # Wipe practice disks between disk tasks so the next one gets a
+            # clean, signature-free device (other changes revert at session end).
+            if getattr(task, 'disk_slots', 0) > 0 and i < len(tasks):
+                print(fmt.dim("Re-provisioning practice disks for the next task..."))
+                task_env.reset_after_task(task)
 
-        if stop:
-            break
+            print()
+            if i < len(tasks) and not confirm_action("Continue to next task?", default=True):
+                break
+    finally:
+        # However the session ends (finished, quit, or Ctrl-C), leave a clean
+        # box — reverse all faults/preconditions and remove artifacts.
+        task_env.session_teardown(tasks)
 
     # Summary
     print()
@@ -328,17 +331,18 @@ def main():
         run_adaptive_mode()
         return 0
 
-    # Warn if a troubleshooting fault was left active (e.g. simulator crashed)
+    # Note if a previous session's environment is still in place (expected —
+    # exams deliberately leave the box as-is for review/disputes).
     try:
         from tasks.troubleshooting import load_fault_state
         stale = load_fault_state()
         if stale:
             from utils import formatters as fmt
             print(fmt.warning(
-                f"\n! Active fault detected from a previous session: {stale.get('task_id')}"
-            ))
-            print(fmt.warning("  Run System Reset to restore the system, or it will be"))
-            print(fmt.warning("  restored automatically when the next troubleshooting task ends.\n"))
+                "\n! A previous session's environment is still active (kept for "
+                "review/disputes)."))
+            print(fmt.warning("  Run  Setup → Reset Machine  to clean it up; starting a new"))
+            print(fmt.warning("  session also resets it automatically.\n"))
     except Exception:
         pass
 
