@@ -66,6 +66,7 @@ def run_quick_practice(category=None):
     from tasks.registry import TaskRegistry
     from core.validator import get_validator
     from core.results_db import get_results_db
+    from core import task_env
     from utils import formatters as fmt
     from utils.helpers import confirm_action
 
@@ -98,69 +99,89 @@ def run_quick_practice(category=None):
     completed = 0
     passed = 0
 
+    # Put the box into the same real state exam/practice/adaptive modes do:
+    # fresh practice disks + no leftover artifacts up front, then inject each
+    # task's fault / negative precondition per iteration (and reverse it after).
+    # Without this, quick practice validates against default state — troubleshooting
+    # tasks have nothing to fix and positive-config tasks pass with no work done.
+    print(fmt.dim("Preparing a clean practice environment..."))
+    task_env.session_reset()
+
     for i, task in enumerate(tasks, 1):
-        fmt.clear_screen()
-        print(f"Quick Practice - Task {i}/{len(tasks)}")
-        print("=" * 60)
-        print()
-        print(fmt.bold("Task:"))
-        print(task.description)
-        print()
-
-        cat_name = fmt.format_category_name(task.category)
-        domain = getattr(task, 'exam_domain', 0)
-        domain_name = settings.EXAM_DOMAINS.get(domain, "")
-        print(fmt.bold(f"Category: {cat_name} [D{domain}]"))
-        if domain_name:
-            print(fmt.bold(f"Domain: {domain_name}"))
-        print(fmt.bold(f"Points: {task.points}"))
-        print()
-
-        if task.hints and confirm_action("Show hints?", default=False):
+        # Break something to fix / establish the precondition BEFORE the candidate
+        # works on it. Wipe screen after so setup chatter doesn't precede the task.
+        env_state = task_env.setup_task(task)
+        stop = False
+        try:
+            fmt.clear_screen()
+            print(f"Quick Practice - Task {i}/{len(tasks)}")
+            print("=" * 60)
             print()
-            for j, hint in enumerate(task.hints, 1):
-                print(f"  {j}. {hint}")
+            print(fmt.bold("Task:"))
+            print(task.description)
             print()
 
-        input("Complete the task, then press Enter to validate...")
-
-        result = validator.validate_task(task)
-        completed += 1
-
-        print()
-        if result.passed:
-            passed += 1
-            print(fmt.success(f"PASSED - {result.score}/{result.max_score} points"))
-        else:
-            print(fmt.error(f"FAILED - {result.score}/{result.max_score} points"))
-            for check in result.checks:
-                if not check.passed:
-                    print(f"    - {check.message}")
-
-        # Save to ResultsDB
-        db.save_practice_attempt(
-            task_id=task.id,
-            category=task.category,
-            difficulty=task.difficulty,
-            domain=getattr(task, 'exam_domain', 0),
-            score=result.score,
-            max_score=result.max_score,
-            passed=result.passed,
-            mode='quick'
-        )
-
-        # Show exam tips
-        exam_tips = getattr(task, 'exam_tips', [])
-        if exam_tips:
+            cat_name = fmt.format_category_name(task.category)
+            domain = getattr(task, 'exam_domain', 0)
+            domain_name = settings.EXAM_DOMAINS.get(domain, "")
+            print(fmt.bold(f"Category: {cat_name} [D{domain}]"))
+            if domain_name:
+                print(fmt.bold(f"Domain: {domain_name}"))
+            print(fmt.bold(f"Points: {task.points}"))
             print()
-            print(fmt.bold("Exam Tips:"))
-            for tip in exam_tips:
-                print(f"  * {tip}")
 
-        print()
-        if i < len(tasks):
-            if not confirm_action("Continue to next task?", default=True):
-                break
+            if task.hints and confirm_action("Show hints?", default=False):
+                print()
+                for j, hint in enumerate(task.hints, 1):
+                    print(f"  {j}. {hint}")
+                print()
+
+            input("Complete the task, then press Enter to validate...")
+
+            result = validator.validate_task(task)
+            completed += 1
+
+            print()
+            if result.passed:
+                passed += 1
+                print(fmt.success(f"PASSED - {result.score}/{result.max_score} points"))
+            else:
+                print(fmt.error(f"FAILED - {result.score}/{result.max_score} points"))
+                for check in result.checks:
+                    if not check.passed:
+                        print(f"    - {check.message}")
+
+            # Save to ResultsDB
+            db.save_practice_attempt(
+                task_id=task.id,
+                category=task.category,
+                difficulty=task.difficulty,
+                domain=getattr(task, 'exam_domain', 0),
+                score=result.score,
+                max_score=result.max_score,
+                passed=result.passed,
+                mode='quick'
+            )
+
+            # Show exam tips
+            exam_tips = getattr(task, 'exam_tips', [])
+            if exam_tips:
+                print()
+                print(fmt.bold("Exam Tips:"))
+                for tip in exam_tips:
+                    print(f"  * {tip}")
+
+            print()
+            stop = i < len(tasks) and not confirm_action("Continue to next task?", default=True)
+        finally:
+            # Always reverse this task's system changes, even on error / early
+            # exit, then wipe practice disks if the task consumed one.
+            print(fmt.dim("Restoring system..."))
+            task_env.teardown_task(task, env_state)
+            task_env.reset_after_task(task)
+
+        if stop:
+            break
 
     # Summary
     print()
