@@ -1,5 +1,11 @@
 # RHCSA Mock Exam Simulator
 
+
+## KNOWN ISSUES
+- The quick practice tasks are a bit janky. Still working on them.
+- Actual exam simulation tends to work fine
+
+
 A command-line **RHCSA EX200 v10** (Red Hat Enterprise Linux 10) exam simulator.
 It generates tasks, sets up each task's starting state, validates your real
 system configuration with safe read-only checks, and tracks progress over time.
