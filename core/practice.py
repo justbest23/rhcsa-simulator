@@ -104,6 +104,10 @@ class PracticeSession:
             print(fmt.success("\nPractice session complete!"))
         except StopIteration:
             print(fmt.info("\nPractice session ended early."))
+        finally:
+            # However the session ends (finished, quit, or Ctrl-C), leave a
+            # clean box — reverse any still-active setup and remove artifacts.
+            task_env.session_teardown(tasks)
 
     def _select_category(self):
         """Select practice category."""

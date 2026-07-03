@@ -47,6 +47,7 @@ class ExamSession:
         self.timer = None
         self._injected_tasks = []
         self._setup_tasks = []
+        self._torn_down = False
 
     def start(self):
         """Start the exam session."""
@@ -257,6 +258,28 @@ class ExamSession:
             except Exception:
                 pass
 
+    def teardown(self):
+        """Return the box to a clean state — safe to call on ANY exit path
+        (graded normally, quit early, or Ctrl-C) and idempotent.
+
+        Reverses the exam's injected faults / preconditions and tears down the
+        remote NFS exports, then removes the candidate's own lab artifacts and
+        resets practice disks so returning to the menu leaves a vanilla box. The
+        _torn_down guard makes a second call (e.g. from an outer finally after a
+        normal finish) a no-op."""
+        if self._torn_down:
+            return
+        self._torn_down = True
+        try:
+            self._restore_exam_faults()
+        except Exception:
+            pass
+        try:
+            from core import task_env
+            task_env.session_reset(verbose=False)
+        except Exception:
+            pass
+
     def _count_domains(self):
         """Count unique domains in generated tasks."""
         domains = set()
@@ -376,8 +399,8 @@ class ExamSession:
             duration, validation_results, reboot_result
         )
 
-        # Restore any fault-injected environments now that scoring is done
-        self._restore_exam_faults()
+        # Scoring is done — return the box to a clean, vanilla state.
+        self.teardown()
 
         # Save to ResultsDB
         db = get_results_db()
@@ -538,12 +561,17 @@ def run_exam_mode():
     task_count = _select_exam_task_count()
     reboot_sim = _select_reboot_simulation()
     session = ExamSession(task_count=task_count, reboot_simulation=reboot_sim)
-    session.start()
+    try:
+        session.start()
 
-    if not session.tasks:
-        return None
+        if not session.tasks:
+            return None
 
-    input("\nPress Enter when you're ready to validate your work...")
+        input("\nPress Enter when you're ready to validate your work...")
 
-    result = session.validate_all()
-    return result
+        return session.validate_all()
+    finally:
+        # However this exits — graded, quit early, or Ctrl-C at the prompt —
+        # reverse the injected faults/preconditions and clean up. Idempotent, so
+        # a normal finish (which already tore down in validate_all) is unaffected.
+        session.teardown()

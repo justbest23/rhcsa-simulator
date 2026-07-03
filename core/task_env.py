@@ -107,3 +107,32 @@ def reset_after_task(task):
         helpers.reset_practice_loops()
     except Exception:
         pass
+
+
+def session_teardown(tasks, verbose=True):
+    """End-of-session cleanup — call this on EVERY exit path (finished, quit, or
+    Ctrl-C) so returning to the menu leaves a clean box.
+
+    It (1) reverses every task's injected fault / negative precondition, then
+    (2) removes leftover lab artifacts and resets practice disks (same as the
+    start-of-session reset). Both steps are idempotent and swallow errors: the
+    per-task restore records are cleared as they replay, so calling this twice —
+    e.g. once at normal end and again from an outer finally — is a harmless
+    no-op. Safe to call even if setup never ran (empty/None tasks is fine).
+    """
+    if verbose:
+        print(fmt.dim("Restoring the machine to a clean state..."))
+    for task in tasks or []:
+        if getattr(task, 'has_fault_injection', False):
+            try:
+                task.restore_fault()
+            except Exception:
+                pass
+        if getattr(task, 'has_setup', False):
+            try:
+                task.teardown_environment()
+            except Exception:
+                pass
+    # Remove candidate-created artifacts (files, mounts, swap, units, …) and
+    # reset practice disks so the box is back to a clean, vanilla state.
+    session_reset(verbose=False)

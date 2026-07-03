@@ -81,6 +81,10 @@ class AdaptiveMode:
                 results.append((task, result))
         except StopIteration:
             print(fmt.info("\nSession ended early."))
+        finally:
+            # However the session ends (finished, quit, or Ctrl-C), leave a
+            # clean box — reverse any still-active setup and remove artifacts.
+            task_env.session_teardown(tasks)
 
         # Show session summary
         if results:
