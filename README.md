@@ -235,6 +235,47 @@ mistyped or truncated code is rejected rather than importing garbage. Its length
 grows with your history (a light user is a short string; a very active user can
 reach a few KB — fine to copy/paste).
 
+### Why this matters during active development
+
+The progress code is **version-portable** — it survives *upgrading the simulator
+itself*, not just reinstalling the OS. That is deliberate, and it is the reason
+the feature exists:
+
+- The code encodes only stable, forward-compatible data: your exam/practice
+  **history** (task id, category, score, timestamps) and per-category **SM-2
+  spaced-repetition state** (easiness factor, interval, repetitions, due date).
+  It deliberately omits task descriptions, checks, and hints — anything a new
+  release might rewrite — so it is **not tied to a particular version's task
+  set**.
+- Import is schema-tolerant: each field is read with a default and de-duplicated,
+  and the payload carries a format version (`RH1` / `v:1`) plus a checksum. A
+  code exported by an older build imports cleanly into a newer one.
+- The raw SQLite DB under `data/` is **not** safe to copy between versions — its
+  schema can change from release to release. The progress code is the stable
+  interchange format that insulates your history from those schema changes.
+
+While the simulator is under active development you routinely do things that
+wipe or migrate that local DB:
+
+- `git pull` / switching to a branch whose DB schema differs
+- re-running `./install.sh`, a **Full System Reset**, or spinning up a fresh VM
+- deleting `data/` to reproduce a bug from a clean slate
+
+**Export a code first, upgrade or reset, then import it** — your accumulated
+history and adaptive scheduling come back intact, so a version bump never costs
+you your progress:
+
+```bash
+rhcsa-simulator --export-code > my-progress.code   # before pulling / resetting
+# ... git pull / ./install.sh / rebuild the VM ...
+rhcsa-simulator --import-code "$(cat my-progress.code)"
+```
+
+> **Caveat:** SM-2 targeting is keyed by **category name**. If a new version
+> renames or removes a category, that category's *history* still imports, but its
+> spaced-repetition schedule won't re-attach to the renamed category. Task-level
+> history is unaffected.
+
 ---
 
 ## Practice disks (LVM / partitioning / swap / filesystems)
