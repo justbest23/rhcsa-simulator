@@ -69,9 +69,10 @@ class AdaptiveMode:
             return
 
         # Reset the box to a clean, practice-ready state (fresh loop disks +
-        # remove leftover artifacts) just like exam mode does at start.
+        # remove leftover artifacts) just like exam mode does at start, and
+        # offer to install any packages the drawn tasks rely on.
         print(fmt.dim("Preparing a clean practice environment..."))
-        task_env.session_reset()
+        task_env.prepare_session(tasks)
 
         # Run session
         results = []
@@ -91,24 +92,12 @@ class AdaptiveMode:
             self._show_summary(results, source)
 
     def _select_task_count(self):
-        """Ask how many tasks this session should include (default 5, no cap)."""
-        print(fmt.bold("How many tasks this session?"))
-        print(fmt.dim("  Enter a number (e.g. 5, 10, 15). Default 5."))
-        while True:
-            raw = input("\nNumber of tasks [5]: ").strip() or '5'
-            try:
-                n = int(raw)
-            except ValueError:
-                print(fmt.error("Please enter a whole number."))
-                continue
-            if n < 1:
-                print(fmt.error("Enter at least 1."))
-                continue
-            if n > 40:
-                print(fmt.warning("Capping at 40 tasks for one session."))
-                n = 40
-            print()
-            return n
+        """Ask how many tasks this session should include (4-20, default 5) —
+        same chooser as quick practice and practice mode."""
+        from utils.helpers import select_task_count
+        n = select_task_count(default=5)
+        print()
+        return n
 
     def _select_categories(self):
         """Select categories based on SM-2 data. Returns (categories, source_label)."""
@@ -210,7 +199,7 @@ class AdaptiveMode:
         # precondition) so it requires real work — same setup exam mode runs.
         fmt.clear_screen()
         print(fmt.bold("Preparing task environment..."))
-        env_state = task_env.setup_task(task)
+        task_env.setup_task(task)
         time.sleep(1)
 
         fmt.clear_screen()
@@ -290,11 +279,12 @@ class AdaptiveMode:
             print(fmt.success("\nGreat job!"))
         print()
 
-        # Reverse this task's system changes, then wipe practice disks if it
-        # consumed one so the next task starts clean.
-        print(fmt.dim("Restoring system..."))
-        task_env.teardown_task(task, env_state)
-        task_env.reset_after_task(task)
+        # System changes are reverted once, at the end of the session (see
+        # start()'s finally). Only wipe practice disks between disk tasks so the
+        # next one gets a clean, signature-free device.
+        if getattr(task, 'disk_slots', 0) > 0 and current < total:
+            print(fmt.dim("Re-provisioning practice disks for the next task..."))
+            task_env.reset_after_task(task)
 
         if current < total:
             if not confirm_action("Continue to next task?", default=True):

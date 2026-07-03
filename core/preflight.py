@@ -55,6 +55,60 @@ def missing_packages(statuses=None):
     return sorted(pkg for pkg, installed in statuses.items() if installed is False)
 
 
+def filter_missing(packages):
+    """Subset of `packages` confirmed NOT installed (rpm answered). Unknown
+    statuses (no rpm binary, timeout) are excluded — never offer to install
+    something we can't verify is absent."""
+    return sorted(pkg for pkg in set(packages) if _rpm_installed(pkg) is False)
+
+
+def install_packages(packages):
+    """dnf-install the given packages. Returns (ok, output). Only ever called
+    after the user has explicitly consented — never call this unprompted."""
+    if not packages:
+        return True, ""
+    try:
+        r = subprocess.run(['dnf', 'install', '-y', *sorted(set(packages))],
+                           capture_output=True, text=True, timeout=600)
+        return r.returncode == 0, (r.stdout or '') + (r.stderr or '')
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as e:
+        return False, str(e)
+
+
+def offer_task_packages(tasks):
+    """Session-prep package prompt.
+
+    Gathers required_packages from the generated tasks; for any that are
+    missing, asks the user (Y/n) whether to install them. NOTHING is installed
+    without consent. Returns the list of packages still missing afterwards so
+    fault injectors can fall back (reduced scenario / fabricated evidence).
+    """
+    needed = set()
+    for t in tasks or []:
+        needed.update(getattr(t, 'required_packages', []) or [])
+    if not needed:
+        return []
+    missing = filter_missing(needed)
+    if not missing:
+        return []
+
+    from utils.helpers import confirm_action
+    print(fmt.warning(
+        f"\nSome tasks in this session use package(s) not installed on this "
+        f"system: {', '.join(missing)}"))
+    print(fmt.dim("  Without them those scenarios run in a reduced mode "
+                  "(or are skipped). Installed packages stay installed."))
+    if confirm_action(f"Install {', '.join(missing)} now?", default=True):
+        print(fmt.dim("  Installing (this can take a minute)..."))
+        ok, out = install_packages(missing)
+        if ok:
+            print(fmt.success(f"  Installed: {', '.join(missing)}"))
+        else:
+            tail = (out or '').strip().splitlines()[-1] if (out or '').strip() else 'no output'
+            print(fmt.warning(f"  Install failed — continuing without. ({tail})"))
+    return filter_missing(needed)
+
+
 def warn_missing(missing=None):
     """Print a one-time warning listing missing packages and how to install
     them. No-op if nothing is missing (or rpm status is unknown)."""

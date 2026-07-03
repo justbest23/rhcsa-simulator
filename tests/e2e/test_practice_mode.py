@@ -24,6 +24,8 @@ class TestCategorySelection:
     def test_select_category_menu(self, initialized_registry):
         session = PracticeSession()
         with patch("builtins.input", side_effect=["q"]), \
+             patch("utils.helpers.select_task_count", return_value=1), \
+             patch("core.practice.task_env"), \
              patch("core.practice.fmt"):
             session.start()
 
@@ -49,6 +51,8 @@ class TestPracticeTask:
              patch("core.practice.get_validator") as mock_val, \
              patch("core.practice.get_results_db", return_value=tmp_db), \
              patch("core.practice.confirm_action", side_effect=[True]), \
+             patch("utils.helpers.select_task_count", return_value=1), \
+             patch("core.practice.task_env"), \
              patch("core.practice.fmt"):
             mock_engine = MagicMock()
             mock_engine.validate_task.return_value = mock_result
@@ -78,6 +82,8 @@ class TestPracticeTask:
              patch("core.practice.get_validator") as mock_val, \
              patch("core.practice.get_results_db", return_value=tmp_db), \
              patch("core.practice.confirm_action", side_effect=[True]), \
+             patch("utils.helpers.select_task_count", return_value=1), \
+             patch("core.practice.task_env"), \
              patch("core.practice.fmt"):
             mock_engine = MagicMock()
             mock_engine.validate_task.side_effect = [fail_result, pass_result]
@@ -101,6 +107,8 @@ class TestPracticeTask:
              patch("core.practice.get_validator") as mock_val, \
              patch("core.practice.get_results_db") as mock_db, \
              patch("core.practice.confirm_action", side_effect=[False, True]), \
+             patch("utils.helpers.select_task_count", return_value=1), \
+             patch("core.practice.task_env"), \
              patch("core.practice.fmt") as mock_fmt:
             mock_fmt.bold.side_effect = lambda x: x
             mock_fmt.success.side_effect = lambda x: x

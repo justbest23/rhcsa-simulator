@@ -47,6 +47,10 @@ class PracticeSession:
             self.difficulty = self._select_difficulty()
         self.skip_reboot = self._select_reboot_filter()
 
+        from utils.helpers import select_task_count
+        print()
+        self.task_count = select_task_count(default=self.task_count)
+
         tasks = TaskRegistry.get_practice_tasks(
             self.category,
             self.difficulty,
@@ -92,10 +96,10 @@ class PracticeSession:
         print(fmt.info(f"\nStarting session…"))
 
         # Reset the box to a clean, practice-ready state (fresh loop disks +
-        # remove leftover artifacts) exactly like exam mode does at start, so
-        # tasks aren't polluted by a previous session.
+        # remove leftover artifacts) exactly like exam mode does at start, and
+        # offer to install any packages the drawn tasks rely on.
         print(fmt.dim("Preparing a clean practice environment..."))
-        task_env.session_reset()
+        task_env.prepare_session(tasks)
 
         # Practice each task
         try:
@@ -191,7 +195,7 @@ class PracticeSession:
         # tasks require real work instead of passing on default state.
         fmt.clear_screen()
         print(fmt.bold("Preparing task environment..."))
-        env_state = task_env.setup_task(task)
+        task_env.setup_task(task)
         print()
         time.sleep(1)
 
@@ -307,13 +311,15 @@ class PracticeSession:
                 input("Press Enter to continue...")
                 break
 
-        # Reverse the per-task system changes regardless of outcome, then wipe
-        # practice disks if this task consumed one so the next task starts clean.
-        print()
-        print(fmt.dim("Restoring system..."))
-        task_env.teardown_task(task, env_state)
-        task_env.reset_after_task(task)
-        time.sleep(1)
+        # Per-task system changes are NOT reverted here — everything is undone
+        # once, at the end of the session (session_teardown in start()'s
+        # finally). Only disk tasks get their practice disk wiped now, because
+        # the next disk task needs a clean, signature-free device to work on.
+        if getattr(task, 'disk_slots', 0) > 0 and current < total:
+            print()
+            print(fmt.dim("Re-provisioning practice disks for the next task..."))
+            task_env.reset_after_task(task)
+            time.sleep(1)
 
         if stop_requested:
             raise StopIteration

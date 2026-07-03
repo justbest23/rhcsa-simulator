@@ -33,6 +33,13 @@ class BaseTask(ABC):
     # positive-config tasks can pass on pre-existing/default state.
     has_setup = False
 
+    # Packages this task's fault injection / scenario needs to be fully real
+    # (e.g. httpd for an Apache troubleshooting fault). Session prep collects
+    # these and OFFERS to install what's missing (never installs silently). If
+    # the user declines, the task must degrade gracefully — reduced scenario,
+    # fabricated log evidence, or descriptive-only.
+    required_packages = []
+
     def __init__(self, id, category, difficulty, points):
         self.id = id
         self.category = category

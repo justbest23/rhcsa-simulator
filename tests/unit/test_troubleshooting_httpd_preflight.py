@@ -1,14 +1,15 @@
 """
-Tests for the httpd preflight added to the httpd-related troubleshooting fault
-tasks (issue #37): on a minimal RHEL/Rocky install httpd isn't present, so
-injecting the fault (wrong SELinux context, blocked firewall port, disabled
-service, ...) silently did nothing observable — the candidate never saw the
-symptom. tasks.troubleshooting._ensure_httpd_installed/_ensure_httpd_running
-now install/start httpd on demand before the fault is applied, and
-_restore_httpd_setup reverts exactly what was changed.
+httpd-dependent troubleshooting faults must NEVER install packages themselves.
+
+Packages are offered (Y/n) at session prep via preflight.offer_task_packages;
+tasks only declare required_packages. When httpd is absent at inject time:
+
+  * SELinux faults still inject (the misconfiguration is real) and plant the
+    audit-log evidence a real denial would have produced (_seed_avc_denial),
+    so `ausearch -m AVC | audit2why` still leads to the root cause.
+  * Service/firewall faults (which need a real httpd to run) skip cleanly.
 """
 
-import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -19,200 +20,115 @@ pytestmark = pytest.mark.unit
 
 
 class FakeSystem:
-    """Minimal stand-in for rpm/dnf/systemctl state, driven by subprocess.run."""
+    """Stand-in for rpm/systemctl/chcon/setsebool state, driven by ts._run."""
 
-    def __init__(self, httpd_installed=False, httpd_active=False,
-                 httpd_enabled=False, install_should_fail=False):
+    def __init__(self, httpd_installed=False):
         self.httpd_installed = httpd_installed
-        self.httpd_active = httpd_active
-        self.httpd_enabled = httpd_enabled
-        self.install_should_fail = install_should_fail
         self.calls = []
 
     def run(self, cmd, **kwargs):
         self.calls.append(list(cmd))
         prog = cmd[0]
-
         if prog == 'rpm' and cmd[1:3] == ['-q', 'httpd']:
             return SimpleNamespace(returncode=0 if self.httpd_installed else 1,
-                                    stdout='', stderr='')
-
-        if prog == 'dnf' and 'install' in cmd:
-            if self.install_should_fail:
-                return SimpleNamespace(returncode=1, stdout='', stderr='no repo access')
-            self.httpd_installed = True
-            return SimpleNamespace(returncode=0, stdout='', stderr='')
-
-        if prog == 'dnf' and 'remove' in cmd:
-            self.httpd_installed = False
-            self.httpd_active = False
-            self.httpd_enabled = False
-            return SimpleNamespace(returncode=0, stdout='', stderr='')
-
-        if prog == 'systemctl':
-            sub = cmd[1]
-            if sub == 'cat':
-                return SimpleNamespace(returncode=0 if self.httpd_installed else 1,
-                                        stdout='', stderr='')
-            if sub == 'is-active':
-                return SimpleNamespace(
-                    returncode=0 if self.httpd_active else 3,
-                    stdout='active' if self.httpd_active else 'inactive', stderr='')
-            if sub == 'is-enabled':
-                return SimpleNamespace(
-                    returncode=0 if self.httpd_enabled else 1,
-                    stdout='enabled' if self.httpd_enabled else 'disabled', stderr='')
-            if sub == 'enable':
-                self.httpd_enabled = True
-                return SimpleNamespace(returncode=0, stdout='', stderr='')
-            if sub == 'disable':
-                self.httpd_enabled = False
-                return SimpleNamespace(returncode=0, stdout='', stderr='')
-            if sub == 'start':
-                self.httpd_active = True
-                return SimpleNamespace(returncode=0, stdout='', stderr='')
-            if sub == 'stop':
-                self.httpd_active = False
-                return SimpleNamespace(returncode=0, stdout='', stderr='')
-
+                                   stdout='', stderr='')
+        if prog == 'getsebool':
+            return SimpleNamespace(returncode=0,
+                                   stdout='httpd_can_network_connect --> on',
+                                   stderr='')
+        # chcon, setsebool, systemctl, curl, logger, firewall-cmd ... succeed
         return SimpleNamespace(returncode=0, stdout='', stderr='')
 
 
 @pytest.fixture
-def fake_state_file(tmp_path, monkeypatch):
-    monkeypatch.setattr(ts, 'FAULT_STATE_FILE', str(tmp_path / 'active_fault.json'))
+def no_httpd(monkeypatch, tmp_path):
+    fake = FakeSystem(httpd_installed=False)
+    monkeypatch.setattr(ts, '_run', lambda cmd, **kw: fake.run(cmd, **kw))
+    # State + audit files sandboxed
+    monkeypatch.setattr(ts, 'FAULT_STATE_FILE', str(tmp_path / 'fault.json'))
+    monkeypatch.setattr(ts, '_AUDIT_LOG', str(tmp_path / 'audit.log'))
+    return fake, tmp_path
 
 
-@pytest.fixture
-def fake_system(monkeypatch, fake_state_file):
-    system = FakeSystem()
-    monkeypatch.setattr(subprocess, 'run', system.run)
-    return system
+def _no_dnf(fake):
+    return not any(c and c[0] == 'dnf' for c in fake.calls)
 
 
-def dnf_calls(system, verb):
-    return [c for c in system.calls if c[:2] == ['dnf', '-y'] and verb in c]
+class TestNoSilentInstalls:
+    def test_httpd_present_is_read_only(self, no_httpd):
+        fake, _ = no_httpd
+        assert ts._httpd_present() is False
+        fake.httpd_installed = True
+        assert ts._httpd_present() is True
+        assert _no_dnf(fake), "presence check must never run dnf"
+
+    def test_tasks_declare_required_packages(self):
+        for cls in (ts.SELinuxHttpdContextFaultTask, ts.SELinuxHttpdBooleanFaultTask,
+                    ts.FirewallHttpBlockedFaultTask, ts.HttpdDisabledFaultTask):
+            assert 'httpd' in cls.required_packages
 
 
-class TestEnsureHttpdInstalled:
-    def test_installs_when_missing(self, fake_system):
-        fake_system.httpd_installed = False
-        assert ts._ensure_httpd_installed('task1') is True
-        assert fake_system.httpd_installed is True
-        assert dnf_calls(fake_system, 'install')
-
-    def test_records_restore_state_when_installed(self, fake_system):
-        ts._ensure_httpd_installed('task1')
-        state = ts.load_fault_state(ts._httpd_pkg_key('task1'))
-        assert state is not None
-        assert state['restore_info']['restore_type'] == 'pkg_remove'
-        assert state['restore_info']['pkg'] == 'httpd'
-
-    def test_noop_when_already_installed(self, fake_system):
-        fake_system.httpd_installed = True
-        assert ts._ensure_httpd_installed('task1') is True
-        assert not dnf_calls(fake_system, 'install')
-        assert ts.load_fault_state(ts._httpd_pkg_key('task1')) is None
-
-    def test_returns_false_when_install_fails(self, fake_system):
-        fake_system.httpd_installed = False
-        fake_system.install_should_fail = True
-        assert ts._ensure_httpd_installed('task1') is False
-
-
-class TestEnsureHttpdRunning:
-    def test_starts_and_enables_when_stopped(self, fake_system):
-        fake_system.httpd_installed = True
-        fake_system.httpd_active = False
-        fake_system.httpd_enabled = False
-        ts._ensure_httpd_running('task1')
-        assert fake_system.httpd_active is True
-        assert fake_system.httpd_enabled is True
-
-    def test_noop_when_already_running(self, fake_system):
-        fake_system.httpd_installed = True
-        fake_system.httpd_active = True
-        fake_system.httpd_enabled = True
-        ts._ensure_httpd_running('task1')
-        assert ts.load_fault_state(ts._httpd_svc_key('task1')) is None
-
-
-class TestRestoreHttpdSetup:
-    def test_uninstalls_and_stops_what_it_started(self, fake_system):
-        fake_system.httpd_installed = False
-        ts._ensure_httpd_installed('task1')
-        ts._ensure_httpd_running('task1')
-        assert fake_system.httpd_installed is True
-        assert fake_system.httpd_active is True
-
-        msgs = []
-        ts._restore_httpd_setup('task1', msgs)
-
-        assert fake_system.httpd_installed is False
-        assert msgs
-        assert ts.load_fault_state(ts._httpd_pkg_key('task1')) is None
-        assert ts.load_fault_state(ts._httpd_svc_key('task1')) is None
-
-    def test_noop_when_nothing_was_changed(self, fake_system):
-        fake_system.httpd_installed = True
-        fake_system.httpd_active = True
-        fake_system.httpd_enabled = True
-        ts._ensure_httpd_installed('task1')
-        ts._ensure_httpd_running('task1')
-
-        msgs = []
-        ts._restore_httpd_setup('task1', msgs)
-        assert msgs == []
-        assert fake_system.httpd_installed is True
-
-
-class TestHttpdDisabledFaultTaskWithMissingPackage:
-    """fault_service_httpd_001 previously assumed httpd was already installed;
-    on a minimal install its systemctl stop/disable calls were silent no-ops."""
-
-    def test_inject_installs_httpd_then_disables_it(self, fake_system):
-        fake_system.httpd_installed = False
-        task = ts.HttpdDisabledFaultTask()
-
+class TestSELinuxFaultsWithoutHttpd:
+    def test_context_fault_injects_and_seeds_avc(self, no_httpd):
+        fake, sandbox = no_httpd
+        task = ts.SELinuxHttpdContextFaultTask()
+        task.web_root = str(sandbox / 'www')
         ok, msg = task.inject_fault()
+        assert ok, msg
+        assert _no_dnf(fake), "inject_fault must never dnf install"
+        # Synthetic AVC evidence written for the candidate to find
+        log = sandbox / 'audit.log'
+        assert log.exists()
+        content = log.read_text()
+        assert 'type=AVC' in content and 'etc_t' in content and 'httpd' in content
 
-        assert ok is True
-        assert fake_system.httpd_installed is True
-        assert fake_system.httpd_active is False
-        assert fake_system.httpd_enabled is False
-
-    def test_restore_leaves_host_as_it_found_it(self, fake_system):
-        fake_system.httpd_installed = False
-        task = ts.HttpdDisabledFaultTask()
-        task.inject_fault()
-
-        ok, msg = task.restore_fault()
-
-        assert ok is True
-        assert fake_system.httpd_installed is False
-
-    def test_inject_fails_cleanly_when_httpd_cannot_be_installed(self, fake_system):
-        fake_system.httpd_installed = False
-        fake_system.install_should_fail = True
-        task = ts.HttpdDisabledFaultTask()
-
+    def test_boolean_fault_injects_and_seeds_avc(self, no_httpd):
+        fake, sandbox = no_httpd
+        task = ts.SELinuxHttpdBooleanFaultTask()
         ok, msg = task.inject_fault()
+        assert ok, msg
+        assert _no_dnf(fake)
+        content = (sandbox / 'audit.log').read_text()
+        assert 'name_connect' in content and 'httpd_t' in content
 
+    def test_real_httpd_means_no_synthetic_avc(self, no_httpd):
+        fake, sandbox = no_httpd
+        fake.httpd_installed = True
+        task = ts.SELinuxHttpdContextFaultTask()
+        task.web_root = str(sandbox / 'www')
+        ok, _ = task.inject_fault()
+        assert ok
+        # With a real httpd triggering a real denial, nothing is fabricated.
+        assert not (sandbox / 'audit.log').exists()
+        assert _no_dnf(fake)
+
+
+class TestServiceFaultsWithoutHttpd:
+    def test_firewall_fault_skips_cleanly(self, no_httpd):
+        fake, _ = no_httpd
+        ok, msg = ts.FirewallHttpBlockedFaultTask().inject_fault()
         assert ok is False
-        assert 'httpd' in msg.lower()
-        # No fault state should be recorded for a failed injection.
-        assert ts.load_fault_state(task.id) is None
+        assert 'not installed' in msg
+        assert _no_dnf(fake)
 
-    def test_inject_skips_install_when_httpd_already_present(self, fake_system):
-        fake_system.httpd_installed = True
-        fake_system.httpd_active = True
-        fake_system.httpd_enabled = True
+    def test_service_fault_skips_cleanly(self, no_httpd):
+        fake, _ = no_httpd
         task = ts.HttpdDisabledFaultTask()
-
+        task.generate()
         ok, msg = task.inject_fault()
+        assert ok is False
+        assert 'not installed' in msg
+        assert _no_dnf(fake)
 
-        assert ok is True
-        assert not dnf_calls(fake_system, 'install')
-        # Original was active+enabled, so restore should bring it back.
-        assert task._was_active is True
-        assert task._was_enabled is True
+
+class TestSeedAvcHelper:
+    def test_seed_appends_parseable_record(self, no_httpd):
+        fake, sandbox = no_httpd
+        ts._seed_avc_denial('{ read } for pid=1 comm="httpd" tclass=file',
+                            'SELinux is preventing httpd ...')
+        line = (sandbox / 'audit.log').read_text().strip()
+        assert line.startswith('type=AVC msg=audit(')
+        # timestamp:serial framing intact
+        assert '): avc:  denied  ' in line
+        # journal mirror attempted via logger
+        assert any(c and c[0] == 'logger' for c in fake.calls)

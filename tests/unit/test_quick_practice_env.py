@@ -1,12 +1,11 @@
 """
-Quick-practice must mutate the machine like exam/practice/adaptive modes do.
+Quick-practice environment lifecycle.
 
-Regression guard: run_quick_practice() once generated + validated tasks without
-injecting faults or establishing negative preconditions, so troubleshooting
-tasks had nothing to fix and positive-config tasks passed with no work done. It
-must now drive the same core.task_env lifecycle:
+Quick practice must mutate the machine like exam/practice/adaptive modes do,
+with the session-level teardown model: system changes are reverted ONCE at the
+end of the session (finish, quit, or error) — never between tasks:
 
-    session_reset  ->  setup_task  ->  (validate)  ->  teardown_task  ->  reset_after_task
+    prepare_session  ->  setup_task  ->  (validate)  ->  ...  ->  session_teardown
 """
 
 import builtins
@@ -63,11 +62,12 @@ class _FakeDB:
 def calls(monkeypatch):
     seq = []
 
-    monkeypatch.setattr(task_env, "session_reset", lambda *a, **k: seq.append(("session_reset",)))
+    monkeypatch.setattr(task_env, "prepare_session",
+                        lambda tasks, *a, **k: seq.append(("prepare_session",)))
     monkeypatch.setattr(task_env, "setup_task",
                         lambda task, *a, **k: (seq.append(("setup_task", task.id)) or {"setup": True}))
-    monkeypatch.setattr(task_env, "teardown_task",
-                        lambda task, st, *a, **k: seq.append(("teardown_task", task.id)))
+    monkeypatch.setattr(task_env, "session_teardown",
+                        lambda tasks, *a, **k: seq.append(("session_teardown",)))
     monkeypatch.setattr(task_env, "reset_after_task",
                         lambda task, *a, **k: seq.append(("reset_after_task", task.id)))
 
@@ -79,6 +79,7 @@ def calls(monkeypatch):
     monkeypatch.setattr(RDB, "get_results_db", lambda *a, **k: _FakeDB())
     monkeypatch.setattr(fmt, "clear_screen", lambda *a, **k: None)
     monkeypatch.setattr(H, "confirm_action", lambda *a, **k: True)
+    monkeypatch.setattr(H, "select_task_count", lambda *a, **k: 4)
     monkeypatch.setattr(builtins, "input", lambda *a, **k: "")
     return seq
 
@@ -87,19 +88,42 @@ def _names(seq):
     return [c[0] for c in seq]
 
 
-def test_quick_practice_runs_full_env_lifecycle(calls):
+def test_quick_practice_runs_session_lifecycle(calls):
     R.run_quick_practice("all")
     names = _names(calls)
 
-    assert names[0] == "session_reset", "clean env must be prepared up front"
+    assert names[0] == "prepare_session", "clean env + package offer up front"
     assert "setup_task" in names, "the machine must be mutated per task"
     assert names.index("setup_task") < names.index("validate"), "setup before the candidate validates"
-    assert names.index("validate") < names.index("teardown_task"), "restore after validation"
+    assert names[-1] == "session_teardown", "revert happens once, at session end"
+
+
+def test_no_per_task_teardown(calls):
+    # System changes must persist across the session; only the end-of-session
+    # teardown reverts them (per-task revert was removed by design).
+    R.run_quick_practice("all")
+    assert _names(calls).count("session_teardown") == 1
+    assert "teardown_task" not in _names(calls)
+    # Non-disk task: no disk re-provisioning either.
+    assert "reset_after_task" not in _names(calls)
+
+
+def test_disk_tasks_reprovision_between_tasks(calls, monkeypatch):
+    class _DiskTask(_FakeTask):
+        id = "disk_task_001"
+        disk_slots = 1
+
+    monkeypatch.setattr(TaskRegistry, "get_exam_tasks",
+                        staticmethod(lambda n: [_DiskTask(), _FakeTask()]))
+    R.run_quick_practice("all")
+    names = _names(calls)
+    # Disk wiped after the disk task (another task follows), before session end.
     assert "reset_after_task" in names
+    assert names.index("reset_after_task") < names.index("session_teardown")
 
 
-def test_teardown_runs_even_when_validation_raises(calls, monkeypatch):
-    # A failure mid-task must not leave injected faults / preconditions behind.
+def test_session_teardown_runs_even_when_validation_raises(calls, monkeypatch):
+    # A failure mid-session must not leave injected faults / preconditions behind.
     class _Boom:
         def validate_task(self, task):
             raise RuntimeError("boom")
@@ -109,4 +133,4 @@ def test_teardown_runs_even_when_validation_raises(calls, monkeypatch):
         R.run_quick_practice("all")
 
     names = _names(calls)
-    assert "setup_task" in names and "teardown_task" in names, "teardown must run on error"
+    assert "setup_task" in names and "session_teardown" in names, "teardown must run on error"

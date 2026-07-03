@@ -1,9 +1,13 @@
 """
-Session teardown on every exit path.
+Session teardown / environment-persistence contract.
 
-The machine must be returned to a clean state whenever a session ends — finished,
-quit, or Ctrl-C — not just on a fully-graded exam. Covers core.task_env
-.session_teardown (training modes) and ExamSession.teardown (exam mode).
+- Training sessions (quick/practice/adaptive) revert everything ONCE at session
+  end via core.task_env.session_teardown.
+- Exam mode deliberately performs NO automatic teardown — the environment stays
+  in place after grading (and on early quit) so the candidate can review scores
+  and file disputes against live state.
+- The next session start (task_env.session_reset) restores anything a previous
+  session left behind.
 """
 
 import pytest
@@ -74,29 +78,44 @@ class TestSessionTeardown:
         assert ("session_reset",) in sink
 
 
-class TestExamTeardown:
-    def test_idempotent(self, monkeypatch):
+class TestSessionResetRestoresPreviousSession:
+    def test_session_reset_replays_leftover_fault_records(self, monkeypatch):
+        # Exams leave their environment in place; the NEXT session start must
+        # restore those faults before cleaning.
         calls = []
-        monkeypatch.setattr(exam_mod.ExamSession, "_restore_exam_faults",
-                            lambda self: calls.append("restore"))
-        monkeypatch.setattr(task_env, "session_reset",
-                            lambda *a, **k: calls.append("reset"))
+        import tasks.troubleshooting as ts
+        monkeypatch.setattr(ts, "restore_any_active_fault",
+                            lambda: (calls.append("restore_faults") or (True, "ok")))
+        from utils import helpers
+        monkeypatch.setattr(helpers, "reset_practice_loops",
+                            lambda *a, **k: calls.append("loops"))
+        from core import lab_cleanup
+        monkeypatch.setattr(lab_cleanup, "clean", lambda **k: calls.append("lab") or [])
 
-        s = exam_mod.ExamSession(task_count=1)
-        s.teardown()
-        s.teardown()  # second call must be a no-op
-        assert calls == ["restore", "reset"]
+        task_env.session_reset(verbose=False)
+        assert calls[0] == "restore_faults", "restore previous session's faults FIRST"
+        assert "loops" in calls and "lab" in calls
 
-    def test_run_exam_mode_tears_down_on_early_quit(self, monkeypatch):
-        # If the candidate Ctrl-C's the "Press Enter" prompt before validating,
-        # the outer finally must still restore + clean.
-        torn = []
+
+class TestExamKeepsEnvironment:
+    def test_exam_has_no_auto_teardown(self):
+        # The old auto-teardown API must be gone — cleanup is only via
+        # session_reset (next session) or the menu's Reset Machine.
+        assert not hasattr(exam_mod.ExamSession, "teardown")
+        assert not hasattr(exam_mod.ExamSession, "_restore_exam_faults")
+
+    def test_run_exam_mode_does_not_clean_on_early_quit(self, monkeypatch):
+        # Ctrl-C at the "Press Enter" prompt must leave the environment as-is
+        # (kept for review/disputes) — nothing may revert or reset here.
+        touched = []
         monkeypatch.setattr(exam_mod, "_select_exam_task_count", lambda: 1)
         monkeypatch.setattr(exam_mod, "_select_reboot_simulation", lambda: False)
         monkeypatch.setattr(exam_mod.ExamSession, "start",
                             lambda self: setattr(self, "tasks", [object()]))
-        monkeypatch.setattr(exam_mod.ExamSession, "teardown",
-                            lambda self: torn.append(True))
+        monkeypatch.setattr(task_env, "session_reset",
+                            lambda *a, **k: touched.append("session_reset"))
+        monkeypatch.setattr(task_env, "session_teardown",
+                            lambda *a, **k: touched.append("session_teardown"))
 
         def _interrupt(*a, **k):
             raise KeyboardInterrupt()
@@ -104,4 +123,4 @@ class TestExamTeardown:
 
         with pytest.raises(KeyboardInterrupt):
             exam_mod.run_exam_mode()
-        assert torn == [True], "teardown must run even when the exam is aborted"
+        assert touched == [], "exam exit must not clean the environment"

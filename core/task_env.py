@@ -26,6 +26,14 @@ def session_reset(verbose=True):
     leftovers — both operations no-op cleanly.
     """
     from utils import helpers
+    # First restore any faults/preconditions still active from a previous
+    # session — exams deliberately leave the environment in place for review
+    # and disputes, so the NEXT session is where it gets undone.
+    try:
+        from tasks.troubleshooting import restore_any_active_fault
+        restore_any_active_fault()
+    except Exception:
+        pass
     try:
         helpers.reset_practice_loops()
     except Exception:
@@ -41,6 +49,18 @@ def session_reset(verbose=True):
     return done
 
 
+def prepare_session(tasks, verbose=True):
+    """Start-of-session prep shared by the training modes: reset the box to a
+    clean state, then offer to install any packages the drawn tasks rely on
+    (consent-gated — nothing installs silently)."""
+    session_reset(verbose=verbose)
+    try:
+        from core import preflight
+        preflight.offer_task_packages(tasks)
+    except Exception:
+        pass
+
+
 def setup_task(task, verbose=True):
     """Change the system for one task before the candidate works on it.
 
@@ -48,6 +68,9 @@ def setup_task(task, verbose=True):
     setup_environment() (establish a negative precondition so a positive-config
     task can't pass on default state) — the same calls exam.py makes. Returns a
     small state dict for teardown_task() to reverse.
+
+    Console output stays GENERIC: the injection/setup message spells out
+    exactly what was broken (i.e. the answer), so it goes to the log only.
     """
     state = {'fault': False, 'setup': False}
 
@@ -55,23 +78,27 @@ def setup_task(task, verbose=True):
         try:
             ok, msg = task.inject_fault()
             state['fault'] = ok
+            logger.info("fault %s: %s: %s", "armed" if ok else "skipped", task.id, msg)
             if verbose:
-                print(fmt.success(f"  Fault active: {msg}") if ok
-                      else fmt.warning(f"  Fault injection failed: {msg} (descriptive mode only)"))
+                print(fmt.dim("  Scenario prepared — the described symptom is live.") if ok
+                      else fmt.warning("  Scenario could not be set up (details in the log) — task is descriptive only."))
         except Exception as e:
+            logger.warning("fault error: %s: %s", getattr(task, 'id', '?'), e)
             if verbose:
-                print(fmt.warning(f"  Fault injection error: {e}"))
+                print(fmt.warning("  Scenario setup error (details in the log)."))
 
     if getattr(task, 'has_setup', False):
         try:
             ok, msg = task.setup_environment()
             state['setup'] = ok
             # A False result just means no precondition was needed; stay quiet.
+            logger.info("precondition %s: %s: %s", "set" if ok else "not needed", task.id, msg)
             if verbose and ok:
-                print(fmt.dim(f"  Precondition set: {msg}"))
+                print(fmt.dim("  Starting state prepared."))
         except Exception as e:
+            logger.warning("setup error: %s: %s", getattr(task, 'id', '?'), e)
             if verbose:
-                print(fmt.warning(f"  Setup error: {e}"))
+                print(fmt.warning("  Starting-state setup error (details in the log)."))
 
     # Sanity check: with setup done and nothing done by the candidate yet, the
     # task must NOT already be passing. If it is, the fault/precondition no-op'd

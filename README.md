@@ -24,13 +24,14 @@ cd rhcsa-simulator
 rhcsa-simulator       # launch (must be root — validation reads real state)
 ```
 
-At the menu, press **E** for a full Mock Exam or **Q** for a 5-task quick round.
+At the menu, press **E** for a full Mock Exam or **Q** for a quick practice round.
 
 The simulator **auto-creates the practice disks it needs** (loop devices, plus
 any spare disk like `/dev/sda`) and **sets up each task's starting state** at
 exam start — so a "kill the apache processes" task actually has processes
-running, and an "extend the logical volume" task actually has a volume — then
-tears it all down when the exam ends.
+running, and an "extend the logical volume" task actually has a volume. After
+the exam the environment is kept for review/disputes; **Setup → Reset Machine**
+(or the next session start) cleans everything up.
 
 **Typical loop:** read a task → do it on the system in another terminal → return
 and press Enter to validate → review per-check feedback and score.
@@ -78,14 +79,15 @@ SELinux).
 The simulator itself needs nothing beyond the Python standard library. But a
 **minimal RHEL/Rocky/Alma install doesn't ship `httpd`, `vsftpd`, or several
 other services** that specific tasks (mostly Domain 7 Troubleshooting and
-Domain 6 Services) use to build a realistic scenario. If a package is
-missing, the task's fault-injection step still reports "active" — its own
-`systemctl`/`chcon`/etc. calls just no-op — so the scenario looks like
-nothing happened when you go to work on it in a second terminal.
+Domain 6 Services) use to build a realistic scenario.
 
-Every launch of `rhcsa-simulator` (any mode) runs a **read-only preflight
-check** (`rpm -q`) and prints a warning listing anything missing, along with
-a ready-to-run `dnf install` command. Nothing is installed automatically.
+Every launch runs a **read-only preflight check** (`rpm -q`) and warns about
+anything missing. When a session's drawn tasks need a missing package, the
+simulator **asks (Y/n) whether to install it** at session start — nothing is
+ever installed without your consent. If you decline, the affected scenarios
+degrade gracefully: SELinux troubleshooting tasks plant the same audit-log
+evidence a real denial would have produced (so `ausearch | audit2why` still
+leads you to the root cause), and service-based scenarios are skipped.
 
 | Package | Used by |
 |---|---|
@@ -147,7 +149,7 @@ sudo rhcsa-simulator    # interactive menu
 
 | Key | Mode | What it does |
 |---|---|---|
-| `Q` | **Quick Practice** | 5 random tasks, fast feedback |
+| `Q` | **Quick Practice** | Short session (you pick 4-20 tasks), fast feedback |
 | `E` | **Mock Exam** | Full timed exam (20–25 tasks) with setup + reboot-persistence simulation |
 | `1` | **Learn Mode** | Study by domain — concepts, commands, tips |
 | `2` | **Practice Mode** | One category at a time, with retry & progressive hints |
@@ -155,13 +157,13 @@ sudo rhcsa-simulator    # interactive menu
 | `4` | **Dashboard** | Stats, history, weak areas |
 | `5` | **Export Report** | Write a progress report to `data/` |
 | `6` | **Result History** | Drill into past exams (press `d` on a task to dispute a check) |
-| `S` | **Setup** | Practice disks, resets, remote NFS server, lab cleanup, DNF-history |
+| `S` | **Setup** | Practice disks, Reset Machine, remote NFS server, DNF-history |
 | `0` | Exit | |
 
 ### Command-line shortcuts
 
 ```bash
-rhcsa-simulator --quick [lvm]        # 5 random (or category) tasks
+rhcsa-simulator --quick [lvm]        # short practice round (pick 4-20 tasks)
 rhcsa-simulator --exam               # jump straight into a mock exam
 rhcsa-simulator --practice lvm       # practice a specific category
 rhcsa-simulator --learn              # study mode
@@ -201,7 +203,7 @@ so a code from an older build loads cleanly into a newer one. The raw SQLite DB
 under `data/` is **not** safe to copy across versions (its schema can change) —
 the code is the stable interchange format that insulates your progress. So
 before anything that wipes or migrates that DB — `git pull` to a new schema,
-`./install.sh`, a Full System Reset, a fresh VM, or deleting `data/` — export a
+`./install.sh`, a Reset Machine, a fresh VM, or deleting `data/` — export a
 code first, then import it afterward.
 
 > **Caveat:** SM-2 targeting is keyed by **category name**. If a version renames
@@ -220,24 +222,30 @@ collide. Loop images live in `/var/lib/rhcsa-simulator/loops/`.
 
 **Setup** also offers:
 
-- **System Reset** — remove practice artifacts (LVM, swap files, practice repos,
-  cron/at jobs, scripts) without touching SSH/network/users.
-- **Full System Reset** — strip the box back to a basic RHEL install: all
-  third-party DNF repos, Flatpak apps/remotes, lab files, practice users/groups,
-  practice disks/swap, scheduled jobs, autofs maps, tuned changes, and remote NFS
-  exports — unmounting every non-system mount first. **Preserves** the simulator,
-  your GitHub/SSH connectivity (`~/.config/gh`, `~/.ssh`, git config),
-  networking, firewall, SELinux, the OS, and all real accounts. Previews
-  everything and requires typing `RESET`.
+- **Reset Machine** — *the* single cleanup button. Restores any injected faults
+  and task starting-states to their originals, then strips every practice
+  artifact: lab files, practice disks & swap, third-party DNF repos, Flatpak
+  apps/remotes, scheduled jobs, autofs maps, tuned changes, practice
+  users/groups, and remote NFS exports — unmounting every non-system mount
+  first. **Preserves** the simulator, your GitHub/SSH connectivity
+  (`~/.config/gh`, `~/.ssh`, git config), networking, firewall, SELinux, the
+  OS, and all real accounts. Previews everything and requires typing `RESET`.
 - **Configure remote NFS server** — SSH into a RHEL box you control and provision
-  real, seeded NFS exports for the network-storage tasks (refreshed each exam,
-  torn down after).
-- **Clean lab leftover files** and **Populate Practice Environment** (DNF
-  history).
+  real, seeded NFS exports for the network-storage tasks (refreshed each exam).
+- **Populate Practice Environment** (DNF history).
 
-> Practice and Adaptive modes reset the box at session start and set up/tear down
-> each task's state per iteration, the same way the Mock Exam does. Adaptive mode
-> also lets you choose how many tasks to run.
+### When does the machine get cleaned?
+
+- **After a Mock Exam: never automatically.** The environment is deliberately
+  left exactly as you finished it, so you can compare your work against the
+  scores and file checker disputes with live evidence. Clean up explicitly with
+  **Setup → Reset Machine** — or just start the next session, which resets
+  everything first.
+- **Training sessions** (Quick/Practice/Adaptive) revert all system changes
+  **once, at the end of the session** (finish, quit, or Ctrl-C) — not between
+  tasks. Practice disks are the one exception: they're wiped between disk tasks
+  so the next one gets a clean device.
+- **Every session start** restores anything a previous session left behind.
 
 ---
 
@@ -262,8 +270,10 @@ Run `rhcsa-simulator --list-categories` for the live list and per-category count
 
 - **Read-only validation.** Work is graded with whitelisted, timeout-protected,
   read-only commands (`id`, `lsblk`, `systemctl is-active`, `getenforce`, …).
-  Only the exam's setup/teardown phase changes state, and it reverses what it
-  created.
+  Only session setup changes state (injecting faults, preparing starting
+  states); everything is reversed at training-session end, at next session
+  start, or via **Setup → Reset Machine** (see *When does the machine get
+  cleaned?* above).
 - **Scoring.** Each task has multiple checks with partial credit; default pass
   threshold is 70%. A full exam is 20–25 tasks over a 3-hour timer
   (configurable), followed by a reboot-persistence simulation for tasks that must
@@ -341,10 +351,9 @@ Set `ANTHROPIC_API_KEY` to enable line-by-line command analysis. See
 - **"must be run as root"** — launch with `sudo`.
 - **Storage tasks fail in a container** — loop devices/SELinux/systemd may be
   limited; use a real RHEL/Rocky/Alma VM.
-- **Messy state after a crash** — run **Setup → System Reset** (also restores any
-  practice "faults" still active).
-- **Want a truly clean box** — run **Setup → Full System Reset** (unmounts every
-  non-system mount first, clearing stale mounts/repos/flatpaks/users).
+- **Messy state after a crash / want a clean box** — run **Setup → Reset
+  Machine**. It restores active faults, unmounts every non-system mount, and
+  clears stale mounts/repos/flatpaks/practice users in one pass.
 - **Reinstall from scratch** — re-run `./install.sh --yes`.
 
 ## License
