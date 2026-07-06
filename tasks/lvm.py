@@ -8,6 +8,7 @@ from tasks.base import BaseTask
 from tasks.registry import TaskRegistry
 from core.validator import ValidationCheck, ValidationResult
 from validators.system_validators import validate_lv_exists, get_lv_size_mb
+from validators.safe_executor import execute_safe
 from utils.helpers import get_practice_device, get_all_practice_devices, get_practice_lv, get_practice_vg
 
 
@@ -77,24 +78,32 @@ class VerifyLVExistsTask(BaseTask):
             "LV size may vary slightly due to extent alignment",
             "Path format: /dev/vg_name/lv_name or /dev/mapper/vg_name-lv_name",
         ]
+        self.device = None
         self.vg_name = None
         self.lv_name = None
         self.lv_size_mb = None
 
     def generate(self, **params):
+        # Name the target disk in the question — the candidate builds the VG
+        # from scratch here, and without a named device they'd have to guess
+        # which practice disk is safe to consume (see also exam device pool).
+        self.device = params.get('device') or get_practice_device() or '/dev/loop0'
         self.vg_name = params.get('vg_name', f'vg_exam{random.randint(1,99)}')
         self.lv_name = params.get('lv_name', f'lv_data{random.randint(1,99)}')
         self.lv_size_mb = params.get('size', random.choice([300, 350, 400]))
 
         self.description = (
             f"Create a {self.lv_size_mb}MB logical volume named '{self.lv_name}' "
-            f"in volume group '{self.vg_name}'. Create the VG first if it does not exist."
+            f"in volume group '{self.vg_name}'. Create the VG first if it does "
+            f"not exist, using the disk {self.device}."
         )
 
         self.hints = [
+            f"pvcreate {self.device}",
+            f"vgcreate {self.vg_name} {self.device}",
             "lvcreate creates a logical volume in an existing VG",
             "Use -L for size in MB and -n for the LV name",
-            "Verify with: lvs",
+            "Verify with: lvs and pvs",
         ]
 
         return self
@@ -110,12 +119,30 @@ class VerifyLVExistsTask(BaseTask):
             actual_size = get_lv_size_mb(self.vg_name, self.lv_name)
             tolerance = self.lv_size_mb * 0.05
             if actual_size and abs(actual_size - self.lv_size_mb) <= tolerance:
-                checks.append(ValidationCheck("lv_size", True, 5, f"Size correct: ~{actual_size}MB"))
-                total_points += 5
+                checks.append(ValidationCheck("lv_size", True, 3, f"Size correct: ~{actual_size}MB"))
+                total_points += 3
             else:
-                checks.append(ValidationCheck("lv_size", False, 0, f"Size incorrect: {actual_size}MB (expected {self.lv_size_mb}MB)", max_points=5))
+                checks.append(ValidationCheck("lv_size", False, 0, f"Size incorrect: {actual_size}MB (expected {self.lv_size_mb}MB)", max_points=3))
         else:
             checks.append(ValidationCheck("lv_exists", False, 0, f"Logical volume not found", max_points=5))
+
+        # VG built on the disk the question assigned (a partition on it counts)
+        result = execute_safe(['pvs', '--noheadings', '-o', 'pv_name,vg_name'])
+        on_device = False
+        if result.success:
+            for line in result.stdout.splitlines():
+                parts = line.split()
+                if (len(parts) >= 2 and parts[1] == self.vg_name
+                        and parts[0].startswith(self.device)):
+                    on_device = True
+        if on_device:
+            checks.append(ValidationCheck("vg_on_assigned_disk", True, 2,
+                          f"VG uses the assigned disk {self.device}"))
+            total_points += 2
+        else:
+            checks.append(ValidationCheck("vg_on_assigned_disk", False, 0,
+                          f"VG does not use the assigned disk {self.device}",
+                          max_points=2))
 
         passed = total_points >= (self.points * 0.7)
         return ValidationResult(self.id, passed, total_points, self.points, checks)

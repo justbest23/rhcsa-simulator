@@ -58,20 +58,21 @@ class ExamSession:
             print("Exam cancelled.")
             return None
 
-        # Build the practice device pool first (auto-creates >=3 loop devices,
-        # plus any spare non-system disk like /dev/sda) so the generator can cap
-        # whole-disk tasks to the number of devices we can actually hand out.
         from utils import helpers
         from core import task_env
         # Start from a clean box: restore anything a previous session left in
         # place (exams keep their environment for review/disputes), wipe orphan
         # loop devices, and remove leftover task artifacts.
         task_env.session_reset()
+        # Whole-disk tasks are capped by how many practice devices CAN exist,
+        # not by the 3 loops a fresh session starts with — loop devices are
+        # created on demand in _provision_devices(), so the real bound is free
+        # disk space plus any spare non-system real disk (e.g. /dev/sda).
         try:
-            pool = helpers.build_device_pool()
+            disk_budget = (helpers.loop_device_capacity()
+                           + len(helpers.get_spare_real_disks()))
         except Exception:
-            pool = []
-        disk_budget = len(pool) if pool else None
+            disk_budget = None
 
         # Generate domain-balanced tasks
         print("\nGenerating exam tasks...")
@@ -120,6 +121,12 @@ class ExamSession:
             end_time = self.start_time + timedelta(minutes=self.duration_minutes)
             print(f"\n{fmt.warning('Timer started!')} You have {self.duration_minutes} minutes.")
             print(f"Exam ends at: {end_time.strftime('%H:%M:%S')}")
+            # Uptime-anchored countdown for the candidate's other terminal —
+            # exam tasks change the system clock, so `date` can't be trusted.
+            from core import exam_clock
+            if exam_clock.start(self.duration_minutes):
+                print(fmt.dim("Check the time left any time (even after clock/"
+                              "timezone tasks): exam-time-left"))
         else:
             print(f"\n{fmt.info('Exam started!')} (No time limit)")
 
@@ -307,6 +314,8 @@ class ExamSession:
         # Stop timer
         if self.timer:
             self.timer.stop()
+        from core import exam_clock
+        exam_clock.stop()
 
         print()
         fmt.print_header("VALIDATING YOUR WORK")

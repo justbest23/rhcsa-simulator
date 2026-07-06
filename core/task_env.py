@@ -38,6 +38,12 @@ def session_reset(verbose=True):
         helpers.reset_practice_loops()
     except Exception:
         pass
+    # Clear a stale exam countdown left by an interrupted exam.
+    try:
+        from core import exam_clock
+        exam_clock.stop()
+    except Exception:
+        pass
     done = []
     try:
         from core import lab_cleanup
