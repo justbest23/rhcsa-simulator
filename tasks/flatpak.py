@@ -13,6 +13,11 @@ from validators.safe_executor import execute_safe
 
 logger = logging.getLogger(__name__)
 
+# The real exam always provides the remote's URL in the question — knowing
+# flathub.org by heart is not part of the objective, so every task description
+# that may require adding a remote must include it.
+FLATHUB_URL = 'https://flathub.org/repo/flathub.flatpakrepo'
+
 
 @TaskRegistry.register("flatpak")
 class InstallFlatpakRuntimeTask(BaseTask):
@@ -282,6 +287,7 @@ class InstallFlatpakAppTask(BaseTask):
         self.app_id = None
         self.app_name = None
         self.remote_name = None
+        self.remote_url = None
 
     def generate(self, **params):
         """Generate Flatpak application installation task."""
@@ -322,22 +328,24 @@ class InstallFlatpakAppTask(BaseTask):
         self.app_id = app['app_id']
         self.app_name = app['app_name']
         self.remote_name = app['remote']
+        self.remote_url = app.get('remote_url', FLATHUB_URL)
 
         self.description = (
             f"Install a Flatpak application:\n"
             f"  - Application: {self.app_name}\n"
             f"  - Application ID: {self.app_id}\n"
             f"  - Remote: {self.remote_name}\n"
-            f"  - Ensure the Flatpak remote is configured first\n"
+            f"  - Ensure the Flatpak remote is configured first; if it is\n"
+            f"    missing, add it from: {self.remote_url}\n"
             f"  - Verify the application is installed"
         )
 
         self.hints = [
+            f"Add the remote if needed: flatpak remote-add --if-not-exists {self.remote_name} {self.remote_url}",
             f"Install: flatpak install {self.remote_name} {self.app_id} -y",
             f"Verify: flatpak list | grep {self.app_id}",
             f"Info: flatpak info {self.app_id}",
             f"Search: flatpak search {self.app_name.split()[0]}",
-            "You may need to add the remote first: flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo",
         ]
 
         return self
