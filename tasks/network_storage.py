@@ -350,23 +350,29 @@ class ConfigureAutofsTask(BaseTask):
         self.autofs_mount = params.get('mount', '/data')
         self.map_name = params.get('map', 'auto.data')
 
+        # Red Hat's wording is explicit about direct vs indirect ("...so that
+        # /X is automatically mounted" = direct; "...so that /X is an automount
+        # directory" = indirect). Mirror that: here the mount point ITSELF is
+        # the target, so this is a direct map.
         self.description = (
-            f"Configure autofs for automatic NFS mounting:\n"
+            f"Configure autofs so that {self.autofs_mount} is automatically "
+            f"mounted from an NFS export:\n"
             f"  - NFS Server: {self.nfs_server}\n"
             f"  - NFS Export: {self.nfs_export}\n"
-            f"  - Auto-mount point: {self.autofs_mount}\n"
-            f"  - Mount should appear when accessed\n"
-            f"  - Mount should unmount after timeout\n"
+            f"  - {self.autofs_mount} itself is the mount target (a direct map, "
+            f"not a directory of automounts)\n"
+            f"  - The export must mount on access and unmount after the idle timeout\n"
             f"  - autofs service must be running"
         )
 
         self.hints = [
             "Install autofs: dnf install autofs -y",
-            f"Add to /etc/auto.master: {self.autofs_mount} /etc/{self.map_name}",
-            f"Create /etc/{self.map_name} with: * -rw,sync {self.nfs_server}:{self.nfs_export}/&",
-            "Or for direct map: /etc/auto.master: /- /etc/auto.direct",
+            f"Direct maps are declared with /- ; add to /etc/auto.master: /- /etc/{self.map_name}",
+            f"Create /etc/{self.map_name} with: {self.autofs_mount} -rw {self.nfs_server}:{self.nfs_export}",
+            "An indirect-style master entry (mount-point + map) can never match "
+            "an absolute key like this one",
             "Start service: systemctl enable --now autofs",
-            f"Test: cd {self.autofs_mount} && ls"
+            f"Test: ls {self.autofs_mount}"
         ]
 
         return self
@@ -414,23 +420,56 @@ class ConfigureAutofsTask(BaseTask):
                 message="autofs service is not enabled"
             ))
 
-        # Check 3: auto.master has entry (5 points)
-        if validate_file_contains('/etc/auto.master', self.autofs_mount):
+        # Check 3: direct map declared (5 points). The question asks for a
+        # direct map: a /- line in the master map plus the absolute mount
+        # point as the key in a map file. An indirect-style master entry
+        # naming the mount point reads plausibly but can never match an
+        # absolute key, so it only earns partial credit.
+        import os
+        import glob
+
+        def _noncomment_lines(path):
+            try:
+                with open(path) as f:
+                    return [ln.strip() for ln in f
+                            if ln.strip() and not ln.strip().startswith('#')]
+            except OSError:
+                return []
+
+        master_lines = _noncomment_lines('/etc/auto.master')
+        for extra in sorted(glob.glob('/etc/auto.master.d/*')):
+            if os.path.isfile(extra):
+                master_lines += _noncomment_lines(extra)
+
+        has_direct_decl = any(ln.split()[0] == '/-' for ln in master_lines)
+        key_in_map = any(
+            self.autofs_mount in ln
+            for path in glob.glob('/etc/auto.*') if os.path.isfile(path)
+            and os.path.basename(path) != 'auto.master'
+            for ln in _noncomment_lines(path)
+        )
+        indirect_style = any(ln.split()[0] == self.autofs_mount
+                             for ln in master_lines)
+
+        if has_direct_decl and key_in_map:
             checks.append(ValidationCheck(
                 name="master_entry",
                 passed=True,
                 points=5,
-                message="auto.master has mount point entry"
+                message=f"Direct map declared (/-) with key {self.autofs_mount}"
             ))
             total_points += 5
-        elif validate_file_contains('/etc/auto.master.d/', self.autofs_mount):
+        elif indirect_style:
             checks.append(ValidationCheck(
                 name="master_entry",
-                passed=True,
-                points=5,
-                message="auto.master.d has mount point entry"
+                passed=False,
+                points=2,
+                max_points=5,
+                message=f"Indirect-style master entry found — {self.autofs_mount} "
+                        f"itself is the mount target, so declare a direct map "
+                        f"(/- /etc/{self.map_name}) with {self.autofs_mount} as the key"
             ))
-            total_points += 5
+            total_points += 2
         else:
             checks.append(ValidationCheck(
                 name="master_entry",
@@ -509,11 +548,14 @@ class AutofsHomeDirectoriesTask(BaseTask):
             self.home_export = params.get('export', '/home/guests')
 
         self.description = (
-            f"Configure autofs for user home directories:\n"
+            f"Configure autofs so that /home/guests is an automount directory "
+            f"for user home directories:\n"
             f"  - NFS Server: {self.nfs_server}\n"
             f"  - Export base: {self.home_export}\n"
-            f"  - Configure /home/guests to auto-mount user homes\n"
-            f"  - Use wildcard mapping so /home/guests/<user> mounts automatically\n"
+            f"  - /home/guests/<user> must auto-mount from "
+            f"{self.nfs_server}:{self.home_export}/<user>\n"
+            f"  - Subdirectories appear on demand (an indirect map with a "
+            f"wildcard key)\n"
             f"  - Service must be running and enabled"
         )
 
