@@ -19,6 +19,17 @@ logger = logging.getLogger(__name__)
 # on, so a "make NTP work" task would otherwise pass without the candidate doing
 # anything. These helpers break that default state so real work is required.
 
+def _snapshot_chrony_conf():
+    """Return the current /etc/chrony.conf content, or None if unreadable.
+    Stored in the fault state so teardown puts the file back exactly as it
+    was before the candidate edited it."""
+    try:
+        with open('/etc/chrony.conf') as f:
+            return f.read()
+    except OSError:
+        return None
+
+
 def _inject_time_sync_fault(task_id):
     """Stop/disable chronyd and turn NTP off, saving prior state for restore."""
     from tasks.troubleshooting import save_fault_state, _run
@@ -38,6 +49,7 @@ def _inject_time_sync_fault(task_id):
         'chronyd_was_active': was_active,
         'chronyd_was_enabled': was_enabled,
         'ntp_was_on': ntp_was_on,
+        'chrony_conf': _snapshot_chrony_conf(),
     }
     save_fault_state(task_id, info)
     return info, "Stopped/disabled chronyd and turned NTP off"
@@ -162,7 +174,7 @@ class ConfigureChronydTask(BaseTask):
 
         self.hints = [
             f"Add to /etc/chrony.conf: server {self.ntp_server} iburst",
-            "Or: pool {server} iburst",
+            f"Or: pool {self.ntp_server} iburst",
             "Restart service: systemctl restart chronyd",
             "Enable service: systemctl enable chronyd",
             "Check sync: chronyc sources",
@@ -389,17 +401,25 @@ class SetSystemDateTask(BaseTask):
         from tasks.troubleshooting import save_fault_state
         # CLOCK_MONOTONIC is unaffected by the very clock changes this task asks
         # the candidate to make, so it's used at validate() time to measure how
-        # much real time has passed since the clock was set (see time_set_001).
-        save_fault_state(self.id, {'service': 'chronyd', 'injected_monotonic': time.monotonic()})
+        # much real time has passed since the clock was set, and at teardown —
+        # together with the wall clock captured now, while it is still correct —
+        # to reconstruct the real time and reset the clock even with no network
+        # NTP available (see _restore_time_sync).
+        save_fault_state(self.id, {'service': 'chronyd',
+                                   'injected_monotonic': time.monotonic(),
+                                   'injected_wallclock': time.time()})
         return True, "NTP is active — disable it, then set the clock to the target time"
 
     def restore_fault(self):
-        import subprocess as _sp
-        _sp.run(['timedatectl', 'set-ntp', 'true'], capture_output=True)
-        _sp.run(['systemctl', 'enable', '--now', 'chronyd'], capture_output=True)
-        from tasks.troubleshooting import clear_fault_state
+        from tasks.troubleshooting import (load_fault_state, clear_fault_state,
+                                           _restore_time_sync)
+        state = load_fault_state(self.id) or {}
+        msgs = []
+        # Resets the clock to (captured wall clock + elapsed monotonic time),
+        # then re-enables NTP sync so a reachable server fine-corrects it.
+        _restore_time_sync(state.get('restore_info') or {}, msgs)
         clear_fault_state()
-        return True, "Re-enabled NTP sync"
+        return True, '; '.join(msgs) or "Re-enabled NTP sync"
 
     def validate(self):
         import datetime
@@ -462,6 +482,8 @@ class SetSystemDateTask(BaseTask):
 class ConfigureNTPPoolTask(BaseTask):
     """Configure multiple NTP servers/pools."""
 
+    has_fault_injection = True
+
     def __init__(self):
         super().__init__(
             id="time_pool_001",
@@ -470,6 +492,26 @@ class ConfigureNTPPoolTask(BaseTask):
             points=10
         )
         self.ntp_pools = None
+        self._fault_info = None
+
+    def inject_fault(self):
+        """Nothing to break — the candidate only adds pool lines. But snapshot
+        chrony.conf and the service state so teardown can put both back."""
+        from tasks.troubleshooting import save_fault_state, _run
+        act = _run(['systemctl', 'is-active', 'chronyd'])
+        en = _run(['systemctl', 'is-enabled', 'chronyd'])
+        ntp = _run(['timedatectl', 'show', '--property=NTP'])
+        self._fault_info = {
+            'chronyd_was_active': act.stdout.strip() == 'active',
+            'chronyd_was_enabled': 'enabled' in (en.stdout or ''),
+            'ntp_was_on': 'yes' in (ntp.stdout or '').lower(),
+            'chrony_conf': _snapshot_chrony_conf(),
+        }
+        save_fault_state(self.id, self._fault_info)
+        return True, "Snapshotted time-sync configuration for session cleanup"
+
+    def restore_fault(self):
+        return True, _restore_time_sync_fault(self._fault_info)
 
     def generate(self, **params):
         """Generate NTP pool configuration task."""
@@ -483,14 +525,13 @@ class ConfigureNTPPoolTask(BaseTask):
             f"Configure NTP server pools:\n"
             f"  - Add the following NTP pools to chrony:\n"
             + "\n".join(f"    - {pool}" for pool in self.ntp_pools) +
-            f"\n  - Use 'pool' directive with 'iburst' option\n"
-            f"  - Restart chronyd after changes"
+            f"\n  - Restart chronyd after changes"
         )
 
         self.hints = [
             "Edit /etc/chrony.conf",
             "Add lines: pool <server> iburst",
-            "iburst speeds up initial sync",
+            "iburst speeds up initial sync (good practice, not scored)",
             "Restart: systemctl restart chronyd",
             "Verify: chronyc sources -v"
         ]
@@ -521,63 +562,40 @@ class ConfigureNTPPoolTask(BaseTask):
                 message="chronyd is not running"
             ))
 
-        # Check 2: At least one pool configured (4 points)
+        # Check 2: The requested pools are configured (7 points). The question
+        # no longer dictates the directive/options, so accept any config line
+        # naming the pools (pool or server, with or without iburst) — what the
+        # real exam grades is that the box syncs from the given pools.
         pools_found = 0
         for pool in self.ntp_pools:
             if validate_file_contains('/etc/chrony.conf', pool):
                 pools_found += 1
 
-        if pools_found >= 2:
+        if pools_found >= len(self.ntp_pools):
             checks.append(ValidationCheck(
                 name="pools_configured",
                 passed=True,
-                points=4,
-                message=f"{pools_found} NTP pools configured"
+                points=7,
+                message=f"All {pools_found} NTP pools configured"
             ))
-            total_points += 4
-        elif pools_found == 1:
+            total_points += 7
+        elif pools_found >= 1:
+            pts = 4 if pools_found >= 2 else 2
             checks.append(ValidationCheck(
                 name="pools_configured",
-                passed=True,
-                points=2,
-                message="1 NTP pool configured"
+                passed=False,
+                points=pts,
+                max_points=7,
+                message=f"Only {pools_found} of {len(self.ntp_pools)} requested pools configured"
             ))
-            total_points += 2
-        else:
-            # Check for any pool directive
-            if validate_file_contains('/etc/chrony.conf', 'pool '):
-                checks.append(ValidationCheck(
-                    name="pools_configured",
-                    passed=True,
-                    points=2,
-                    message="Some NTP pools configured"
-                ))
-                total_points += 2
-            else:
-                checks.append(ValidationCheck(
-                    name="pools_configured",
-                    passed=False,
-                    points=0,
-                    max_points=4,
-                    message="No NTP pools found in config"
-                ))
-
-        # Check 3: iburst option used (3 points)
-        if validate_file_contains('/etc/chrony.conf', 'iburst'):
-            checks.append(ValidationCheck(
-                name="iburst_used",
-                passed=True,
-                points=3,
-                message="iburst option configured"
-            ))
-            total_points += 3
+            total_points += pts
         else:
             checks.append(ValidationCheck(
-                name="iburst_used",
+                name="pools_configured",
                 passed=False,
                 points=0,
-                max_points=3,
-                message="iburst option not found"
+                max_points=7,
+                message="None of the requested pools found in config"
             ))
 
         passed = total_points >= (self.points * 0.7)

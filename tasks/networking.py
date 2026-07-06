@@ -358,6 +358,8 @@ class ConfigureDHCPTask(BaseTask):
 class SetHostnameTask(BaseTask):
     """Set the system hostname using hostnamectl."""
 
+    has_fault_injection = True
+
     def __init__(self):
         super().__init__(
             id="net_hostname_001",
@@ -372,6 +374,26 @@ class SetHostnameTask(BaseTask):
             "Verify with both 'hostname' and 'hostnamectl status'.",
         ]
         self.hostname = None
+        self._fault_info = None
+
+    def inject_fault(self):
+        """Nothing to break — but record the current hostname so session
+        teardown / Reset Machine puts it back instead of leaving the
+        exam-generated name on the box."""
+        from tasks.troubleshooting import save_fault_state, _run
+        r = _run(['hostname'])
+        self._fault_info = {'orig_hostname': (r.stdout or '').strip()}
+        save_fault_state(self.id, self._fault_info)
+        return True, "Recorded current hostname for session cleanup"
+
+    def restore_fault(self):
+        from tasks.troubleshooting import clear_fault_state, _run
+        orig = (self._fault_info or {}).get('orig_hostname')
+        if orig:
+            _run(['hostnamectl', 'set-hostname', orig])
+        clear_fault_state(self.id)
+        return True, (f"Hostname reset to {orig}" if orig
+                      else "No previous hostname recorded")
 
     def generate(self, **params):
         self.hostname = params.get('hostname', _random_hostname())

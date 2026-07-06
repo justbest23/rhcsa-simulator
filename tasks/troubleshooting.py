@@ -127,7 +127,8 @@ def _dispatch_restore(task_id, info, msgs):
         _restore_sudoers_full(info, msgs)
     elif task_id.startswith('fault_fstab') or task_id == 'boot_fstab_validate_001':
         _restore_fstab(info, msgs)
-    elif task_id.startswith('time_ntp') or task_id.startswith('time_chrony') or task_id == 'time_set_001':
+    elif (task_id.startswith('time_ntp') or task_id.startswith('time_chrony')
+          or task_id.startswith('time_pool') or task_id == 'time_set_001'):
         _restore_time_sync(info, msgs)
     elif task_id.startswith('fw_enable') or task_id == 'fw_enable_001':
         _restore_service(info, msgs)
@@ -180,6 +181,12 @@ def _dispatch_restore(task_id, info, msgs):
         grub_cfg = info.get('grub_cfg', '/boot/grub2/grub.cfg')
         subprocess.run(['grub2-mkconfig', '-o', grub_cfg], capture_output=True)
         msgs.append(f"Restored boot config (target={orig_target})")
+    elif task_id.startswith('net_hostname'):
+        orig = info.get('orig_hostname', '')
+        if orig:
+            subprocess.run(['hostnamectl', 'set-hostname', orig],
+                           capture_output=True)
+            msgs.append(f"Restored hostname to {orig}")
     elif task_id == 'net_full_setup_001':
         iface = info.get('iface', 'dummy0')
         conn = info.get('conn', 'practice-net')
@@ -317,12 +324,49 @@ def _restore_sudoers_full(info, msgs):
 
 def _restore_time_sync(info, msgs):
     """Restore chronyd/NTP state broken by the time-sync fault injectors."""
+    import time
+    import datetime
+
+    # Reset the clock first if a manual-set task may have moved it. With no
+    # network NTP to ask, the best available estimate of "now" is the wall
+    # clock captured at injection (while it was still correct) plus the
+    # monotonic time elapsed since — CLOCK_MONOTONIC isn't affected by the
+    # candidate's clock changes. (After a real reboot monotonic restarts, so
+    # this degrades to the injection-time clock — still far closer than the
+    # arbitrary target time the task had the candidate set.)
+    iw = info.get('injected_wallclock')
+    im = info.get('injected_monotonic')
+    if iw is not None and im is not None:
+        real_now = iw + max(0.0, time.monotonic() - im)
+        if abs(time.time() - real_now) > 5:
+            ts = datetime.datetime.fromtimestamp(real_now).strftime(
+                '%Y-%m-%d %H:%M:%S')
+            _run(['timedatectl', 'set-ntp', 'false'])  # set-time needs NTP off
+            _run(['timedatectl', 'set-time', ts])
+            msgs.append(f"Reset system clock to {ts}")
+
+    # Put chrony.conf back exactly as it was before the candidate's edits,
+    # before (re)starting chronyd below so the daemon loads the original.
+    conf = info.get('chrony_conf')
+    if conf is not None:
+        try:
+            with open('/etc/chrony.conf', 'w') as f:
+                f.write(conf)
+            _run(['systemctl', 'try-restart', 'chronyd'])
+            msgs.append("Restored /etc/chrony.conf")
+        except OSError:
+            pass
+
     if info.get('chronyd_was_enabled', True):
         _run(['systemctl', 'enable', 'chronyd'])
     if info.get('chronyd_was_active', True):
         _run(['systemctl', 'start', 'chronyd'])
     if info.get('ntp_was_on', True):
         _run(['timedatectl', 'set-ntp', 'true'])
+    # If an NTP server is reachable, step the clock to true time immediately
+    # instead of slewing for hours. Harmless no-op offline or if chronyd is
+    # not running.
+    _run(['chronyc', 'makestep'])
     msgs.append("Restored chronyd/NTP state")
 
 
