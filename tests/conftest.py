@@ -12,6 +12,16 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 
+@pytest.fixture(autouse=True)
+def _redirect_progress_autosave(tmp_path, monkeypatch):
+    """Every ResultsDB write mirrors the DB to progress_code.AUTOSAVE_PATH
+    (/var/lib on a real box) — point it at a temp file so tests never touch,
+    or get polluted by, the machine's real autosave."""
+    from core import progress_code
+    monkeypatch.setattr(progress_code, 'AUTOSAVE_PATH',
+                        tmp_path / "autosave-progress.code")
+
+
 @pytest.fixture
 def tmp_db(tmp_path):
     """Create a temporary ResultsDB backed by a temp SQLite file."""

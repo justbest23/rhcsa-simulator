@@ -133,6 +133,7 @@ class ResultsDB:
             conn.commit()
         finally:
             conn.close()
+        self._autosave()
 
     def save_task_result(self, exam_id, task_id, category, difficulty, domain,
                          description, score, max_score, passed,
@@ -157,6 +158,7 @@ class ResultsDB:
             conn.commit()
         finally:
             conn.close()
+        self._autosave()
 
     def get_exam_task_results(self, exam_id):
         """Get all per-task results for a specific exam, in order."""
@@ -188,6 +190,19 @@ class ResultsDB:
             self._update_weak_area(category, score, max_score, passed)
         finally:
             conn.close()
+        self._autosave()
+
+    def _autosave(self):
+        """Mirror the DB to the on-disk autosave code (progress_code.autosave)
+        after each recorded result, so history survives a reinstall — the DB
+        itself lives inside INSTALL_DIR, which install.sh wipes. Best-effort:
+        recording a result must never fail because the autosave couldn't be
+        written."""
+        try:
+            from core import progress_code
+            progress_code.autosave(self)
+        except Exception:
+            pass
 
     def _update_weak_area(self, category, score, max_score, passed):
         """Update weak area stats using SM-2 algorithm."""
@@ -455,6 +470,7 @@ class ResultsDB:
             conn.commit()
         finally:
             conn.close()
+        self._autosave()
         return counts
 
     def list_exams(self):

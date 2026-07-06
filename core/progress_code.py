@@ -18,7 +18,9 @@ is rejected rather than silently importing garbage.
 import base64
 import binascii
 import json
+import os
 import zlib
+from pathlib import Path
 
 MAGIC = b'RH1'            # bumped if the payload layout changes
 _GROUP = 8                # dash-group size for display
@@ -99,3 +101,57 @@ def import_code(code, mode='replace', db=None):
         db = get_results_db()
     counts = db.load_progress(payload, mode=mode)
     return counts, summarize(payload)
+
+
+# ── Autosave ──────────────────────────────────────────────────────────────────
+#
+# The results DB lives inside INSTALL_DIR, which install.sh --yes rm -rf's on a
+# reinstall — so after every recorded result we mirror the DB to a code file
+# OUTSIDE the install tree, on the OS drive (practice-disk wipes and Reset
+# Machine never touch /var/lib). At launch the simulator offers to import it
+# when it holds more history than the local DB (fresh install / reverted box).
+
+AUTOSAVE_PATH = Path('/var/lib/rhcsa-progress.code')
+
+
+def autosave(db=None):
+    """Write the current progress code to AUTOSAVE_PATH (atomically, via a
+    temp file + rename). Best-effort: returns the path on success, None on
+    any failure — recording a result must never break on autosave errors."""
+    try:
+        code = export_code(db)
+        tmp = AUTOSAVE_PATH.with_name(AUTOSAVE_PATH.name + '.tmp')
+        tmp.write_text(code + '\n')
+        os.replace(tmp, AUTOSAVE_PATH)
+        return AUTOSAVE_PATH
+    except Exception:
+        return None
+
+
+def read_autosave():
+    """Return (code, payload) from the autosave file, or None if the file is
+    missing, unreadable, or doesn't decode."""
+    try:
+        code = AUTOSAVE_PATH.read_text()
+    except OSError:
+        return None
+    try:
+        return code, decode(code)
+    except ProgressCodeError:
+        return None
+
+
+def autosave_has_extra(db=None):
+    """If the autosave file holds progress the local DB lacks — the state
+    after a reinstall or VM revert — return (code, payload); else None."""
+    found = read_autosave()
+    if not found:
+        return None
+    code, payload = found
+    if db is None:
+        from core.results_db import get_results_db
+        db = get_results_db()
+    if (len(payload.get('exams', [])) > db.get_exam_count()
+            or len(payload.get('practice', [])) > db.get_practice_count()):
+        return code, payload
+    return None
