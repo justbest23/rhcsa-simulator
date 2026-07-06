@@ -87,7 +87,10 @@ class InstallPackageTask(BaseTask):
         self.package_name = None
 
     def generate(self, **params):
-        packages = ['tree', 'wget', 'vim-enhanced', 'tmux', 'htop', 'net-tools', 'bind-utils', 'bash-completion']
+        # No tmux/screen here (or in any install/remove pool): candidates often
+        # run the exam inside a multiplexer, and installing is harmless but the
+        # setup/teardown symmetry with remove tasks makes it a footgun.
+        packages = ['tree', 'wget', 'vim-enhanced', 'htop', 'net-tools', 'bind-utils', 'bash-completion']
         self.package_name = params.get('package', random.choice(packages))
         self.description = (
             f"Install a package using dnf:\n"
@@ -136,7 +139,9 @@ class RemovePackageTask(BaseTask):
         self.package_name = None
 
     def generate(self, **params):
-        packages = ['tree', 'wget', 'tmux', 'htop']
+        # Never draw a removal target the candidate may be actively depending
+        # on: removing tmux kills the session it's running in.
+        packages = ['tree', 'wget', 'htop']
         self.package_name = params.get('package', random.choice(packages))
         self.description = (
             f"Remove a package using dnf:\n"

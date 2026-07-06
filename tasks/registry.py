@@ -179,16 +179,20 @@ class TaskRegistry:
 
         disk_budget caps how many whole-disk tasks (by disk_slots) may be
         selected, so each can later be given a distinct practice device. When
-        None it is inferred from the devices currently available (without
-        creating any) with a sane floor, so callers/tests need not pass it.
+        None it is inferred from how many practice devices can exist — attached
+        loops plus free-space capacity for more plus spare real disks — with a
+        sane floor, so callers/tests need not pass it.
         """
         tasks = []
         exclude_ids = []
 
         if disk_budget is None:
+            # Loop devices are created on demand at provisioning time, so the
+            # budget is what CAN exist (free space + spare real disks), not
+            # what is attached right now.
             try:
-                from utils.helpers import get_loop_devices, get_spare_real_disks
-                disk_budget = len(get_loop_devices()) + len(get_spare_real_disks())
+                from utils.helpers import loop_device_capacity, get_spare_real_disks
+                disk_budget = loop_device_capacity() + len(get_spare_real_disks())
             except Exception:
                 disk_budget = 0
             disk_budget = max(disk_budget, 3)  # floor: exam start ensures >=3 loops

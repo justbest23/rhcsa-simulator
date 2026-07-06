@@ -62,9 +62,12 @@ class ExamTimer:
         self.on_expire = on_expire
         self.on_warning = on_warning
 
-        self.start_time: Optional[datetime] = None
-        self.pause_time: Optional[datetime] = None
-        self.paused_duration: timedelta = timedelta()
+        # Anchored to time.monotonic(), NOT the wall clock — exam tasks have
+        # the candidate change the system date/time/timezone, and the exam
+        # countdown must not jump when they do.
+        self.start_time: Optional[float] = None
+        self.pause_time: Optional[float] = None
+        self.paused_duration: float = 0.0
         self.is_running = False
         self.is_paused = False
         self.is_expired = False
@@ -78,7 +81,7 @@ class ExamTimer:
         if self.is_running:
             return
 
-        self.start_time = datetime.now()
+        self.start_time = time.monotonic()
         self.is_running = True
         self.is_expired = False
         self._triggered_warnings.clear()
@@ -98,27 +101,27 @@ class ExamTimer:
     def pause(self):
         """Pause the timer."""
         if self.is_running and not self.is_paused:
-            self.pause_time = datetime.now()
+            self.pause_time = time.monotonic()
             self.is_paused = True
 
     def resume(self):
         """Resume the timer."""
         if self.is_paused and self.pause_time:
-            self.paused_duration += datetime.now() - self.pause_time
+            self.paused_duration += time.monotonic() - self.pause_time
             self.pause_time = None
             self.is_paused = False
 
     def get_elapsed(self) -> timedelta:
         """Get elapsed time."""
-        if not self.start_time:
+        if self.start_time is None:
             return timedelta()
 
         if self.is_paused and self.pause_time:
-            elapsed = self.pause_time - self.start_time - self.paused_duration
+            seconds = self.pause_time - self.start_time - self.paused_duration
         else:
-            elapsed = datetime.now() - self.start_time - self.paused_duration
+            seconds = time.monotonic() - self.start_time - self.paused_duration
 
-        return elapsed
+        return timedelta(seconds=seconds)
 
     def get_remaining(self) -> timedelta:
         """Get remaining time."""
@@ -161,8 +164,9 @@ class ExamTimer:
             if not self.is_paused:
                 remaining_minutes = self.get_remaining_minutes()
 
-                # Check for expiration
-                if remaining_minutes <= 0 and not self.is_expired:
+                # Check for expiration (in seconds — get_remaining_minutes()
+                # floors, which would expire the timer a whole minute early)
+                if self.get_remaining().total_seconds() <= 0 and not self.is_expired:
                     self.is_expired = True
                     self.is_running = False
                     if self.on_expire:

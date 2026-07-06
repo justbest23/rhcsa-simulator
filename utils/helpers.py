@@ -1018,6 +1018,23 @@ def ensure_loop_devices(minimum=3):
     return get_loop_devices()
 
 
+def loop_device_capacity(size_mb=500, reserve_mb=1024):
+    """How many practice loop devices CAN exist: those already attached plus
+    as many more as free space under the loops directory allows (keeping
+    reserve_mb free). Loop images are created on demand at exam provisioning
+    (ensure_loop_devices), so selection budgets should use this rather than
+    the count currently attached."""
+    existing = len(get_loop_devices())
+    try:
+        base = '/var/lib/rhcsa-simulator'
+        os.makedirs(base, exist_ok=True)
+        st = os.statvfs(base)
+        free_mb = st.f_bavail * st.f_frsize // (1024 * 1024)
+    except Exception:
+        return max(existing, 3)
+    return existing + max(0, int((free_mb - reserve_mb) // size_mb))
+
+
 def get_spare_real_disks():
     """Non-system, unmounted real disks (e.g. /dev/sda) usable for practice."""
     spares = []
