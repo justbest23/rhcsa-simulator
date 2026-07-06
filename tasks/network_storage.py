@@ -337,43 +337,90 @@ class ConfigureAutofsTask(BaseTask):
         self.nfs_export = None
         self.autofs_mount = None
         self.map_name = None
+        self.map_type = None
 
     def generate(self, **params):
-        """Generate autofs configuration task."""
+        """Generate autofs configuration task.
+
+        Two variants, phrased the explicit way Red Hat words them ("...so that
+        /X is an automount directory" = indirect; "...so that /X is
+        automatically mounted" = direct). Indirect is drawn 3:1 — it is by far
+        the more commonly reported exam task (wildcard/subdirectory mounts);
+        direct maps appear occasionally, so they stay in rotation.
+        """
         cfg = _nfs_config()
+        self.map_type = params.get('map_type') or random.choices(
+            ['indirect', 'direct'], weights=[3, 1])[0]
+
+        def _pick_export(suffix, fallback):
+            if cfg and cfg.get('exports'):
+                for e in cfg['exports']:
+                    if e.rstrip('/').endswith(suffix):
+                        return e
+                return cfg['exports'][0]
+            return fallback
+
         if cfg and cfg.get('exports'):
             self.nfs_server = params.get('server', cfg['host'])
-            self.nfs_export = params.get('export', cfg['exports'][0])
         else:
             self.nfs_server = params.get('server', 'nfs.example.com')
-            self.nfs_export = params.get('export', '/export/data')
-        self.autofs_mount = params.get('mount', '/data')
-        self.map_name = params.get('map', 'auto.data')
 
-        # Red Hat's wording is explicit about direct vs indirect ("...so that
-        # /X is automatically mounted" = direct; "...so that /X is an automount
-        # directory" = indirect). Mirror that: here the mount point ITSELF is
-        # the target, so this is a direct map.
-        self.description = (
-            f"Configure autofs so that {self.autofs_mount} is automatically "
-            f"mounted from an NFS export:\n"
-            f"  - NFS Server: {self.nfs_server}\n"
-            f"  - NFS Export: {self.nfs_export}\n"
-            f"  - {self.autofs_mount} itself is the mount target (a direct map, "
-            f"not a directory of automounts)\n"
-            f"  - The export must mount on access and unmount after the idle timeout\n"
-            f"  - autofs service must be running"
-        )
+        if self.map_type == 'indirect':
+            # The 'shared' export ships first-level subdirectories (docs,
+            # tools, projects) that serve as the indirect keys.
+            self.nfs_export = params.get('export',
+                                         _pick_export('/shared', '/export/shared'))
+            self.autofs_mount = params.get('mount', '/shares')
+            self.map_name = params.get('map', 'auto.shares')
 
-        self.hints = [
-            "Install autofs: dnf install autofs -y",
-            f"Direct maps are declared with /- ; add to /etc/auto.master: /- /etc/{self.map_name}",
-            f"Create /etc/{self.map_name} with: {self.autofs_mount} -rw {self.nfs_server}:{self.nfs_export}",
-            "An indirect-style master entry (mount-point + map) can never match "
-            "an absolute key like this one",
-            "Start service: systemctl enable --now autofs",
-            f"Test: ls {self.autofs_mount}"
-        ]
+            self.description = (
+                f"Configure autofs so that {self.autofs_mount} is an automount "
+                f"directory:\n"
+                f"  - NFS Server: {self.nfs_server}\n"
+                f"  - NFS Export: {self.nfs_export} (contains subdirectories "
+                f"such as docs, tools, projects)\n"
+                f"  - Accessing {self.autofs_mount}/<name> must automount "
+                f"{self.nfs_server}:{self.nfs_export}/<name>\n"
+                f"  - Use a wildcard key so any subdirectory works without "
+                f"further config changes\n"
+                f"  - Mounts appear on access and unmount after the idle timeout\n"
+                f"  - autofs service must be running"
+            )
+
+            self.hints = [
+                "Install autofs: dnf install autofs -y",
+                f"Add to /etc/auto.master: {self.autofs_mount} /etc/{self.map_name}",
+                f"Create /etc/{self.map_name} with: * -rw {self.nfs_server}:{self.nfs_export}/&",
+                "* matches the accessed name, & substitutes it into the export path",
+                "Start service: systemctl enable --now autofs",
+                f"Test: ls {self.autofs_mount}/docs"
+            ]
+        else:
+            self.nfs_export = params.get('export',
+                                         _pick_export('/data', '/export/data'))
+            self.autofs_mount = params.get('mount', '/data')
+            self.map_name = params.get('map', 'auto.data')
+
+            self.description = (
+                f"Configure autofs so that {self.autofs_mount} is automatically "
+                f"mounted from an NFS export:\n"
+                f"  - NFS Server: {self.nfs_server}\n"
+                f"  - NFS Export: {self.nfs_export}\n"
+                f"  - {self.autofs_mount} itself is the mount target (a direct "
+                f"map, not a directory of automounts)\n"
+                f"  - The export must mount on access and unmount after the idle timeout\n"
+                f"  - autofs service must be running"
+            )
+
+            self.hints = [
+                "Install autofs: dnf install autofs -y",
+                f"Direct maps are declared with /- ; add to /etc/auto.master: /- /etc/{self.map_name}",
+                f"Create /etc/{self.map_name} with: {self.autofs_mount} -rw {self.nfs_server}:{self.nfs_export}",
+                "An indirect-style master entry (mount-point + map) can never match "
+                "an absolute key like this one",
+                "Start service: systemctl enable --now autofs",
+                f"Test: ls {self.autofs_mount}"
+            ]
 
         return self
 
@@ -420,11 +467,11 @@ class ConfigureAutofsTask(BaseTask):
                 message="autofs service is not enabled"
             ))
 
-        # Check 3: direct map declared (5 points). The question asks for a
-        # direct map: a /- line in the master map plus the absolute mount
-        # point as the key in a map file. An indirect-style master entry
-        # naming the mount point reads plausibly but can never match an
-        # absolute key, so it only earns partial credit.
+        # Check 3: the right kind of map is declared (5 points). Direct maps
+        # need a /- master line plus the absolute mount point as a map key;
+        # indirect maps need the parent directory as the master entry plus a
+        # wildcard (or explicit subdirectory) key. Using the wrong style reads
+        # plausibly but can never match, so it only earns partial credit.
         import os
         import glob
 
@@ -441,33 +488,55 @@ class ConfigureAutofsTask(BaseTask):
             if os.path.isfile(extra):
                 master_lines += _noncomment_lines(extra)
 
-        has_direct_decl = any(ln.split()[0] == '/-' for ln in master_lines)
-        key_in_map = any(
-            self.autofs_mount in ln
+        map_lines = [
+            ln
             for path in glob.glob('/etc/auto.*') if os.path.isfile(path)
             and os.path.basename(path) != 'auto.master'
             for ln in _noncomment_lines(path)
-        )
-        indirect_style = any(ln.split()[0] == self.autofs_mount
-                             for ln in master_lines)
+        ]
 
-        if has_direct_decl and key_in_map:
+        has_direct_decl = any(ln.split()[0] == '/-' for ln in master_lines)
+        has_indirect_decl = any(ln.split()[0] == self.autofs_mount
+                                for ln in master_lines)
+        abs_key_in_map = any(ln.split()[0] == self.autofs_mount
+                             for ln in map_lines if ln.split())
+        wildcard_key_in_map = any(
+            ln.split()[0] == '*' and self.nfs_server in ln
+            for ln in map_lines if ln.split())
+
+        if self.map_type == 'direct':
+            ok = has_direct_decl and abs_key_in_map
+            wrong_style = has_indirect_decl
+            fix = (f"{self.autofs_mount} itself is the mount target — declare "
+                   f"a direct map (/- /etc/{self.map_name}) with "
+                   f"{self.autofs_mount} as the key")
+            ok_msg = f"Direct map declared (/-) with key {self.autofs_mount}"
+        else:
+            ok = has_indirect_decl and wildcard_key_in_map
+            wrong_style = has_direct_decl or (has_indirect_decl
+                                              and not wildcard_key_in_map)
+            fix = (f"{self.autofs_mount} is an automount directory — declare "
+                   f"'{self.autofs_mount} /etc/{self.map_name}' in the master "
+                   f"map with a wildcard key "
+                   f"(* -rw {self.nfs_server}:{self.nfs_export}/&)")
+            ok_msg = (f"Indirect map declared for {self.autofs_mount} with a "
+                      f"wildcard key")
+
+        if ok:
             checks.append(ValidationCheck(
                 name="master_entry",
                 passed=True,
                 points=5,
-                message=f"Direct map declared (/-) with key {self.autofs_mount}"
+                message=ok_msg
             ))
             total_points += 5
-        elif indirect_style:
+        elif wrong_style:
             checks.append(ValidationCheck(
                 name="master_entry",
                 passed=False,
                 points=2,
                 max_points=5,
-                message=f"Indirect-style master entry found — {self.autofs_mount} "
-                        f"itself is the mount target, so declare a direct map "
-                        f"(/- /etc/{self.map_name}) with {self.autofs_mount} as the key"
+                message=f"Map style doesn't match the question — {fix}"
             ))
             total_points += 2
         else:
@@ -542,7 +611,12 @@ class AutofsHomeDirectoriesTask(BaseTask):
         cfg = _nfs_config()
         if cfg and cfg.get('exports'):
             self.nfs_server = params.get('server', cfg['host'])
-            self.home_export = params.get('export', cfg['exports'][0])
+            # The 'guests' export ships per-user homes (user1..user3) for
+            # exactly this wildcard task; fall back to the first export.
+            guests = [e for e in cfg['exports']
+                      if e.rstrip('/').endswith('/guests')]
+            self.home_export = params.get(
+                'export', guests[0] if guests else cfg['exports'][0])
         else:
             self.nfs_server = params.get('server', 'ldap.example.com')
             self.home_export = params.get('export', '/home/guests')
