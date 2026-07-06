@@ -33,6 +33,9 @@ _EXPORTS = [
     ('data', 'rw,sync,no_root_squash'),
     ('shared', 'rw,sync,no_root_squash'),
     ('public', 'ro,sync'),
+    # Per-user home directories for the classic indirect/wildcard autofs task
+    # (mount /home/guests/<user> from .../guests/<user> on demand).
+    ('guests', 'rw,sync,no_root_squash'),
 ]
 
 _DONE = 'RHCSA_NFS_DONE'
@@ -49,8 +52,12 @@ def _seed_block():
     return f"""
 stamp="provisioned by rhcsa-simulator on $(hostname -f 2>/dev/null || hostname) at $(date)"
 
-rm -rf {EXPORT_BASE}/data {EXPORT_BASE}/shared {EXPORT_BASE}/public
-mkdir -p {EXPORT_BASE}/data/archive {EXPORT_BASE}/shared/projects {EXPORT_BASE}/public
+rm -rf {EXPORT_BASE}/data {EXPORT_BASE}/shared {EXPORT_BASE}/public {EXPORT_BASE}/guests
+mkdir -p {EXPORT_BASE}/data/archive {EXPORT_BASE}/public
+# First-level subdirectories double as indirect-map keys (ls /shares/docs ...).
+mkdir -p {EXPORT_BASE}/shared/projects {EXPORT_BASE}/shared/docs {EXPORT_BASE}/shared/tools
+# Per-user homes for the wildcard automount task (/home/guests/<user>).
+mkdir -p {EXPORT_BASE}/guests/user1 {EXPORT_BASE}/guests/user2 {EXPORT_BASE}/guests/user3
 
 printf 'date,region,units,revenue\\n2026-01-15,EMEA,120,30450\\n2026-02-03,AMER,98,24010\\n2026-03-20,APAC,142,35980\\n' > {EXPORT_BASE}/data/sales-2026-q1.csv
 printf 'widget-a 412\\nwidget-b 87\\nwidget-c 0\\n' > {EXPORT_BASE}/data/inventory.txt
@@ -60,13 +67,21 @@ printf 'NFS export: data (read-write)\\n%s\\n' "$stamp" > {EXPORT_BASE}/data/MAN
 printf '# Team Roster\\nalice - lead\\nbob - sysadmin\\ncarol - dba\\n' > {EXPORT_BASE}/shared/team-roster.md
 printf 'Standup notes: NFS migration on track.\\n' > {EXPORT_BASE}/shared/meeting-notes.txt
 printf 'project alpha: active\\nproject beta: planning\\n' > {EXPORT_BASE}/shared/projects/status.txt
+printf 'Onboarding guide\\nRunbook index\\n' > {EXPORT_BASE}/shared/docs/index.txt
+printf 'backup.sh - nightly backup helper\\ncleanup.sh - tmp reaper\\n' > {EXPORT_BASE}/shared/tools/README.txt
 printf 'NFS export: shared (read-write)\\n%s\\n' "$stamp" > {EXPORT_BASE}/shared/MANIFEST.txt
+
+for u in user1 user2 user3; do
+  printf 'Welcome %s! This home directory lives on the NFS server.\\n' "$u" > {EXPORT_BASE}/guests/$u/README.txt
+  printf 'export PS1="[\\\\u@\\\\h \\\\W]\\\\$ "\\n' > {EXPORT_BASE}/guests/$u/.bashrc
+done
+printf 'NFS export: guests (read-write, per-user homes)\\n%s\\n' "$stamp" > {EXPORT_BASE}/guests/MANIFEST.txt
 
 printf 'Welcome to the RHCSA practice NFS server.\\nThis share is read-only.\\n' > {EXPORT_BASE}/public/announcement.txt
 printf 'rhcsa-simulator NFS v1\\n' > {EXPORT_BASE}/public/VERSION
 printf 'NFS export: public (read-only)\\n%s\\n' "$stamp" > {EXPORT_BASE}/public/MANIFEST.txt
 
-chmod -R 0777 {EXPORT_BASE}/data {EXPORT_BASE}/shared 2>/dev/null || true
+chmod -R 0777 {EXPORT_BASE}/data {EXPORT_BASE}/shared {EXPORT_BASE}/guests 2>/dev/null || true
 chmod -R 0555 {EXPORT_BASE}/public 2>/dev/null || true
 command -v restorecon >/dev/null 2>&1 && restorecon -R {EXPORT_BASE} 2>/dev/null || true
 """
