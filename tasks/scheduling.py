@@ -350,11 +350,8 @@ class CreateAtJobTask(BaseTask):
         self.command = params.get('command', 'echo "At job executed" >> /tmp/atjob.log')
 
         self.description = (
-            f"Schedule a one-time task:\n"
-            f"  - Time: {time_desc}\n"
-            f"  - At spec: {self.time_spec}\n"
-            f"  - Command: {self.command}\n"
-            f"  - Use the 'at' command"
+            f"Schedule a one-time job for {time_desc} (at spec: "
+            f"'{self.time_spec}') that runs: {self.command}"
         )
 
         self.hints = [

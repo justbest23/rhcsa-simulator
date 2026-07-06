@@ -399,10 +399,8 @@ class SetHostnameTask(BaseTask):
         self.hostname = params.get('hostname', _random_hostname())
 
         self.description = (
-            f"Set the system hostname:\n"
-            f"  - Hostname: {self.hostname}\n"
-            f"  - Use hostnamectl command\n"
-            f"  - Must persist across reboots"
+            f"Set the system hostname to {self.hostname}, persistently "
+            f"across reboots."
         )
 
         self.hints = [
@@ -478,7 +476,6 @@ class ConfigureDNSTask(BaseTask):
             f"Configure DNS servers for connection '{self.connection_name}':\n"
             f"  - Primary DNS: {self.dns_servers[0]}\n"
             f"  - Secondary DNS: {self.dns_servers[1] if len(self.dns_servers) > 1 else 'N/A'}\n"
-            f"  - Use nmcli to configure (do NOT edit resolv.conf directly)\n"
             f"  - Activate the connection\n"
             f"  - Configuration must persist across reboots"
         )
@@ -1241,7 +1238,6 @@ class ConfigureSearchDomainTask(BaseTask):
             f"Configure a DNS search domain:\n"
             f"  - Connection: {self.connection_name}\n"
             f"  - Search domain: {self.search_domain}\n"
-            f"  - Use nmcli (do NOT edit resolv.conf directly)\n"
             f"  - Activate the connection\n"
             f"  - Must persist across reboots"
         )

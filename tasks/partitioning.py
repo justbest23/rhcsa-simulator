@@ -80,13 +80,9 @@ class CreateMBRPartitionTask(BaseTask):
         pnum = self.params["part_num"]
 
         self.description = (
-            f"Create an MBR partition on {dev}:\n"
-            f"  - Partition table type: msdos (MBR)\n"
-            f"  - Partition number: {pnum}\n"
-            f"  - Type: {ptype}\n"
-            f"  - Size: {size} MiB\n"
-            f"  - Use fdisk or parted to complete the task\n"
-            f"  - Run partprobe after writing changes"
+            f"Using an MBR (msdos) partition table, create a {size} MiB "
+            f"{ptype} partition (number {pnum}) on {dev}. The kernel must "
+            f"recognise the new partition."
         )
 
         self.hints = [
@@ -182,11 +178,8 @@ class CreateGPTPartitionTask(BaseTask):
         name = self.params["part_name"]
 
         self.description = (
-            f"Create a GPT partition on {dev}:\n"
-            f"  - Create a GPT (gpt) partition table on the disk\n"
-            f"  - Create one partition named '{name}'\n"
-            f"  - Size: {size} MiB\n"
-            f"  - Use parted or gdisk"
+            f"Create a GPT partition table on {dev} with one {size} MiB "
+            f"partition named '{name}'."
         )
 
         self.hints = [
@@ -281,11 +274,8 @@ class ResizePartitionTask(BaseTask):
         part_dev = _partition_dev(dev, pnum)
 
         self.description = (
-            f"Resize partition {part_dev}:\n"
-            f"  - Grow partition {pnum} on {dev} to {new_size} MiB\n"
-            f"  - Ensure no data loss\n"
-            f"  - Resize the filesystem after growing the partition\n"
-            f"  - The filesystem may be xfs or ext4"
+            f"Grow partition {pnum} on {dev} to {new_size} MiB and resize its "
+            f"filesystem (xfs or ext4) to match, without data loss."
         )
 
         self.hints = [
@@ -378,11 +368,9 @@ class DeletePartitionTask(BaseTask):
         part_dev = _partition_dev(dev, pnum)
 
         self.description = (
-            f"Delete partition {pnum} on {dev}:\n"
-            f"  - Unmount {part_dev} if currently mounted\n"
-            f"  - Remove any /etc/fstab entry for {part_dev}\n"
-            f"  - Delete partition {pnum}\n"
-            f"  - Run partprobe to update kernel"
+            f"Completely remove partition {pnum} on {dev}, including any "
+            f"mount and /etc/fstab entry for {part_dev}. The kernel must "
+            f"recognise the change."
         )
 
         self.hints = [
@@ -467,13 +455,9 @@ class PartitionAndFormatTask(BaseTask):
         part_dev = _partition_dev(dev, pnum)
 
         self.description = (
-            f"Create a partition, format, mount, and persist:\n"
-            f"  1. Create a {size} MiB partition (number {pnum}) on {dev}\n"
-            f"  2. Format {part_dev} with {fs}\n"
-            f"  3. Create mount point {mp}\n"
-            f"  4. Mount {part_dev} at {mp}\n"
-            f"  5. Add an /etc/fstab entry using the partition UUID\n"
-            f"  6. Configuration must survive a reboot"
+            f"Use {dev} to create a {size} MiB partition (number {pnum}) "
+            f"formatted with {fs} and mounted at {mp}, persistently across "
+            f"reboots. Identify it by UUID in /etc/fstab."
         )
 
         self.hints = [
