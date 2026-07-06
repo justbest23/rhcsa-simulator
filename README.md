@@ -361,6 +361,19 @@ Set `ANTHROPIC_API_KEY` to enable line-by-line command analysis. See
   Machine**. It restores active faults, unmounts every non-system mount, and
   clears stale mounts/repos/flatpaks/practice users in one pass.
 - **Reinstall from scratch** — re-run `./install.sh --yes`.
+- **`fdisk` warns that re-reading the partition table failed:**
+
+  ```
+  Command (m for help): w
+  The partition table has been altered.
+  Calling ioctl() to re-read partition table.
+  Re-reading the partition table failed.: Invalid argument
+
+  The kernel still uses the old table. The new table will be used at the next reboot or after you run partprobe(8) or partx(8).
+  ```
+
+  Run `partprobe /dev/diskthatchanged` (e.g. `partprobe /dev/sdb`) to make the
+  kernel re-read the partition table and clear the error.
 
 ## License
 
