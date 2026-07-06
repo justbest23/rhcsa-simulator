@@ -191,6 +191,14 @@ any box. No account, no server.
 `data/progress_code.txt`), Import (preview, then **Replace** or **Merge**), or
 Prune.
 
+**Autosave:** after every recorded result (exam, quick practice, practice,
+adaptive) the current progress code is also written to
+`/var/lib/rhcsa-progress.code` — outside the install directory, so it survives
+a reinstall (`install.sh --yes` wipes `/opt/rhcsa-simulator`, including the
+DB). At launch, if that file holds more history than the local DB, the
+simulator offers to import (merge) it. Note it lives on the OS drive, so a VM
+snapshot revert still rolls it back — export a code manually before reverting.
+
 ```bash
 rhcsa-simulator --export-code > my-progress.code            # back up
 rhcsa-simulator --import-code "$(cat my-progress.code)"     # restore (default: replace)

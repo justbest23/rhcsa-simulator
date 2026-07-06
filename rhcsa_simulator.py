@@ -286,6 +286,38 @@ def main():
     except Exception:
         pass
 
+    # A progress autosave (written to /var/lib after every recorded result) that
+    # holds more history than the local DB means the install was wiped or the VM
+    # reverted since it was written — offer to restore it. This is the moment to
+    # say yes: the next completed task overwrites the autosave with local state.
+    try:
+        from core import progress_code
+        from core.results_db import get_results_db
+        from utils import formatters as fmt
+        db = get_results_db()
+        found = progress_code.autosave_has_extra(db)
+        if found:
+            _code, payload = found
+            summary = progress_code.summarize(payload)
+            print()
+            print(fmt.bold(f"Progress autosave found: {progress_code.AUTOSAVE_PATH}"))
+            print("  It contains: " +
+                  ", ".join(f"{v} {k}" for k, v in summary.items()))
+            print(f"  This install has: {db.get_exam_count()} exams, "
+                  f"{db.get_practice_count()} practice attempts.")
+            print(fmt.dim("  If you skip, the next completed task overwrites "
+                          "the autosave with local state."))
+            ans = input("Import it now (merge into local history)? [Y/n]: ")
+            if ans.strip().lower() in ('', 'y', 'yes'):
+                counts = db.load_progress(payload, mode='merge')
+                print(fmt.success(
+                    f"Imported: {counts['exams']} exams, {counts['tasks']} exam "
+                    f"tasks, {counts['practice']} practice attempts, "
+                    f"{counts['weak']} categories."))
+            print()
+    except Exception:
+        pass
+
     # CLI quick modes
     if args.quick:
         run_quick_practice(args.quick)

@@ -139,6 +139,59 @@ class TestCLI:
         assert app.main() == 1
 
 
+class TestAutosave:
+    """The autosave file mirrors the DB after every recorded result and is
+    offered for import at launch when it holds more than the local DB."""
+
+    def test_written_after_each_recorded_result(self, db):
+        assert not pc.AUTOSAVE_PATH.exists()
+        db.save_practice_attempt("swap_001", "swap", "exam", 4, 10, 12,
+                                 passed=True)
+        assert pc.AUTOSAVE_PATH.exists()
+        _code, payload = pc.read_autosave()
+        assert len(payload['practice']) == 1
+
+    def test_mirrors_full_session_history(self, db):
+        _seed(db)
+        _code, payload = pc.read_autosave()
+        assert pc.summarize(payload) == {
+            'exams': 1, 'exam tasks': 1,
+            'practice attempts': 2, 'categories (SM-2)': 1,
+        }
+
+    def test_read_autosave_missing_or_corrupt(self, db):
+        assert pc.read_autosave() is None          # no file yet
+        pc.AUTOSAVE_PATH.write_text("garbage\n")
+        assert pc.read_autosave() is None          # not a valid code
+
+    def test_has_extra_against_fresh_db(self, tmp_path):
+        old = ResultsDB(db_path=str(tmp_path / "old.db"))
+        _seed(old)  # autosave now mirrors the seeded history
+
+        # Simulate a reinstall: fresh, empty DB but the autosave file remains.
+        fresh = ResultsDB(db_path=str(tmp_path / "fresh.db"))
+        found = pc.autosave_has_extra(fresh)
+        assert found is not None
+        _code, payload = found
+
+        fresh.load_progress(payload, mode='merge')
+        assert fresh.get_exam_count() == 1
+        assert fresh.get_practice_count() == 2
+        # Importing refreshed the autosave — no re-offer on the next launch.
+        assert pc.autosave_has_extra(fresh) is None
+
+    def test_no_offer_when_db_matches_autosave(self, db):
+        _seed(db)
+        assert pc.autosave_has_extra(db) is None
+
+    def test_autosave_failure_never_breaks_recording(self, db, monkeypatch):
+        monkeypatch.setattr(pc, 'AUTOSAVE_PATH',
+                            pc.AUTOSAVE_PATH / "nonexistent-dir" / "x.code")
+        db.save_practice_attempt("swap_001", "swap", "exam", 4, 10, 12,
+                                 passed=True)  # must not raise
+        assert db.get_practice_count() == 1
+
+
 class TestPrune:
     def test_delete_exam_removes_tasks(self, db):
         _seed(db)
