@@ -61,6 +61,26 @@ def _downgrade_recorded(pkg):
     return None
 
 
+def _no_older_build_available(pkg):
+    """True only if dnf confirms every build of pkg it knows about (installed
+    or repo-available) is the same NEVRA — i.e. downgrading is genuinely
+    impossible here, not just undone. Repos (esp. rolling AppStream content)
+    routinely carry a single current build with no superseded version kept
+    around, which makes 'dnf downgrade' a no-op through no fault of the
+    candidate. Defaults to False (no waiver) if the query can't be trusted."""
+    for _ in range(2):
+        r = execute_safe(['dnf', '--showduplicates', 'list', pkg], timeout=30)
+        if r.returncode == 0:
+            versions = set()
+            for line in r.stdout.splitlines():
+                parts = line.split()
+                if len(parts) >= 2 and parts[0].startswith(pkg + '.'):
+                    versions.add(parts[1])
+            if versions:
+                return len(versions) == 1
+    return False
+
+
 _INCONCLUSIVE = ("query failed or timed out (rpmdb may be busy right after a dnf "
                  "transaction). Wait a few seconds and grade again.")
 
@@ -506,6 +526,13 @@ class DowngradePackageTask(BaseTask):
                 f"or timed out). Wait a few seconds and grade again.", max_points=8))
         elif downgraded:
             checks.append(ValidationCheck("downgrade_done", True, 8, f"Downgrade/undo of {self.package_name} found in dnf history"))
+            total_points += 8
+        elif _no_older_build_available(self.package_name):
+            checks.append(ValidationCheck(
+                "downgrade_done", True, 8,
+                f"No older build of {self.package_name} exists in the enabled repos "
+                f"(installed build is also the only one available) — a downgrade "
+                f"isn't possible in this environment, so this step is waived"))
             total_points += 8
         else:
             checks.append(ValidationCheck("downgrade_done", False, 0, f"No downgrade of {self.package_name} found in dnf history", max_points=8))
