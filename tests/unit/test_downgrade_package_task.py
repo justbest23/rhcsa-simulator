@@ -35,13 +35,15 @@ def task():
     return DowngradePackageTask().generate(package="vim-enhanced")
 
 
-def _dispatch(rpm_res, history_res):
+def _dispatch(rpm_res, history_res, showdup_res=None):
     """Return an execute_safe side effect keyed on the command."""
     def side_effect(cmd, *args, **kwargs):
         if cmd[0] == "rpm":
             return rpm_res
         if cmd[0] == "dnf" and "history" in cmd:
             return history_res
+        if cmd[0] == "dnf" and "--showduplicates" in cmd:
+            return showdup_res if showdup_res is not None else _res(0)
         return _res(0)
     return side_effect
 
@@ -99,6 +101,53 @@ class TestGenuineFailures:
         with patch("tasks.packages.execute_safe",
                    side_effect=_dispatch(_res(0, "vim-enhanced-9.1.083-9.el10_2.3.x86_64"),
                                          _res(0, history))):
+            result = task.validate()
+        assert result.score == 4
+        dg = [c for c in result.checks if c.name == "downgrade_done"][0]
+        assert dg.passed is False
+
+
+class TestNoOlderBuildAvailable:
+    """Regression coverage for issue #68: a candidate scored 0/12 on
+    pkg_downgrade_001 for wget even though the enabled repos genuinely carry
+    only the currently-installed build (confirmed via `dnf --showduplicates
+    list wget` showing one NEVRA under both Installed and Available). The
+    checker must waive the downgrade step when this is the case, rather than
+    failing a candidate for an objective the environment makes impossible.
+    """
+
+    def test_single_available_build_waives_the_check(self, task):
+        history = "No transaction which manipulates package 'vim-enhanced' was found."
+        showdup = (
+            "Installed Packages\n"
+            "vim-enhanced.x86_64    9.1.083-9.el10_2.3    @rhel-10-for-x86_64-appstream-rpms\n"
+            "Available Packages\n"
+            "vim-enhanced.x86_64    9.1.083-9.el10_2.3    rhel-10-for-x86_64-appstream-rpms\n"
+        )
+        with patch("tasks.packages.execute_safe",
+                   side_effect=_dispatch(_res(0, "vim-enhanced-9.1.083-9.el10_2.3.x86_64"),
+                                         _res(0, history),
+                                         _res(0, showdup))):
+            result = task.validate()
+        assert result.passed is True
+        assert result.score == 12
+        dg = [c for c in result.checks if c.name == "downgrade_done"][0]
+        assert dg.passed is True
+        assert "waived" in dg.message.lower()
+
+    def test_multiple_available_builds_does_not_waive(self, task):
+        history = "No transaction which manipulates package 'vim-enhanced' was found."
+        showdup = (
+            "Installed Packages\n"
+            "vim-enhanced.x86_64    9.1.083-9.el10_2.3    @rhel-10-for-x86_64-appstream-rpms\n"
+            "Available Packages\n"
+            "vim-enhanced.x86_64    9.1.083-9.el10_2.3    rhel-10-for-x86_64-appstream-rpms\n"
+            "vim-enhanced.x86_64    9.1.083-9.el10_2.2    rhel-10-for-x86_64-appstream-rpms\n"
+        )
+        with patch("tasks.packages.execute_safe",
+                   side_effect=_dispatch(_res(0, "vim-enhanced-9.1.083-9.el10_2.3.x86_64"),
+                                         _res(0, history),
+                                         _res(0, showdup))):
             result = task.validate()
         assert result.score == 4
         dg = [c for c in result.checks if c.name == "downgrade_done"][0]
