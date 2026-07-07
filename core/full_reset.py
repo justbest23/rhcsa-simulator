@@ -559,6 +559,13 @@ def run_all(progress=_noop, remove_users=True):
             return 0
     step("Remote NFS exports", _nfs)
 
+    # 7b. Active boot-rescue scenario: put the lab machine's root password back.
+    def _rescue():
+        from core import boot_rescue
+        boot_rescue.reset_for_machine_reset(progress)
+        return 1
+    step("Boot-rescue scenario", _rescue)
+
     # 8. Practice users / groups (optional).
     if remove_users:
         step("Practice users / groups",

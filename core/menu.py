@@ -36,6 +36,7 @@ class MenuSystem:
             fmt.print_menu_option(1, "Learn Mode", "Domain-based study with SM-2 indicators")
             fmt.print_menu_option(2, "Practice Mode", "Category-focused with retry & hints")
             fmt.print_menu_option(3, "Adaptive Mode", "SM-2 driven weak-area practice")
+            fmt.print_menu_option('R', "Boot Rescue Lab", "Recover root on the linked 2nd machine")
             print()
 
             # Progress section
@@ -63,6 +64,8 @@ class MenuSystem:
                 return 'practice'
             elif choice == '3':
                 return 'adaptive'
+            elif choice == 'r':
+                return 'boot_rescue'
             elif choice == '4':
                 return 'dashboard'
             elif choice == '5':
@@ -181,6 +184,9 @@ LEARN & PRACTICE
      get instant feedback with retry & solution hints.
   3. Adaptive Mode - SM-2 selects your weakest/due categories.
      Difficulty adjusts to your performance. Best for review.
+  R. Boot Rescue Lab - the simulator scrambles root's password on a
+     linked second machine; you recover it at that machine's console
+     (rd.break or init=/bin/bash). Link the machine in Setup first.
 
 PROGRESS
   4. Dashboard - View exam history, success rates, weak areas,
@@ -211,10 +217,13 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
         fmt.clear_screen()
         fmt.print_header("SETUP")
 
-        from core import nfs_server
+        from core import nfs_server, lab_machine
         cfg = nfs_server.load_config()
         nfs_status = (fmt.success(f"configured: {cfg['host']}") if cfg
                       else fmt.dim("not configured"))
+        lab_cfg = lab_machine.load_config()
+        lab_status = (fmt.success(f"linked: {lab_cfg['host']}") if lab_cfg
+                      else fmt.dim("not linked"))
 
         print(fmt.bold("Options"))
         print("  1. Setup Practice Disks (loop devices for LVM)")
@@ -223,6 +232,7 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
         print("  4. Reset Machine (undo ALL practice changes, back to a clean box)")
         print("  5. Populate Practice Environment (DNF history)")
         print(f"  6. Configure remote NFS server for NFS tasks ({nfs_status})")
+        print(f"  7. Link second lab machine — boot rescue & remote tasks ({lab_status})")
         print("  0. Return to Menu")
         print()
 
@@ -240,6 +250,8 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
             self.populate_practice_environment()
         elif choice == '6':
             self.configure_nfs_server()
+        elif choice == '7':
+            self.link_lab_machine()
 
     def reset_machine(self):
         """THE single reset. Restores any active faults/preconditions, removes
@@ -310,6 +322,98 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
         print(fmt.info("connectivity were left intact."))
         print()
         input("Press Enter to return...")
+
+    def link_lab_machine(self):
+        """Link (or unlink) the second lab machine used by the boot-rescue lab
+        and remote tasks. Linking plants this machine's SSH key so everything
+        afterwards runs unattended — the key is the only footprint."""
+        from core import lab_machine, boot_rescue
+        from utils.helpers import confirm_action
+
+        fmt.clear_screen()
+        fmt.print_header("LINK SECOND LAB MACHINE")
+
+        existing = lab_machine.load_config()
+        if existing:
+            adopted = existing.get('adopted_from')
+            print(f"Currently linked: {fmt.bold(existing['host'])} "
+                  f"(user: {existing.get('user', 'root')})"
+                  + (f"  [adopted from the {adopted} config]" if adopted else ""))
+            print()
+            print("  T. Test the link now (key-based SSH)")
+            print("  R. Re-link / change machine")
+            print("  X. Unlink")
+            print("  0. Back")
+            print()
+            sub = input("Select: ").strip().lower()
+            if sub == 't':
+                print(f"\nTesting key-based SSH to {existing['host']}…")
+                if lab_machine.key_works():
+                    print(fmt.success("OK — unattended SSH works."))
+                else:
+                    print(fmt.error("Key-based SSH failed. Re-link to run "
+                                    "ssh-copy-id again."))
+                input("\nPress Enter to return...")
+                return
+            if sub == 'x':
+                if boot_rescue.is_active():
+                    print(fmt.warning("\nA boot-rescue scenario is active on this "
+                                      "machine — resolve it first (validate or "
+                                      "give up)."))
+                    input("\nPress Enter to return...")
+                    return
+                lab_machine.clear_config()
+                print(fmt.success("Unlinked."))
+                input("\nPress Enter to return...")
+                return
+            if sub != 'r':
+                return
+            fmt.clear_screen()
+            fmt.print_header("LINK SECOND LAB MACHINE")
+
+        print("The lab machine is a second box on your network that the simulator")
+        print("reaches as root over SSH. It powers the Boot Rescue Lab and remote")
+        print("tasks, and can be the same VM you use as the NFS server.")
+        print()
+        print("Linking copies this machine's SSH key over (ssh-copy-id — you'll")
+        print("type the root password once). Nothing is installed on the machine.")
+        print()
+        print(fmt.warning("Use a practice box you control — scenarios MODIFY it."))
+        print()
+
+        default_host = ''
+        try:
+            from core import nfs_server
+            nfs_cfg = nfs_server.load_config()
+            if nfs_cfg and nfs_cfg.get('host'):
+                default_host = nfs_cfg['host']
+        except Exception:
+            pass
+        prompt = (f"Lab machine hostname or IP [{default_host}]: " if default_host
+                  else "Lab machine hostname or IP: ")
+        host = input(prompt).strip() or default_host
+        if not host:
+            print(fmt.dim("Cancelled."))
+            input("\nPress Enter to return...")
+            return
+        user = input("SSH login user [root]: ").strip() or 'root'
+
+        if not lab_machine.key_works(host=host, user=user):
+            print()
+            if confirm_action(f"Run ssh-copy-id to {user}@{host} now?", default=True):
+                lab_machine.copy_key(host, user)
+
+        print(f"\nVerifying unattended SSH to {user}@{host}…")
+        if not lab_machine.key_works(host=host, user=user):
+            print(fmt.error("Key-based SSH still fails — not saving the link."))
+            print(fmt.dim("Check: root login allowed (PermitRootLogin), the machine "
+                          "is reachable, and ssh-copy-id succeeded."))
+            input("\nPress Enter to return...")
+            return
+
+        lab_machine.save_config(host, user)
+        print(fmt.success(f"Linked {user}@{host}. Boot Rescue Lab is ready (menu R)."))
+        input("\nPress Enter to return...")
 
     def configure_nfs_server(self):
         """SSH into a user-named RHEL box and provision it as a real NFS server

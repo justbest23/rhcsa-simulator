@@ -40,6 +40,11 @@ class BaseTask(ABC):
     # fabricated log evidence, or descriptive-only.
     required_packages = []
 
+    # True for tasks performed ON the linked second lab machine (over SSH).
+    # They are only offered when a lab machine is linked (Setup → Link second
+    # lab machine); the registry filters them out otherwise.
+    requires_lab_machine = False
+
     def __init__(self, id, category, difficulty, points):
         self.id = id
         self.category = category

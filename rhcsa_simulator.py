@@ -409,6 +409,10 @@ def main():
             elif choice == 'adaptive':
                 run_adaptive_mode()
 
+            elif choice == 'boot_rescue':
+                from core import boot_rescue
+                boot_rescue.interactive()
+
             elif choice == 'dashboard':
                 menu.show_dashboard()
 

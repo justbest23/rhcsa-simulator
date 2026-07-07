@@ -102,6 +102,19 @@ class TaskRegistry:
         if not task_classes:
             return None
 
+        # Remote tasks are only offered when a lab machine is linked.
+        if any(getattr(tc, 'requires_lab_machine', False) for tc in task_classes):
+            try:
+                from core import lab_machine
+                linked = bool(lab_machine.get_host())
+            except Exception:
+                linked = False
+            if not linked:
+                task_classes = [tc for tc in task_classes
+                                if not getattr(tc, 'requires_lab_machine', False)]
+                if not task_classes:
+                    return None
+
         # Filter by difficulty
         if difficulty:
             filtered = []

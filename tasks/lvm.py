@@ -17,10 +17,11 @@ def _uid(n=4):
     return ''.join(random.choices(string.digits, k=n))
 
 
-def _scratch_setup(task, device, vg, lv=None, lv_mb=150, fstype=None):
+def _scratch_setup(task, device, vg, lv=None, lv_mb=150, fstype=None, pe_mib=None):
     """Provision a practice VG (and optional LV) on `device` for a task that
     would otherwise assume pre-existing LVM. Records fault state for crash
-    recovery. Returns (ok, message)."""
+    recovery. `pe_mib` sets an explicit physical extent size on the VG for
+    extent-phrased questions. Returns (ok, message)."""
     import subprocess as _sp
     from tasks.troubleshooting import save_fault_state
     if not device:
@@ -28,7 +29,11 @@ def _scratch_setup(task, device, vg, lv=None, lv_mb=150, fstype=None):
     r = _sp.run(['pvcreate', '-ff', '-y', device], capture_output=True, text=True)
     if r.returncode != 0:
         return False, f"pvcreate {device} failed: {r.stderr.strip()}"
-    r = _sp.run(['vgcreate', vg, device], capture_output=True, text=True)
+    vg_cmd = ['vgcreate']
+    if pe_mib:
+        vg_cmd += ['-s', f'{pe_mib}M']
+    vg_cmd += [vg, device]
+    r = _sp.run(vg_cmd, capture_output=True, text=True)
     if r.returncode != 0:
         return False, f"vgcreate {vg} failed: {r.stderr.strip()}"
     if lv:
@@ -56,6 +61,31 @@ def _scratch_teardown(task, vg, device):
         _sp.run(['wipefs', '-a', device], capture_output=True)
     clear_fault_state(task.id)
     return True, f"Removed {vg}"
+
+
+def _vg_extent_size_mib(vg):
+    """Physical extent size of `vg` in MiB, or None."""
+    r = execute_safe(['vgs', '--noheadings', '--nosuffix', '--units', 'm',
+                      '-o', 'vg_extent_size', vg])
+    if r.success and r.stdout.strip():
+        try:
+            return float(r.stdout.strip())
+        except ValueError:
+            pass
+    return None
+
+
+def _lv_extent_count(vg, lv):
+    """Number of logical extents in vg/lv (lvdisplay 'Current LE'), or None."""
+    r = execute_safe(['lvs', '--noheadings', '--nosuffix', '--units', 'm',
+                      '-o', 'lv_size', f'{vg}/{lv}'])
+    pe = _vg_extent_size_mib(vg)
+    if r.success and r.stdout.strip() and pe:
+        try:
+            return round(float(r.stdout.strip()) / pe)
+        except (ValueError, ZeroDivisionError):
+            pass
+    return None
 
 
 @TaskRegistry.register("lvm")
@@ -226,6 +256,7 @@ class CreateVGTask(BaseTask):
         self.exam_tips = [
             "Use 'vgcreate' to create a volume group from one or more physical volumes",
             "Physical volumes must be initialized with pvcreate first",
+            "vgcreate -s <size>M sets a custom physical extent size (default 4MiB)",
             "Verify with 'vgs' or 'vgdisplay' to see VG size and free space",
         ]
         self.requires_persistence = True
@@ -302,6 +333,8 @@ class CreateLVTask(BaseTask):
         self.vg_name = None
         self.lv_name = None
         self.lv_size_mb = None
+        self.pe_mib = None
+        self.extents = None
 
     def generate(self, **params):
         # Self-contained: a scratch VG is provisioned on an allocated device at
@@ -310,24 +343,42 @@ class CreateLVTask(BaseTask):
         uid = _uid()
         self.vg_name = params.get('vg_name', f'vg_prac{uid}')
         self.lv_name = params.get('lv_name', f'lv_data{uid}')
-        self.lv_size_mb = params.get('size', random.choice([300, 350, 400]))
 
-        self.description = (
-            f"Create a {self.lv_size_mb}MB logical volume named '{self.lv_name}' "
-            f"in volume group '{self.vg_name}'."
-        )
-
-        self.hints = [
-            "lvcreate creates a logical volume in an existing VG",
-            "Use -L for size in MB and -n for the LV name",
-            "LV device path: /dev/<vg_name>/<lv_name>",
-            "Verify with: lvs or lvdisplay",
-        ]
+        # Some of the time, phrase the size in extents (real exams do this):
+        # the scratch VG is then built with a non-default PE size.
+        use_extents = params.get('use_extents', random.random() < 0.4)
+        if use_extents:
+            self.pe_mib = random.choice([8, 16])
+            self.extents = random.choice([40, 50] if self.pe_mib == 8 else [20, 25])
+            self.lv_size_mb = self.pe_mib * self.extents
+            self.description = (
+                f"Volume group '{self.vg_name}' uses a physical extent size of "
+                f"{self.pe_mib} MiB. Create a logical volume named '{self.lv_name}' "
+                f"consisting of {self.extents} extents in that volume group."
+            )
+            self.hints = [
+                "lvcreate -l <count> sizes the LV in extents",
+                f"{self.extents} extents × {self.pe_mib}MiB = {self.lv_size_mb}MiB",
+                "Check the VG's extent size with: vgdisplay (PE Size)",
+                "Verify with: lvdisplay (Current LE)",
+            ]
+        else:
+            self.lv_size_mb = params.get('size', random.choice([300, 350, 400]))
+            self.description = (
+                f"Create a {self.lv_size_mb}MB logical volume named '{self.lv_name}' "
+                f"in volume group '{self.vg_name}'."
+            )
+            self.hints = [
+                "lvcreate creates a logical volume in an existing VG",
+                "Use -L for size in MB and -n for the LV name",
+                "LV device path: /dev/<vg_name>/<lv_name>",
+                "Verify with: lvs or lvdisplay",
+            ]
 
         return self
 
     def inject_fault(self):
-        return _scratch_setup(self, self.device, self.vg_name)
+        return _scratch_setup(self, self.device, self.vg_name, pe_mib=self.pe_mib)
 
     def restore_fault(self):
         return _scratch_teardown(self, self.vg_name, self.device)
@@ -386,6 +437,8 @@ class ExtendLVTask(BaseTask):
         self.lv_name = None
         self.target_mb = None
         self.extend_by_mb = None
+        self.pe_mib = None
+        self.initial_mb = self._INITIAL_MB
 
     def generate(self, **params):
         # Self-contained: provision a small scratch LV that the candidate extends.
@@ -393,30 +446,55 @@ class ExtendLVTask(BaseTask):
         uid = _uid()
         self.vg_name = params.get('vg_name', f'vg_prac{uid}')
         self.lv_name = params.get('lv_name', f'lv_data{uid}')
-        self.extend_by_mb = params.get('extend_by', random.choice([100, 150]))
-        self.target_mb = self._INITIAL_MB + self.extend_by_mb
 
-        self.description = (
-            f"Extend a logical volume:\n"
-            f"  - Volume group: {self.vg_name}\n"
-            f"  - Logical volume: {self.lv_name}  (currently {self._INITIAL_MB}MB)\n"
-            f"  - Task: extend by {self.extend_by_mb}MB (to ~{self.target_mb}MB)\n"
-            f"  - Ensure LV is extended"
-        )
-
-        self.hints = [
-            f"Extend LV: lvextend -L +{self.extend_by_mb}M /dev/{self.vg_name}/{self.lv_name}",
-            "Check current size: lvs or lvdisplay",
-            "Extend by amount: lvextend -L +<size>M /dev/vg/lv",
-            "Use all free space: lvextend -l +100%FREE /dev/vg/lv",
-            "After extending, resize filesystem with xfs_growfs or resize2fs"
-        ]
+        # Some of the time, phrase the growth in extents instead of MB.
+        use_extents = params.get('use_extents', random.random() < 0.4)
+        if use_extents:
+            self.pe_mib = 16
+            initial_le = 6                                   # 96MB scratch LV
+            extend_by_le = random.choice([8, 10])
+            self.initial_mb = initial_le * self.pe_mib
+            self.extend_by_mb = extend_by_le * self.pe_mib
+            self.target_mb = self.initial_mb + self.extend_by_mb
+            self.description = (
+                f"Extend a logical volume (extent-based):\n"
+                f"  - Volume group: {self.vg_name}  (extent size {self.pe_mib}MiB)\n"
+                f"  - Logical volume: {self.lv_name}  (currently {initial_le} extents)\n"
+                f"  - Task: extend it by {extend_by_le} extents\n"
+                f"    (to {initial_le + extend_by_le} extents total)"
+            )
+            self.hints = [
+                f"Extend by extents: lvextend -l +{extend_by_le} /dev/{self.vg_name}/{self.lv_name}",
+                "lvextend -l <count> sets a total, -l +<count> adds extents",
+                f"{extend_by_le} extents × {self.pe_mib}MiB = +{self.extend_by_mb}MB",
+                "Check current extents: lvdisplay (Current LE)",
+                "After extending, resize the filesystem with xfs_growfs or resize2fs",
+            ]
+        else:
+            self.initial_mb = self._INITIAL_MB
+            self.extend_by_mb = params.get('extend_by', random.choice([100, 150]))
+            self.target_mb = self.initial_mb + self.extend_by_mb
+            self.description = (
+                f"Extend a logical volume:\n"
+                f"  - Volume group: {self.vg_name}\n"
+                f"  - Logical volume: {self.lv_name}  (currently {self.initial_mb}MB)\n"
+                f"  - Task: extend by {self.extend_by_mb}MB (to ~{self.target_mb}MB)\n"
+                f"  - Ensure LV is extended"
+            )
+            self.hints = [
+                f"Extend LV: lvextend -L +{self.extend_by_mb}M /dev/{self.vg_name}/{self.lv_name}",
+                "Check current size: lvs or lvdisplay",
+                "Extend by amount: lvextend -L +<size>M /dev/vg/lv",
+                "Use all free space: lvextend -l +100%FREE /dev/vg/lv",
+                "After extending, resize filesystem with xfs_growfs or resize2fs"
+            ]
 
         return self
 
     def inject_fault(self):
         return _scratch_setup(self, self.device, self.vg_name,
-                              lv=self.lv_name, lv_mb=self._INITIAL_MB)
+                              lv=self.lv_name, lv_mb=self.initial_mb,
+                              pe_mib=self.pe_mib)
 
     def restore_fault(self):
         return _scratch_teardown(self, self.vg_name, self.device)
@@ -579,6 +657,157 @@ class LVMFullWorkflowTask(BaseTask):
             total_points += 3
         else:
             checks.append(ValidationCheck("persistent_mount", False, 0, "No valid fstab entry", max_points=3))
+
+        passed = total_points >= (self.points * 0.7)
+        return ValidationResult(self.id, passed, total_points, self.points, checks)
+
+
+@TaskRegistry.register("lvm")
+class LVMExtentWorkflowTask(BaseTask):
+    """Exam-style workflow with explicit extent sizing: VG with a set PE size,
+    LV specified as a number of extents, formatted and mounted persistently."""
+
+    disk_slots = 1
+
+    # (pe_mib, extents) combos all yield 320MiB: fits a 500MB practice disk and
+    # clears the RHEL 10 mkfs.xfs 300MB minimum.
+    _COMBOS = [(16, 20), (8, 40), (32, 10)]
+
+    def __init__(self):
+        super().__init__(
+            id="lvm_extent_workflow_001",
+            category="lvm",
+            difficulty="exam",
+            points=20
+        )
+        self.task_order = 37
+        self.tags = ['lvm-workflow', 'lvm-extents', 'exam-critical', 'fstab']
+        self.exam_tips = [
+            "vgcreate -s <size>M sets the physical extent (PE) size of the VG",
+            "lvcreate -l <count> sizes the LV in extents instead of bytes",
+            "LV size = extent count × PE size — check with vgdisplay/lvdisplay",
+            "vgdisplay shows 'PE Size' and 'Total PE'; lvdisplay shows 'Current LE'",
+            "Real exams phrase LV sizes in extents — know -l as well as -L",
+        ]
+        self.requires_persistence = True
+        self.device = None
+        self.vg_name = None
+        self.lv_name = None
+        self.pe_mib = None
+        self.extents = None
+        self.mount_point = None
+        self.fstype = None
+
+    def generate(self, **params):
+        self.device = params.get('device') or get_practice_device() or '/dev/vdb'
+        uid = _uid()
+        self.vg_name = params.get('vg_name', f'vg_ext{uid}')
+        self.lv_name = params.get('lv_name', f'lv_data{uid}')
+        self.pe_mib, self.extents = params.get('combo', random.choice(self._COMBOS))
+        self.fstype = params.get('fstype', 'xfs')
+        self.mount_point = params.get('mount', f'/mnt/lvm{random.randint(1,99)}')
+
+        self.description = (
+            f"Create a logical volume sized in extents:\n"
+            f"  1. Create volume group '{self.vg_name}' on {self.device} with a\n"
+            f"     physical extent size of {self.pe_mib} MiB\n"
+            f"  2. Create logical volume '{self.lv_name}' consisting of\n"
+            f"     {self.extents} extents\n"
+            f"  3. Format it with {self.fstype} and mount it persistently at\n"
+            f"     {self.mount_point}"
+        )
+
+        self.hints = [
+            f"Set the extent size at VG creation: vgcreate -s {self.pe_mib}M ...",
+            f"Size the LV in extents: lvcreate -l {self.extents} -n <name> <vg>",
+            f"{self.extents} extents × {self.pe_mib}MiB = "
+            f"{self.extents * self.pe_mib}MiB total",
+            "Verify: vgdisplay (PE Size) and lvdisplay (Current LE)",
+            "Then mkfs, mount, and add a UUID entry to /etc/fstab; test with mount -a",
+        ]
+
+        return self
+
+    def validate(self):
+        checks = []
+        total_points = 0
+        from validators.system_validators import get_filesystem_type, get_mounted_devices
+
+        # Check 1: VG exists with the requested PE size (5 points)
+        actual_pe = _vg_extent_size_mib(self.vg_name)
+        if actual_pe is None:
+            checks.append(ValidationCheck("vg_extent_size", False, 0,
+                          f"Volume group '{self.vg_name}' not found", max_points=5))
+        elif abs(actual_pe - self.pe_mib) < 0.01:
+            checks.append(ValidationCheck("vg_extent_size", True, 5,
+                          f"VG extent size is {self.pe_mib}MiB"))
+            total_points += 5
+        else:
+            checks.append(ValidationCheck("vg_extent_size", False, 0,
+                          f"VG extent size is {actual_pe:g}MiB (expected {self.pe_mib}MiB — "
+                          f"set with vgcreate -s)", max_points=5))
+
+        # Check 2: LV exists (3 points)
+        if validate_lv_exists(self.vg_name, self.lv_name):
+            checks.append(ValidationCheck("lv_exists", True, 3, "Logical volume created"))
+            total_points += 3
+
+            # Check 3: LV has the requested number of extents (4 points)
+            actual_le = _lv_extent_count(self.vg_name, self.lv_name)
+            if actual_le == self.extents:
+                checks.append(ValidationCheck("lv_extents", True, 4,
+                              f"LV has {self.extents} extents"))
+                total_points += 4
+            else:
+                checks.append(ValidationCheck("lv_extents", False, 0,
+                              f"LV has {actual_le} extents (expected {self.extents})",
+                              max_points=4))
+        else:
+            checks.append(ValidationCheck("lv_exists", False, 0,
+                          "Logical volume not found", max_points=3))
+            checks.append(ValidationCheck("lv_extents", False, 0,
+                          "Cannot check extents — LV missing", max_points=4))
+
+        # Check 4: Filesystem (3 points)
+        lv_path = f'/dev/{self.vg_name}/{self.lv_name}'
+        if get_filesystem_type(lv_path) == self.fstype:
+            checks.append(ValidationCheck("fs_formatted", True, 3,
+                          f"Formatted as {self.fstype}"))
+            total_points += 3
+        else:
+            checks.append(ValidationCheck("fs_formatted", False, 0,
+                          "Filesystem not formatted or wrong type", max_points=3))
+
+        # Check 5: Mounted (2 points)
+        mounts = get_mounted_devices()
+        if any(m['mount_point'] == self.mount_point for m in mounts):
+            checks.append(ValidationCheck("lv_mounted", True, 2,
+                          f"Mounted at {self.mount_point}"))
+            total_points += 2
+        else:
+            checks.append(ValidationCheck("lv_mounted", False, 0,
+                          "Not mounted", max_points=2))
+
+        # Check 6: Persistent mount with a real source field (3 points)
+        fstab_ok = False
+        try:
+            with open('/etc/fstab') as f:
+                for line in f:
+                    s = line.split('#', 1)[0].split()
+                    if len(s) >= 2 and s[1] == self.mount_point:
+                        source = s[0]
+                        if source and source not in ('UUID=', 'LABEL='):
+                            fstab_ok = True
+                            break
+        except OSError:
+            pass
+        if fstab_ok:
+            checks.append(ValidationCheck("persistent_mount", True, 3,
+                          "Valid entry in /etc/fstab"))
+            total_points += 3
+        else:
+            checks.append(ValidationCheck("persistent_mount", False, 0,
+                          "No valid fstab entry", max_points=3))
 
         passed = total_points >= (self.points * 0.7)
         return ValidationResult(self.id, passed, total_points, self.points, checks)
