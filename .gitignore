@@ -26,6 +26,7 @@ data/logs/
 
 # Exam results (user data)
 data/results/*.json
+data/flagged_tasks.json
 
 # OS
 .DS_Store

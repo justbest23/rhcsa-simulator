@@ -115,6 +115,25 @@ class TaskRegistry:
                 if not task_classes:
                     return None
 
+        # Tasks flagged as bad ("marked for potential removal") are never
+        # offered, in any mode. Manage flags in Setup → Task Statistics.
+        try:
+            from core import task_flags
+            bad_ids = task_flags.flagged_ids()
+        except Exception:
+            bad_ids = set()
+        if bad_ids:
+            kept = []
+            for tc in task_classes:
+                try:
+                    if tc().id not in bad_ids:
+                        kept.append(tc)
+                except Exception:
+                    kept.append(tc)
+            task_classes = kept
+            if not task_classes:
+                return None
+
         # Filter by difficulty
         if difficulty:
             filtered = []

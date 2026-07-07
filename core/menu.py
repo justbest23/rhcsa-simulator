@@ -546,8 +546,9 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
         input("\nPress Enter to return...")
 
     def show_stats(self):
-        """Show task statistics."""
+        """Show task statistics, plus review/unflag tasks flagged as bad."""
         from tasks.registry import TaskRegistry
+        from core import task_flags
 
         fmt.clear_screen()
         fmt.print_header("TASK STATISTICS")
@@ -555,8 +556,33 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
         TaskRegistry.initialize()
         TaskRegistry.print_statistics()
 
+        flags = task_flags.all_flags()
         print()
-        input("Press Enter to return...")
+        if flags:
+            print(fmt.bold(f"Flagged as bad — marked for potential removal "
+                           f"({len(flags)}):"))
+            ids = sorted(flags)
+            for i, tid in enumerate(ids, 1):
+                info = flags[tid] or {}
+                reason = info.get('reason', '')
+                when = info.get('flagged_at', '')
+                print(f"  {i}. {tid}"
+                      + (f"  ({when})" if when else ""))
+                if reason:
+                    print(fmt.dim(f"     {reason}"))
+            print(fmt.dim("  Flagged tasks are never offered in any mode."))
+            print()
+            choice = input("Enter a number to UNFLAG that task, or press "
+                           "Enter to return: ").strip()
+            if choice.isdigit() and 1 <= int(choice) <= len(ids):
+                tid = ids[int(choice) - 1]
+                task_flags.unflag(tid)
+                print(fmt.success(f"Unflagged '{tid}' — back in rotation."))
+                input("\nPress Enter to return...")
+        else:
+            print(fmt.dim("No tasks are flagged as bad. (Flag one with 'b' after "
+                          "a practice task or from Result History.)"))
+            input("\nPress Enter to return...")
 
     def export_report(self):
         """Export progress report."""
@@ -1337,16 +1363,29 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
 
         fmt.page_output(buf.getvalue())
 
-        # Offer the dispute path when there are checks to dispute.
+        # Offer the dispute path when there are checks to dispute, and let a
+        # bad question be flagged out of rotation from here too.
         if checks:
             print(fmt.dim("Think the checker got this wrong? Type 'd' to dispute it "
                           "(opens a GitHub issue; an AI reviews your evidence and "
                           "pushes a fix if you're right)."))
-            choice = input("Press Enter to return to session view, or 'd' to dispute: ").strip().lower()
-            if choice == 'd':
-                self._dispute_check_flow(tr, checks)
-        else:
-            input("Press Enter to return to session view...")
+        print(fmt.dim("Type 'b' to flag this task as bad (marked for potential "
+                      "removal — never offered again)."))
+        choice = input("Press Enter to return to session view"
+                       + (", 'd' to dispute" if checks else "")
+                       + ", or 'b' to flag: ").strip().lower()
+        if choice == 'd' and checks:
+            self._dispute_check_flow(tr, checks)
+        elif choice == 'b':
+            from core import task_flags
+            reason = input("Why is it bad? (optional): ").strip()
+            if task_flags.flag(tr.get('task_id', ''), reason):
+                print(fmt.success(f"Flagged '{tr.get('task_id')}' — it won't be "
+                                  "offered again (unflag in Setup → Task "
+                                  "Statistics)."))
+            else:
+                print(fmt.dim("Already flagged."))
+            input("\nPress Enter to return...")
 
     def _dispute_check_flow(self, tr, checks):
         """Let the candidate dispute a checker result: capture system-state

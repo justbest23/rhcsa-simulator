@@ -179,7 +179,15 @@ def run_quick_practice(category=None):
                 task_env.reset_after_task(task)
 
             print()
-            if i < len(tasks) and not confirm_action("Continue to next task?", default=True):
+            nxt = input("Press Enter to continue ('b' flags this task as bad, "
+                        "'q' quits): ").strip().lower()
+            if nxt == 'b':
+                from core import task_flags
+                reason = input("Why is it bad? (optional): ").strip()
+                task_flags.flag(task.id, reason)
+                print(fmt.success(f"Flagged '{task.id}' — it won't be offered "
+                                  "again (unflag in Setup → Task Statistics)."))
+            elif nxt == 'q':
                 break
     finally:
         # However the session ends (finished, quit, or Ctrl-C), leave a clean
