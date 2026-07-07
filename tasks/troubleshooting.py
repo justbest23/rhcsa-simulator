@@ -729,20 +729,20 @@ class SELinuxHttpdBooleanFaultTask(TroubleshootingTask):
 
         if _httpd_present():
             _ensure_httpd_running(self.id)
-            # Trigger an actual denial so audit logs have something real
-            _run(['curl', '-s', '--max-time', '2', 'http://localhost:8080'], timeout=5)
-        else:
-            # No httpd to generate the denial (user declined the install offer)
-            # — leave the records a real one would have produced so
-            # ausearch/audit2why still point at the boolean.
-            _seed_avc_denial(
-                '{ name_connect } for  pid=2841 comm="httpd" dest=8080 '
-                'scontext=system_u:system_r:httpd_t:s0 '
-                'tcontext=system_u:object_r:http_cache_port_t:s0 '
-                'tclass=tcp_socket permissive=0',
-                'SELinux is preventing /usr/sbin/httpd from name_connect access '
-                'on the tcp_socket port 8080. For complete SELinux messages '
-                'run: ausearch -m AVC | audit2why')
+
+        # Curling localhost:8080 as a client (the old approach here) never
+        # makes httpd itself originate the outbound connection, so it can't
+        # produce a genuine name_connect denial — nothing else in this fault
+        # causes httpd to actually dial out. Seed the AVC evidence a real
+        # denial would have left so ausearch/audit2why still find it.
+        _seed_avc_denial(
+            '{ name_connect } for  pid=2841 comm="httpd" dest=8080 '
+            'scontext=system_u:system_r:httpd_t:s0 '
+            'tcontext=system_u:object_r:http_cache_port_t:s0 '
+            'tclass=tcp_socket permissive=0',
+            'SELinux is preventing /usr/sbin/httpd from name_connect access '
+            'on the tcp_socket port 8080. For complete SELinux messages '
+            'run: ausearch -m AVC | audit2why')
 
         return True, f"Set {self.boolean_name}=off (was {self._original_value})"
 
