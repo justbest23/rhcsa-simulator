@@ -556,19 +556,57 @@ class TroubleshootSELinuxDenialTask(BaseTask):
             from tasks.troubleshooting import save_fault_state
             save_fault_state(self.id, {'directory': self.directory, 'fix_type': self.fix_type})
             return True, f"Created {self.directory} with wrong SELinux context (tmp_t)"
-        return True, "No directory setup needed for boolean fix type"
+
+        # boolean fix_type: actually turn the boolean off so there is a real
+        # fault to find and fix, and seed matching AVC evidence so
+        # `ausearch -m avc -ts recent | audit2why` has something to show
+        # (nothing else here ever makes httpd originate an outbound
+        # connection, so a genuine denial can't be relied on to occur).
+        from tasks.troubleshooting import save_fault_state, _seed_avc_denial
+
+        original_value = 'on'
+        r = _sp.run(['getsebool', self.expected_context], capture_output=True, text=True)
+        if r.returncode == 0 and '-->' in r.stdout:
+            original_value = r.stdout.split('-->')[-1].strip().split()[0]
+
+        _sp.run(['setsebool', '-P', self.expected_context, 'off'], capture_output=True)
+        save_fault_state(self.id, {
+            'fix_type': self.fix_type,
+            'boolean': self.expected_context,
+            'original_value': original_value,
+        })
+
+        _seed_avc_denial(
+            '{ name_connect } for  pid=2841 comm="httpd" dest=8080 '
+            'scontext=system_u:system_r:httpd_t:s0 '
+            'tcontext=system_u:object_r:http_cache_port_t:s0 '
+            'tclass=tcp_socket permissive=0',
+            'SELinux is preventing /usr/sbin/httpd from name_connect access '
+            'on the tcp_socket port 8080. For complete SELinux messages '
+            'run: ausearch -m AVC | audit2why')
+
+        return True, f"Set {self.expected_context}=off (was {original_value})"
 
     def restore_fault(self):
         import subprocess as _sp
         import shutil
         from tasks.troubleshooting import load_fault_state, clear_fault_state
-        state = load_fault_state()
+        state = load_fault_state(self.id)
         info = state.get('restore_info', {}) if state else {}
+
+        if info.get('fix_type') == 'boolean':
+            name = info.get('boolean')
+            original = info.get('original_value', 'on')
+            if name:
+                _sp.run(['setsebool', '-P', name, original], capture_output=True)
+            clear_fault_state(self.id)
+            return True, f"Restored {name}={original}"
+
         directory = info.get('directory', self.directory)
         if directory and os.path.exists(directory):
             _sp.run(['restorecon', '-Rv', directory], capture_output=True)
             shutil.rmtree(directory, ignore_errors=True)
-        clear_fault_state()
+        clear_fault_state(self.id)
         return True, f"Removed {directory}"
 
     def validate(self):
