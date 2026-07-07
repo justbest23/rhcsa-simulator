@@ -285,6 +285,7 @@ class PracticeSession:
                 print("  R - Retry this task")
                 print("  S - Show solution hints")
                 print("  C - Continue to next task")
+                print("  B - Flag this task as bad (mark for removal)")
                 print("  Q - Quit practice session")
                 print()
 
@@ -301,6 +302,14 @@ class PracticeSession:
                         continue
                     else:
                         break
+                elif choice == 'b':
+                    from core import task_flags
+                    reason = input("Why is it bad? (optional): ").strip()
+                    task_flags.flag(task.id, reason)
+                    print(fmt.success(f"Flagged '{task.id}' — it won't be "
+                                      "offered again (unflag in Setup → Task "
+                                      "Statistics)."))
+                    break
                 elif choice == 'q':
                     stop_requested = True
                     break
@@ -308,7 +317,13 @@ class PracticeSession:
                     break
             else:
                 print(fmt.success("\nGreat job!"))
-                input("Press Enter to continue...")
+                if input("Press Enter to continue (or 'b' to flag this task "
+                         "as bad): ").strip().lower() == 'b':
+                    from core import task_flags
+                    reason = input("Why is it bad? (optional): ").strip()
+                    task_flags.flag(task.id, reason)
+                    print(fmt.success(f"Flagged '{task.id}' — it won't be "
+                                      "offered again."))
                 break
 
         # Per-task system changes are NOT reverted here — everything is undone

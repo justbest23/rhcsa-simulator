@@ -253,6 +253,10 @@ collide. Loop images live in `/var/lib/rhcsa-simulator/loops/`.
   real, seeded NFS exports for the network-storage tasks (refreshed each exam).
 - **Link second lab machine** — register a second box for the Boot Rescue Lab
   and remote scenarios (see below). Can be the same VM as the NFS server.
+- **Task Statistics** — per-category counts, plus the list of tasks **flagged
+  as bad** ("marked for potential removal"). Hit a task that's just a bad
+  question? Type `b` after it in practice, or from its Result History detail —
+  it is never offered again in any mode until you unflag it here.
 - **Populate Practice Environment** (DNF history).
 
 ### When does the machine get cleaned?
