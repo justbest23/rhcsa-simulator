@@ -643,10 +643,8 @@ class ListActiveTimersTask(BaseTask):
         )
 
         self.description = (
-            f"List all active systemd timers:\n"
-            f"  - Use the appropriate systemctl command to list timers\n"
-            f"  - Save the output to: {self.output_file}\n"
-            f"  - The file should include next-trigger and last-trigger columns"
+            f"Save a listing of all active systemd timers (including their "
+            f"next and last trigger times) to {self.output_file}."
         )
 
         self.hints = [

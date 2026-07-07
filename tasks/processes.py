@@ -369,24 +369,19 @@ class FindProcessByUserTask(BaseTask):
             )
 
         if self.action == 'list':
-            task_desc = (
-                f"List all processes owned by user '{self.username}'\n"
-                f"  - Save the output to: {self.output_file}"
+            self.description = (
+                f"Save a list of all processes owned by user "
+                f"'{self.username}' to {self.output_file}."
             )
         elif self.action == 'count':
-            task_desc = (
-                f"Count processes owned by user '{self.username}'\n"
-                f"  - Save the count to: {self.output_file}"
+            self.description = (
+                f"Count the processes owned by user '{self.username}' and "
+                f"save the number to {self.output_file}."
             )
         else:  # kill
-            task_desc = f"Terminate all processes owned by user '{self.username}'"
-
-        self.description = (
-            f"Process management by user:\n"
-            f"  - Task: {task_desc}\n"
-            f"  - User: {self.username}\n"
-            f"  - Use appropriate ps/pkill commands"
-        )
+            self.description = (
+                f"Terminate all processes owned by user '{self.username}'."
+            )
 
         if self.action == 'list':
             self.hints = [

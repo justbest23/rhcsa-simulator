@@ -655,10 +655,14 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
             fmt.print_header("PRUNE HISTORY")
             print(fmt.bold("Remove:"))
             print("  1. A specific exam")
-            print("  2. All practice/adaptive attempts")
-            print("  3. Reset one category's adaptive (SM-2) state")
-            print("  4. Everything (wipe all progress)")
+            print("  2. Recent practice attempts (pick which — e.g. a botched session)")
+            print("  3. All practice/adaptive attempts")
+            print("  4. Reset one category's adaptive (SM-2) state")
+            print("  5. Everything (wipe all progress)")
             print("  0. Back")
+            print()
+            print(fmt.dim("Weak-area/SM-2 stats are recomputed from the surviving history"))
+            print(fmt.dim("after every prune, so removed attempts stop counting against you."))
             print()
             choice = input("Select option: ").strip()
 
@@ -683,11 +687,46 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
                         print(fmt.success("Deleted."))
                         input("\nPress Enter...")
             elif choice == '2':
-                if confirm_action("Delete ALL practice/adaptive attempts?", default=False):
-                    n = db.clear_practice_history()
-                    print(fmt.success(f"Removed {n} attempt(s)."))
+                attempts = db.list_recent_practice(limit=30)
+                if not attempts:
+                    print(fmt.dim("No practice attempts recorded."))
+                    input("\nPress Enter...")
+                    continue
+                print()
+                for i, a in enumerate(attempts, 1):
+                    status = 'PASS' if a['passed'] else 'FAIL'
+                    print(f"  {i:2d}. {(a['created_at'] or '')[:16]}  "
+                          f"{a['score']}/{a['max_score']} {status}  "
+                          f"{a['category']}  {a['task_id']}  ({a['mode']})")
+                print()
+                sel = input("Numbers to delete (e.g. 1,3 or 1-5; blank to cancel): ").strip()
+                picked = set()
+                for part in sel.split(','):
+                    part = part.strip()
+                    if '-' in part:
+                        lo, _, hi = part.partition('-')
+                        if lo.strip().isdigit() and hi.strip().isdigit():
+                            picked.update(range(int(lo), int(hi) + 1))
+                    elif part.isdigit():
+                        picked.add(int(part))
+                ids = [attempts[i - 1]['id'] for i in sorted(picked)
+                       if 1 <= i <= len(attempts)]
+                if ids and confirm_action(f"Delete {len(ids)} attempt(s)?",
+                                          default=False):
+                    n = db.delete_practice_attempts(ids)
+                    db.rebuild_weak_areas()
+                    print(fmt.success(f"Removed {n} attempt(s); weak areas recomputed."))
+                    input("\nPress Enter...")
+                elif not ids:
+                    print(fmt.dim("Nothing selected."))
                     input("\nPress Enter...")
             elif choice == '3':
+                if confirm_action("Delete ALL practice/adaptive attempts?", default=False):
+                    n = db.clear_practice_history()
+                    db.rebuild_weak_areas()
+                    print(fmt.success(f"Removed {n} attempt(s); weak areas recomputed."))
+                    input("\nPress Enter...")
+            elif choice == '4':
                 stats = db.get_all_category_stats()
                 if not stats:
                     print(fmt.dim("No category state recorded."))
@@ -705,7 +744,7 @@ For RHCSA exam info: https://www.redhat.com/rhcsa
                         db.reset_category(cat)
                         print(fmt.success("Reset."))
                         input("\nPress Enter...")
-            elif choice == '4':
+            elif choice == '5':
                 print(fmt.warning("This wipes ALL exams, attempts, and adaptive state."))
                 if confirm_action("Type-safe confirm: wipe everything?", default=False):
                     db.clear_all_progress()

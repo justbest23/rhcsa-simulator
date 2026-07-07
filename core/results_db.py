@@ -204,15 +204,18 @@ class ResultsDB:
         except Exception:
             pass
 
-    def _update_weak_area(self, category, score, max_score, passed):
-        """Update weak area stats using SM-2 algorithm."""
+    def _update_weak_area(self, category, score, max_score, passed, when=None):
+        """Update weak area stats using SM-2 algorithm.
+
+        `when` (ISO string) backdates the attempt — used when replaying
+        history in rebuild_weak_areas(); defaults to now for live updates."""
         conn = self._get_conn()
         try:
             row = conn.execute(
                 "SELECT * FROM weak_areas WHERE category = ?", (category,)
             ).fetchone()
 
-            now = datetime.now().isoformat()
+            now = when or datetime.now().isoformat()
 
             if row is None:
                 ef = 2.5
@@ -248,7 +251,8 @@ class ResultsDB:
                 interval = 1
 
             ef = max(1.3, ef + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02)))
-            due = (datetime.now() + timedelta(days=interval)).isoformat()
+            base = datetime.fromisoformat(now) if when else datetime.now()
+            due = (base + timedelta(days=interval)).isoformat()
 
             attempts = (row['attempts'] + 1) if row else 1
             passes = (row['passes'] + (1 if passed else 0)) if row else (1 if passed else 0)
@@ -267,6 +271,65 @@ class ResultsDB:
             conn.commit()
         finally:
             conn.close()
+
+    def list_recent_practice(self, limit=30):
+        """Most recent practice/adaptive attempts, newest first (for pruning)."""
+        conn = self._get_conn()
+        try:
+            rows = conn.execute("""
+                SELECT id, task_id, category, score, max_score, passed, mode,
+                       created_at
+                FROM practice_history ORDER BY id DESC LIMIT ?
+            """, (limit,)).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    def delete_practice_attempts(self, ids):
+        """Delete specific practice attempts by row id. Returns rows deleted.
+        Callers should rebuild_weak_areas() afterwards."""
+        if not ids:
+            return 0
+        conn = self._get_conn()
+        try:
+            marks = ','.join('?' for _ in ids)
+            cur = conn.execute(
+                f"DELETE FROM practice_history WHERE id IN ({marks})",
+                list(ids))
+            conn.commit()
+        finally:
+            conn.close()
+        self._autosave()
+        return cur.rowcount
+
+    def rebuild_weak_areas(self):
+        """Recompute ALL weak-area/SM-2 state from the surviving practice
+        history. Without this, pruned attempts kept polluting the adaptive
+        stats: deleting rows never touched weak_areas. Replays every attempt
+        in order, backdated to its original timestamp."""
+        conn = self._get_conn()
+        try:
+            conn.execute("DELETE FROM weak_areas")
+            conn.commit()
+            rows = conn.execute(
+                "SELECT category, score, max_score, passed, created_at "
+                "FROM practice_history ORDER BY created_at ASC, id ASC"
+            ).fetchall()
+        finally:
+            conn.close()
+        for r in rows:
+            when = None
+            try:
+                # SQLite CURRENT_TIMESTAMP is 'YYYY-MM-DD HH:MM:SS'
+                when = datetime.strptime(
+                    r['created_at'], '%Y-%m-%d %H:%M:%S').isoformat()
+            except (TypeError, ValueError):
+                pass
+            self._update_weak_area(r['category'], r['score'],
+                                   r['max_score'], bool(r['passed']),
+                                   when=when)
+        self._autosave()
+        return len(rows)
 
     def get_recent_exams(self, limit=10):
         """Get recent exam results."""
@@ -491,9 +554,10 @@ class ResultsDB:
             conn.execute("DELETE FROM task_results WHERE exam_id=?", (exam_id,))
             cur = conn.execute("DELETE FROM exam_results WHERE exam_id=?", (exam_id,))
             conn.commit()
-            return cur.rowcount
         finally:
             conn.close()
+        self._autosave()
+        return cur.rowcount
 
     def clear_practice_history(self):
         """Delete all practice/adaptive attempts. Returns rows deleted."""
@@ -501,9 +565,10 @@ class ResultsDB:
         try:
             cur = conn.execute("DELETE FROM practice_history")
             conn.commit()
-            return cur.rowcount
         finally:
             conn.close()
+        self._autosave()
+        return cur.rowcount
 
     def reset_category(self, category):
         """Clear the SM-2 / weak-area state for one category."""
@@ -511,9 +576,10 @@ class ResultsDB:
         try:
             cur = conn.execute("DELETE FROM weak_areas WHERE category=?", (category,))
             conn.commit()
-            return cur.rowcount
         finally:
             conn.close()
+        self._autosave()
+        return cur.rowcount
 
     def clear_all_progress(self):
         """Wipe every progress table (used before a full restore)."""
@@ -525,6 +591,7 @@ class ResultsDB:
             conn.commit()
         finally:
             conn.close()
+        self._autosave()
 
 
 _results_db = None

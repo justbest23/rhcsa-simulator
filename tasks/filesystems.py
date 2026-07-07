@@ -57,10 +57,7 @@ class CreateFilesystemTask(BaseTask):
         self.device = params.get('device') or get_practice_device() or '/dev/vdb1'
 
         self.description = (
-            f"Create a filesystem:\n"
-            f"  - Device: {self.device}\n"
-            f"  - Filesystem type: {fstype_desc}\n"
-            f"  - Ensure the filesystem is properly formatted"
+            f"Format {self.device} with a {fstype_desc} filesystem."
         )
 
         self.hints = [
@@ -129,11 +126,7 @@ class MountFilesystemTask(BaseTask):
         self.mount_point = params.get('mount_point', f'/mnt/data{random.randint(1,99)}')
 
         self.description = (
-            f"Mount a filesystem:\n"
-            f"  - Device: {self.device}\n"
-            f"  - Mount point: {self.mount_point}\n"
-            f"  - Create mount point if it doesn't exist\n"
-            f"  - Mount the filesystem"
+            f"Mount {self.device} at {self.mount_point}."
         )
 
         self.hints = [
@@ -231,14 +224,9 @@ class PersistentMountTask(BaseTask):
         self.options = params.get('options', 'defaults')
 
         self.description = (
-            f"Configure persistent filesystem mount:\n"
-            f"  - Device: {self.device}\n"
-            f"  - Mount point: {self.mount_point}\n"
-            f"  - Filesystem type: {self.fstype}\n"
-            f"  - Mount options: {self.options}\n"
-            f"  - Use UUID in /etc/fstab (not device name)\n"
-            f"  - Mount the filesystem now\n"
-            f"  - Ensure it mounts automatically at boot"
+            f"Mount {self.device} ({self.fstype}, options: {self.options}) at "
+            f"{self.mount_point}, now and persistently across reboots. "
+            f"Identify the device by UUID."
         )
 
         self.hints = [
@@ -503,12 +491,10 @@ class ExtendFilesystemTask(BaseTask):
         self.expected_size_mb = params.get('size', random.choice([250, 300, 350]))
 
         self.description = (
-            f"Extend a filesystem:\n"
-            f"  - Device: {self.device}\n"
-            f"  - Mount point: {self.mount_point}\n"
-            f"  - Filesystem type: {self.fstype}  (currently {self._INITIAL_MB}MB)\n"
-            f"  - Resize to approximately {self.expected_size_mb}MB\n"
-            f"  - Keep the filesystem mounted — data must not be lost"
+            f"Extend the {self.fstype} filesystem on {self.device} (mounted at "
+            f"{self.mount_point}, currently {self._INITIAL_MB}MB) to "
+            f"approximately {self.expected_size_mb}MB without unmounting it or "
+            f"losing data."
         )
         self.hints = [
             f"Step 1 — extend the LV: lvextend -L {self.expected_size_mb}M /dev/{self.vg_name}/{self.lv_name}",
@@ -798,11 +784,8 @@ class UnmountFilesystemTask(BaseTask):
         self.mount_point = params.get('mount_point', f'/mnt/data{random.randint(1,99)}')
 
         self.description = (
-            f"Unmount a filesystem:\n"
-            f"  - Mount point: {self.mount_point}\n"
-            f"  - Ensure no processes are using the filesystem\n"
-            f"  - Safely unmount the filesystem\n"
-            f"  - Remove the mount point directory (optional)"
+            f"Safely unmount the filesystem at {self.mount_point}, dealing "
+            f"with any processes still using it."
         )
 
         self.hints = [
@@ -874,12 +857,7 @@ class CreateVFATFilesystemTask(BaseTask):
         self.mount_point = params.get('mount_point', f'/mnt/vfat{random.randint(1,99)}')
 
         self.description = (
-            f"Create and mount a VFAT filesystem:\n"
-            f"  - Device: {self.device}\n"
-            f"  - Filesystem type: VFAT\n"
-            f"  - Mount point: {self.mount_point}\n"
-            f"  - Create the mount point if it does not exist\n"
-            f"  - Format the device as VFAT and mount it there"
+            f"Format {self.device} as VFAT and mount it at {self.mount_point}."
         )
 
         self.hints = [

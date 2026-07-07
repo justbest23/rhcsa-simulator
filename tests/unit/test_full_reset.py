@@ -31,6 +31,10 @@ class TestPracticeGroupMatching:
 
 class TestRepoKeepList:
     def test_system_repos_are_kept(self, tmp_path, monkeypatch):
+        # rhel-baseos.repo is REMOVABLE despite the protected rhel- prefix:
+        # it's a name the dual-repo task generates (real RHEL repos only live
+        # in redhat.repo), and treating it as a system repo made it survive
+        # every reset.
         repo_dir = tmp_path
         for f in ('redhat.repo', 'rhel-baseos.repo', 'redhat-extra.repo',
                   'docker-ce.repo', 'epel.repo', 'notes.txt'):
@@ -40,7 +44,7 @@ class TestRepoKeepList:
         monkeypatch.setattr(fr.os, 'listdir',
                             lambda d: real_listdir(repo_dir) if d == '/etc/yum.repos.d' else real_listdir(d))
         found = {fr.os.path.basename(p) for p in fr.list_nondefault_repos()}
-        assert found == {'docker-ce.repo', 'epel.repo'}
+        assert found == {'docker-ce.repo', 'epel.repo', 'rhel-baseos.repo'}
 
 
 class TestSystemSwapGuard:

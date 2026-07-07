@@ -84,14 +84,23 @@ def _noop(_msg):
 
 def list_nondefault_repos():
     """Third-party .repo files under /etc/yum.repos.d (RHEL system repos kept)."""
+    # Task-created repo files are removable even when their name collides with
+    # a protected system prefix (older task builds generated rhel-baseos/
+    # rhel-appstream; real RHEL repos only ever live in redhat.repo).
+    try:
+        from core.lab_cleanup import _PRACTICE_REPO_SET
+    except Exception:
+        _PRACTICE_REPO_SET = set()
     out, d = [], '/etc/yum.repos.d'
     try:
         for f in sorted(os.listdir(d)):
             if not f.endswith('.repo'):
                 continue
-            if f in _KEEP_REPO_FILES or f.startswith(_KEEP_REPO_PREFIXES):
+            full = os.path.join(d, f)
+            if full not in _PRACTICE_REPO_SET and (
+                    f in _KEEP_REPO_FILES or f.startswith(_KEEP_REPO_PREFIXES)):
                 continue
-            out.append(os.path.join(d, f))
+            out.append(full)
     except Exception:
         pass
     return out

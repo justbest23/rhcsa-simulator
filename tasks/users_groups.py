@@ -571,15 +571,16 @@ class ConfigureSudoTask(BaseTask):
         passwd_note = " without a password" if self.nopasswd else " (password required)"
 
         self.description = (
-            f"Grant '{self.username}' sudo access to run {self.allowed_cmds} as root"
-            f"{passwd_note}. Place the rule in /etc/sudoers.d/{self.username}."
+            f"Grant '{self.username}' sudo access to run {self.allowed_cmds} "
+            f"as root{passwd_note}."
         )
 
         self.hints = [
-            f"Drop-in sudoers files go in /etc/sudoers.d/, not /etc/sudoers",
+            "Drop-in sudoers files go in /etc/sudoers.d/, not /etc/sudoers",
             "sudoers rule format: user ALL=(ALL) [NOPASSWD:] command[,command]",
             "File permissions must be 0440 — world-writable files are ignored",
-            f"Validate syntax before relying on it: visudo -cf /etc/sudoers.d/{self.username}",
+            f"Check the effective rules: sudo -l -U {self.username}",
+            "Validate syntax before relying on it: visudo -cf <file>",
         ]
         return self
 
@@ -598,68 +599,70 @@ class ConfigureSudoTask(BaseTask):
                           f"User '{self.username}' does not exist", max_points=2))
             return ValidationResult(self.id, False, total, self.points, checks)
 
-        # Check 2: sudoers file exists (3 pts)
-        sudo_file = f"/etc/sudoers.d/{self.username}"
-        stat_result = execute_safe(["stat", sudo_file])
-        if stat_result.success:
-            checks.append(ValidationCheck("sudo_file_exists", True, 3,
-                          f"Sudoers file exists: {sudo_file}"))
-            total += 3
+        # Check 2: the EFFECTIVE rule is right (6 pts) — graded via
+        # `sudo -l -U`, so any valid placement (any drop-in name, or even
+        # /etc/sudoers) counts. The question no longer dictates the file.
+        sudo_check = execute_safe(["sudo", "-l", "-U", self.username])
+        listing = sudo_check.stdout if sudo_check.success else ""
+        if self.allowed_cmds == "ALL":
+            cmds_ok = "ALL" in listing
         else:
-            checks.append(ValidationCheck("sudo_file_exists", False, 0,
-                          f"Sudoers file not found: {sudo_file}", max_points=3))
-            return ValidationResult(self.id, False, total, self.points, checks)
+            cmds_ok = all(c.strip() in listing
+                          for c in self.allowed_cmds.split(","))
+        nopasswd_ok = (("NOPASSWD" in listing) == self.nopasswd)
+        may_run = "may run the following" in listing
 
-        # Check 3: file permissions are 0440 (2 pts)
-        perm_result = execute_safe(["stat", "-c", "%a", sudo_file])
-        actual_perms = perm_result.stdout.strip() if perm_result.success else ""
-        if actual_perms in ("440", "0440"):
-            checks.append(ValidationCheck("sudo_perms", True, 2,
-                          "File permissions are 0440"))
+        if may_run and cmds_ok and nopasswd_ok:
+            checks.append(ValidationCheck("sudo_rule", True, 6,
+                          f"'{self.username}' may run {self.allowed_cmds}"
+                          f"{' without a password' if self.nopasswd else ' (password required)'}"))
+            total += 6
+        elif may_run and cmds_ok:
+            checks.append(ValidationCheck("sudo_rule", True, 4,
+                          "Rule grants the commands but the NOPASSWD setting "
+                          "doesn't match the question", max_points=6))
+            total += 4
+        elif may_run:
+            checks.append(ValidationCheck("sudo_rule", False, 2,
+                          f"'{self.username}' has sudo rules, but not for the "
+                          f"requested commands ({self.allowed_cmds})",
+                          max_points=6))
             total += 2
-        else:
-            checks.append(ValidationCheck("sudo_perms", False, 0,
-                          f"Permissions are {actual_perms}, expected 440",
-                          max_points=2))
-
-        # Check 4: file contains correct rule (3 pts)
-        cat_result = execute_safe(["cat", f"/etc/sudoers.d/{self.username}"])
-        if cat_result.success:
-            content = cat_result.stdout
-            nopasswd_str = "NOPASSWD:" if self.nopasswd else ""
-            user_found = self.username in content
-            cmd_found = self.allowed_cmds in content or (
-                self.allowed_cmds == "ALL" and "ALL" in content)
-            nopasswd_ok = True
-            if self.nopasswd:
-                nopasswd_ok = "NOPASSWD" in content
-            elif not self.nopasswd:
-                nopasswd_ok = "NOPASSWD" not in content
-
-            if user_found and cmd_found and nopasswd_ok:
-                checks.append(ValidationCheck("sudo_rule", True, 3,
-                              "Sudo rule is correct"))
-                total += 3
-            elif user_found and cmd_found:
-                checks.append(ValidationCheck("sudo_rule", True, 2,
-                              "Sudo rule partially correct (NOPASSWD mismatch)"))
-                total += 2
-            else:
-                checks.append(ValidationCheck("sudo_rule", False, 0,
-                              "Sudo rule content is incorrect", max_points=3))
         else:
             checks.append(ValidationCheck("sudo_rule", False, 0,
-                          f"Cannot read sudoers file", max_points=3))
+                          f"No effective sudo rule for '{self.username}' "
+                          f"(checked with sudo -l -U)", max_points=6))
 
-        # Check 5: sudo -l works for user (2 pts)
-        sudo_check = execute_safe(["sudo", "-l", "-U", self.username])
-        if sudo_check.success and "not allowed" not in sudo_check.stdout.lower():
-            checks.append(ValidationCheck("sudo_access", True, 2,
-                          "Sudo access verified"))
+        # Check 3: rule lives in a /etc/sudoers.d/ drop-in (best practice, 2 pts)
+        import glob as _glob
+        in_dropin = False
+        for f in _glob.glob('/etc/sudoers.d/*'):
+            try:
+                with open(f) as fh:
+                    if any(ln.strip().startswith(self.username)
+                           for ln in fh if not ln.strip().startswith('#')):
+                        in_dropin = True
+                        break
+            except OSError:
+                continue
+        if in_dropin:
+            checks.append(ValidationCheck("sudo_dropin", True, 2,
+                          "Rule is in a /etc/sudoers.d/ drop-in"))
             total += 2
         else:
-            checks.append(ValidationCheck("sudo_access", False, 0,
-                          "Sudo access verification failed", max_points=2))
+            checks.append(ValidationCheck("sudo_dropin", False, 0,
+                          "Rule not found under /etc/sudoers.d/ — drop-ins "
+                          "are safer than editing /etc/sudoers", max_points=2))
+
+        # Check 4: whole sudoers config parses (2 pts)
+        syntax = execute_safe(["visudo", "-c"])
+        if syntax.success:
+            checks.append(ValidationCheck("sudo_syntax", True, 2,
+                          "sudoers syntax is valid (visudo -c)"))
+            total += 2
+        else:
+            checks.append(ValidationCheck("sudo_syntax", False, 0,
+                          "visudo -c reports a syntax error", max_points=2))
 
         passed = total >= (self.points * 0.7)
         return ValidationResult(self.id, passed, total, self.points, checks)

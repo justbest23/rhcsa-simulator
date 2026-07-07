@@ -586,9 +586,12 @@ class ConfigureBaseOSAppStreamTask(BaseTask):
         self.baseos_url = f"{self.server_url}/BaseOS/x86_64/os/"
         self.appstream_url = f"{self.server_url}/AppStream/x86_64/os/"
 
+        # No 'rhel-*' names here: Reset Machine deliberately preserves repo
+        # files with the rhel-/redhat- system prefixes, so a task-created
+        # rhel-baseos.repo would survive every reset.
         repo_id_sets = [
             ('baseos', 'appstream'),
-            ('rhel-baseos', 'rhel-appstream'),
+            ('lab-baseos', 'lab-appstream'),
             ('BaseOS', 'AppStream'),
             ('local-baseos', 'local-appstream'),
         ]

@@ -10,7 +10,8 @@ can interfere with the next run.
 Rather than snapshot the whole filesystem and diff it (which risks deleting
 unrelated user data), this module removes ONLY the specific paths the
 simulator's own tasks define — a curated manifest derived from the task set.
-It never touches /etc (fstab is handled separately by the fstab guard) and never
+The only /etc paths it touches are the exact task-created repo files in
+PRACTICE_REPO_FILES (fstab is handled separately by the fstab guard); it never
 touches shell dotfiles, SSH keys, or anything outside the manifest.
 """
 
@@ -23,16 +24,42 @@ SWAP_FILES = ['/swapfile', '/var/swap', '/swap.img']
 
 # Mount points / directories tasks create. Unmounted first if mounted, then the
 # directory tree is removed (these are simulator-owned scratch locations).
+# Globs, not exact names: the generators randomise a numeric suffix
+# (/mnt/data90, /mnt/vfat97, /mnt/practice_extend7503, ...), and without the
+# glob every one of them lingered forever.
 DIR_ARTIFACTS = [
-    '/mnt/data', '/mnt/nfsdata', '/mnt/shared', '/mnt/persistent',
-    '/mnt/practice_extend', '/mnt/vfat', '/mnt/external', '/mnt/faulttest',
-    '/mnt/recovery', '/mnt/rescue', '/mnt/sysimage', '/mnt/nonexistent',
+    '/mnt/data*', '/mnt/nfsdata*', '/mnt/shared*', '/mnt/persistent*',
+    '/mnt/practice_extend*', '/mnt/vfat*', '/mnt/external*', '/mnt/faulttest*',
+    '/mnt/recovery*', '/mnt/rescue*', '/mnt/sysimage', '/mnt/nonexistent',
     '/mnt/lvm*',
     '/opt/appdata', '/opt/webdata',
     '/srv/nfs', '/srv/samba', '/srv/website', '/srv/web', '/srv/webapp',
     '/srv/shares', '/srv/ftp', '/srv/acltest*',
     '/home/guests',
 ]
+
+# Task-created DNF repo files (tasks/repos.py generates exactly these repo
+# IDs; the file is always /etc/yum.repos.d/<id>.repo). EXACT names only —
+# never a glob, and never subscription-manager's redhat.repo. Note that
+# 'rhel-baseos'/'rhel-appstream' really are task names: genuine RHEL system
+# repos live in redhat.repo, never in files named like these.
+PRACTICE_REPO_FILES = [
+    f'/etc/yum.repos.d/{rid}.repo' for rid in (
+        'rocky10-baseos', 'rocky10-appstream', 'rocky10-crb',
+        'rocky10-extras', 'rocky10-devel',
+        'alma10-baseos', 'alma10-appstream', 'alma10-crb', 'alma10-extras',
+        'epel', 'epel9', 'grafana', 'nodesource-nodejs', 'vscode',
+        'kubernetes', 'hashicorp', 'docker-ce', 'elrepo', 'rpmfusion-free',
+        'pgdg17', 'mariadb', 'nginx', 'tailscale', 'google-cloud-cli',
+        'packages-microsoft-com-prod',
+        'broken-baseos', 'broken-appstream', 'broken-crb', 'broken-extras',
+        'broken-epel',
+        'baseos', 'appstream', 'BaseOS', 'AppStream',
+        'local-baseos', 'local-appstream', 'lab-baseos', 'lab-appstream',
+        'rhel-baseos', 'rhel-appstream',
+    )
+]
+_PRACTICE_REPO_SET = set(PRACTICE_REPO_FILES)
 
 # Individual files/dirs under /tmp and a couple of /root, /home markers. Globs
 # cover the randomised name families (journal_*, scp_*, top_*, etc.).
@@ -102,6 +129,9 @@ def _is_safe(path):
         return False
     if path in SWAP_FILES:
         return True
+    # The only /etc paths ever touched: the exact task-created repo files.
+    if path in _PRACTICE_REPO_SET:
+        return True
     return path.startswith(_ALLOWED_PREFIXES)
 
 
@@ -158,7 +188,8 @@ def _find_units():
 def find_leftovers():
     """Existing artifact paths cleanup would act on (timeout-guarded)."""
     found = set()
-    for pattern in SWAP_FILES + DIR_ARTIFACTS + FILE_ARTIFACTS:
+    for pattern in (SWAP_FILES + DIR_ARTIFACTS + FILE_ARTIFACTS
+                    + PRACTICE_REPO_FILES):
         for match in _expand(pattern):
             if _is_safe(match) and _exists(match):
                 found.add(os.path.normpath(match))
@@ -215,7 +246,16 @@ def clean(dry_run=False):
             elif _sh(['rm', '-rf', '--', path], 15) == 0:
                 actions.append(f"removed file {path}")
 
-    # 4. Candidate-created systemd units + their helper scripts.
+    # 4. Task-created DNF repo files (exact names from the manifest only).
+    for path in PRACTICE_REPO_FILES:
+        if not _is_safe(path) or not _exists(path):
+            continue
+        if dry_run:
+            actions.append(f"would remove repo {path}")
+        elif _sh(['rm', '-f', '--', path], 15) == 0:
+            actions.append(f"removed repo {path}")
+
+    # 5. Candidate-created systemd units + their helper scripts.
     actions.extend(clean_units(dry_run=dry_run))
 
     return actions

@@ -125,9 +125,8 @@ class EnableServiceTask(BaseTask):
         self.service_name = params.get('service', random.choice(_STARTABLE_SERVICES))
 
         self.description = (
-            f"Enable the '{self.service_name}' service to start automatically at boot.\n"
-            f"  - Use the appropriate systemctl command.\n"
-            f"  - Verify the service is enabled."
+            f"Enable the '{self.service_name}' service to start "
+            f"automatically at boot."
         )
 
         self.hints = [
