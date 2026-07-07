@@ -1,0 +1,90 @@
+name: Claude resume scheduler
+
+# Companion to claude-issue.yml. When a Claude run hits the subscription's
+# 5-hour usage limit, claude-worker.yml saves its progress, posts a hidden
+# state comment on the issue, labels it  claude-resume-pending , and exits
+# green (instead of burning runner minutes sleeping through the reset window —
+# GitHub-hosted jobs are capped at 6 hours anyway, and every sleeping minute
+# bills).
+#
+# This workflow polls every 15 minutes: if a pending issue's stored reset
+# epoch has passed, it re-runs the worker with a "resume" prompt that points
+# Claude at the saved WIP branch. It resumes at most ONE issue per tick —
+# parallel runs would share the same usage budget and re-trip the limit.
+#
+# The scan uses only the GITHUB_TOKEN. Note we run the Claude action directly
+# here rather than re-adding the `claude` label, because events created with
+# GITHUB_TOKEN deliberately do not trigger other workflows.
+#
+# Must live on the DEFAULT branch for the schedule to fire.
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: claude-work
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: read
+    outputs:
+      found: ${{ steps.scan.outputs.found }}
+      issue: ${{ steps.scan.outputs.issue }}
+      wip_branch: ${{ steps.scan.outputs.wip_branch }}
+      attempts: ${{ steps.scan.outputs.attempts }}
+    steps:
+      - name: Find a pending issue whose usage-limit window has reset
+        id: scan
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          echo "found=false" >> "$GITHUB_OUTPUT"
+          now=$(date +%s)
+
+          for n in $(gh issue list -R "$REPO" --label claude-resume-pending \
+                       --state open --json number --jq 'sort_by(.number) | .[].number'); do
+            # Latest hidden state comment wins (each pause posts a fresh one).
+            state=$(gh api "repos/$REPO/issues/$n/comments" --paginate \
+                      --jq '[.[].body | try (capture("<!-- claude-resume-state (?<j>\\{.+?\\}) -->").j)] | last // empty')
+            if [ -z "$state" ]; then
+              echo "Issue #$n is labeled but has no state comment; skipping."
+              continue
+            fi
+            reset=$(jq -r '.reset_epoch' <<<"$state")
+            if [ "$now" -lt "$reset" ]; then
+              echo "Issue #$n resets at epoch $reset (now $now); not yet."
+              continue
+            fi
+            {
+              echo "found=true"
+              echo "issue=$n"
+              echo "wip_branch=$(jq -r '.wip_branch // ""' <<<"$state")"
+              echo "attempts=$(jq -r '.attempts // 0' <<<"$state")"
+            } >> "$GITHUB_OUTPUT"
+            echo "Resuming issue #$n."
+            break
+          done
+
+  resume:
+    needs: scan
+    if: needs.scan.outputs.found == 'true'
+    uses: ./.github/workflows/claude-worker.yml
+    with:
+      issue_number: ${{ needs.scan.outputs.issue }}
+      resume: true
+      wip_branch: ${{ needs.scan.outputs.wip_branch }}
+      attempts: ${{ needs.scan.outputs.attempts }}
+    secrets: inherit
