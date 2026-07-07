@@ -104,6 +104,20 @@ def restore_any_active_fault():
     return True, '\n'.join(msgs)
 
 
+def _restore_remote(info, msgs):
+    """Undo a remote task's change on the linked lab machine (best-effort —
+    the machine may be down; the record is cleared either way, matching how
+    unreachable local restores behave)."""
+    from core import lab_machine
+    label = info.get('label', 'remote task')
+    host = lab_machine.get_host() or 'lab machine'
+    rc, _ = lab_machine.run(info['remote_restore_script'], timeout=60)
+    if rc == 0:
+        msgs.append(f"Restored {label} on {host}")
+    else:
+        msgs.append(f"Could not restore {label} on {host} (unreachable?)")
+
+
 def _dispatch_restore(task_id, info, msgs):
     """Restore a single fault by task_id (crash-recovery dispatcher)."""
     # Generic environment-setup records (from positive-config tasks that
@@ -111,6 +125,10 @@ def _dispatch_restore(task_id, info, msgs):
     # are undone independently of their task_id.
     if isinstance(info, dict) and info.get('restore_type'):
         _restore_env_setup(info, msgs)
+        return
+    # Remote-task records: the restore runs on the linked lab machine.
+    if isinstance(info, dict) and info.get('remote_restore_script'):
+        _restore_remote(info, msgs)
         return
     # Dispatch to the right restorer
     if task_id.startswith('fault_selinux_context'):

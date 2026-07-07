@@ -309,6 +309,15 @@ original root hash is kept locally (root-only, 0600), and **Give up** — or
 **Reset Machine** — reveals the planted password and restores the original
 hash exactly. You cannot be permanently locked out of a bootable machine.
 
+### Remote tasks (two-node exams)
+
+With a lab machine linked, exams and practice sessions also mix in **remote
+tasks** — "On the lab machine (…): set the static hostname / create this user /
+set the timezone" — just like the real exam's second node. You SSH to the
+machine yourself and do the work there; the simulator validates over its own
+key and restores the machine's original state at session end (or on Reset
+Machine). Without a linked machine these tasks are simply never offered.
+
 ---
 
 ## Task domains & categories
