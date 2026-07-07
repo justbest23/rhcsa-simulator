@@ -72,6 +72,11 @@ SELinux).
   [Package & service requirements for task scenarios](#package--service-requirements-for-task-scenarios)
   below — several troubleshooting tasks expect packages a minimal install
   doesn't ship with.
+- **A second VM (optional):** the real exam runs across two nodes. Link a
+  second throwaway VM (**Setup → Link second lab machine**) to unlock the
+  [Boot Rescue Lab](#boot-rescue-lab-second-machine) — real root-password
+  recovery at that machine's console — and to serve as the NFS server for
+  network-storage tasks. Console access to it (virt-manager/VNC) is required.
 - **Snapshot first:** take a VM snapshot before a session so you can revert.
 - **SELinux:** leave it **Enforcing** for realistic SELinux tasks.
 - **Networking:** any NAT/bridged setup; only needed if you want the optional
@@ -246,6 +251,8 @@ collide. Loop images live in `/var/lib/rhcsa-simulator/loops/`.
   OS, and all real accounts. Previews everything and requires typing `RESET`.
 - **Configure remote NFS server** — SSH into a RHEL box you control and provision
   real, seeded NFS exports for the network-storage tasks (refreshed each exam).
+- **Link second lab machine** — register a second box for the Boot Rescue Lab
+  and remote scenarios (see below). Can be the same VM as the NFS server.
 - **Populate Practice Environment** (DNF history).
 
 ### When does the machine get cleaned?
@@ -260,6 +267,47 @@ collide. Loop images live in `/var/lib/rhcsa-simulator/loops/`.
   tasks. Practice disks are the one exception: they're wiped between disk tasks
   so the next one gets a clean device.
 - **Every session start** restores anything a previous session left behind.
+
+---
+
+## Boot Rescue Lab (second machine)
+
+The real exam expects you to recover a lost root password by interrupting boot
+at the console — something a simulator can't fake on its own machine. So the
+simulator does it for real, on a **second machine you control**:
+
+1. **Requirements:** a second RHEL/Rocky/Alma VM (or box) on your network that
+   you have **console access** to (virt-manager, VNC, or a physical keyboard —
+   SSH won't help once the password is gone), plus root SSH once for linking.
+2. **Link it** via **Setup → Link second lab machine**. This runs `ssh-copy-id`
+   (you type the root password one time) and from then on the simulator uses
+   key-based SSH only. The key is its *only* footprint — no agent, nothing
+   installed on the lab machine.
+3. **Start a scenario** from the main menu (**R — Boot Rescue Lab**): the
+   simulator sets a random root password on the lab machine. Go to its console
+   and recover it by interrupting boot.
+4. **Validate**: over its retained key, the simulator checks that the root hash
+   changed, the machine rebooted into a working system, and `/etc/shadow` has
+   the correct SELinux label (proof you handled the relabel). Which method you
+   used is detected best-effort from the journal and reported as info only.
+   Optionally type your new password and it is proven against the live hash.
+
+Both recovery methods are taught and accepted (the walkthrough is built in):
+
+- **`rd.break`** — the classic method: break before `switch_root`, remount
+  `/sysroot` rw, `chroot`, `passwd`, `touch /.autorelabel`. **Note:** on some
+  builds `rd.break` drops you into a *password-gated* maintenance shell
+  ("Give root password for maintenance") instead of a free shell — real exams
+  have shipped such machines. When that happens, use:
+- **`init=/bin/bash`** — works on every build: bash runs as PID 1, remount `/`
+  rw, `passwd`, `restorecon /etc/shadow`. Since systemd isn't running,
+  `reboot` fails — reboot with `sync; echo b > /proc/sysrq-trigger` (or
+  `/usr/sbin/reboot -f`).
+
+**Safety:** the scenario refuses to start unless key-based SSH works, the
+original root hash is kept locally (root-only, 0600), and **Give up** — or
+**Reset Machine** — reveals the planted password and restores the original
+hash exactly. You cannot be permanently locked out of a bootable machine.
 
 ---
 

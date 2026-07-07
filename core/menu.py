@@ -184,6 +184,9 @@ LEARN & PRACTICE
      get instant feedback with retry & solution hints.
   3. Adaptive Mode - SM-2 selects your weakest/due categories.
      Difficulty adjusts to your performance. Best for review.
+  R. Boot Rescue Lab - the simulator scrambles root's password on a
+     linked second machine; you recover it at that machine's console
+     (rd.break or init=/bin/bash). Link the machine in Setup first.
 
 PROGRESS
   4. Dashboard - View exam history, success rates, weak areas,
