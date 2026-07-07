@@ -136,6 +136,10 @@ SAFE_VALIDATION_COMMANDS = {
     # SSH config test (read-only, -t only — see _validate_specific_commands)
     'sshd',
 
+    # sudo privilege listing / sudoers syntax check (read-only — see
+    # _validate_specific_commands: sudo requires -l, visudo requires -c)
+    'sudo', 'visudo',
+
     # Process info
     'ps', 'top', 'pgrep', 'pidof',
 

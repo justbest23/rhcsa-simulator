@@ -106,6 +106,18 @@ class TestSpecificCommandRules:
     def test_sshd_without_t_blocked(self, executor):
         assert executor.can_execute(["sshd"]) is False
 
+    def test_sudo_list_allowed(self, executor):
+        assert executor.can_execute(["sudo", "-l", "-U", "operator84"]) is True
+
+    def test_sudo_without_l_blocked(self, executor):
+        assert executor.can_execute(["sudo", "bash"]) is False
+
+    def test_visudo_check_syntax_allowed(self, executor):
+        assert executor.can_execute(["visudo", "-c"]) is True
+
+    def test_visudo_without_c_blocked(self, executor):
+        assert executor.can_execute(["visudo"]) is False
+
 
 class TestCommandExecution:
     """Test actual command execution with mocked subprocess."""
