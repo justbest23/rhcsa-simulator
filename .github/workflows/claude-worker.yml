@@ -1,0 +1,191 @@
+name: Claude worker (reusable)
+
+# Shared "run Claude on an issue" job used by two callers:
+#   * claude-issue.yml  — fresh work, triggered by the owner labeling/mentioning
+#   * claude-resume.yml — scheduled resumer that continues runs interrupted by
+#                         the Claude subscription's 5-hour usage limit
+#
+# Usage-limit resilience: the Claude step runs with continue-on-error. If it
+# fails, .github/scripts/claude_usage_limit.py greps the execution log for the
+# "usage limit reached ... resets ..." message. On a limit hit the job:
+#   1. commits/pushes any uncommitted or unpushed work to claude/issue-N-wip,
+#   2. posts a hidden machine-readable state comment on the issue
+#      (<!-- claude-resume-state {...} -->) with the reset time as a UTC epoch,
+#   3. adds the  claude-resume-pending  label, and exits GREEN.
+# The scheduled resumer picks it up once the stored reset epoch has passed.
+# Any other failure stays a real, red failure.
+
+on:
+  workflow_call:
+    inputs:
+      issue_number:
+        required: true
+        type: string
+      resume:
+        type: boolean
+        default: false
+      wip_branch:
+        type: string
+        default: ''
+      attempts:
+        description: How many usage-limit interruptions this issue has already had
+        type: string
+        default: '0'
+
+env:
+  MAX_ATTEMPTS: 6
+
+jobs:
+  work:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # Remove the pending label up front so the next scheduler tick doesn't
+      # start a duplicate resume while this one is still running. If we hit
+      # the limit again, the save step below re-adds it with fresh state.
+      - name: Clear pending-resume label
+        if: inputs.resume
+        run: gh issue edit "${{ inputs.issue_number }}" --remove-label claude-resume-pending || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Written by a step (not an inline ${{ }} ternary) because GitHub
+      # expression string literals don't reliably support newlines.
+      - name: Compose resume preamble for the prompt
+        id: preamble
+        env:
+          RESUME: ${{ inputs.resume }}
+          WIP: ${{ inputs.wip_branch }}
+          ATTEMPTS: ${{ inputs.attempts }}
+        run: |
+          {
+            echo "text<<PREAMBLE_EOF"
+            if [ "$RESUME" = "true" ]; then
+              echo "RESUMING AN INTERRUPTED RUN: an earlier run on this issue was stopped by the Claude usage limit (interruption $ATTEMPTS)."
+              if [ -n "$WIP" ]; then
+                echo "Partial work was saved on branch \`$WIP\` — start with \`git fetch origin $WIP && git checkout $WIP\`, then review \`git log\` and \`git diff origin/master...HEAD\` to see the progress so far."
+              else
+                echo "No work-in-progress branch was saved; check for existing claude/issue-* branches with \`git branch -r\`."
+              fi
+              echo "Re-read the issue comments to see what was already done or posted. Verify what is complete, do NOT redo it, and continue from where the previous run stopped."
+              echo ""
+            fi
+            echo "PREAMBLE_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Work the issue with Claude
+        id: claude
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: >-
+            --allowedTools "Bash,Read,Edit,Write,Grep,Glob"
+            --max-turns 80
+          prompt: |
+            ${{ steps.preamble.outputs.text }}You are working GitHub issue #${{ inputs.issue_number }} in
+            this repository — the RHCSA EX200 v10 exam simulator (Python,
+            standard library only, tests via `python3 -m pytest -q`).
+
+            Steps:
+            1. Read the issue and any discussion:
+                 gh issue view ${{ inputs.issue_number }} --comments
+            2. Understand what is being asked. If it is a bug, reproduce/locate
+               it; if it is a feature, find the right module (core/, tasks/,
+               validators/, utils/). Follow the conventions already in the file
+               you are editing.
+            3. Implement the smallest correct change that satisfies the issue.
+               Do not make unrelated changes.
+            4. Add or update tests under tests/ to cover the change, then run
+               `python3 -m pytest -q` and make sure the whole suite passes.
+            5. Create a branch  claude/issue-${{ inputs.issue_number }},
+               commit, and open a PR whose body starts with
+               "Closes #${{ inputs.issue_number }}" and explains what you
+               changed and why, using `gh pr create`.
+            6. Post a short comment on the issue linking the PR:
+                 gh issue comment ${{ inputs.issue_number }} --body "..."
+
+            If the issue is unclear, under-specified, or you are not confident a
+            change is correct, do NOT open a speculative PR — instead post a
+            comment asking the specific clarifying question(s) and stop.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check whether the failure was a usage-limit stop
+        id: limit
+        if: steps.claude.outcome == 'failure'
+        run: python3 .github/scripts/claude_usage_limit.py "${{ steps.claude.outputs.execution_file }}"
+
+      - name: Save progress and schedule auto-resume
+        if: steps.limit.outputs.rate_limited == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE: ${{ inputs.issue_number }}
+          ATTEMPTS: ${{ inputs.attempts }}
+          RESET_EPOCH: ${{ steps.limit.outputs.reset_epoch }}
+          RESET_HUMAN: ${{ steps.limit.outputs.reset_human }}
+          DEFAULT_BRANCH: ${{ github.ref_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          attempts=$(( ATTEMPTS + 1 ))
+
+          if [ "$attempts" -gt "$MAX_ATTEMPTS" ]; then
+            gh issue comment "$ISSUE" --body "🛑 Claude hit the usage limit ${MAX_ATTEMPTS}+ times on this issue; giving up on auto-resume. Re-add the \`claude\` label to start over, or the \`claude-resume-pending\` label to keep the saved state. ($RUN_URL)"
+            exit 1
+          fi
+
+          # Persist whatever Claude got done: commit uncommitted changes and
+          # push any local-only commits to a WIP branch.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          wip=""
+          if [ -n "$(git status --porcelain)" ] || ! git merge-base --is-ancestor HEAD "origin/$DEFAULT_BRANCH"; then
+            cur=$(git branch --show-current || true)
+            if [ -z "$cur" ] || [ "$cur" = "$DEFAULT_BRANCH" ]; then
+              cur="claude/issue-${ISSUE}-wip"
+              git checkout -B "$cur"
+            fi
+            git add -A
+            git diff --cached --quiet || git commit -m "WIP: issue #${ISSUE} (auto-saved at usage-limit pause)"
+            git push -f origin "$cur"
+            wip="$cur"
+          fi
+
+          state=$(printf '{"issue":%s,"reset_epoch":%s,"wip_branch":"%s","attempts":%s}' \
+                  "$ISSUE" "$RESET_EPOCH" "$wip" "$attempts")
+          {
+            echo "<!-- claude-resume-state $state -->"
+            echo "⏸️ Claude hit the subscription usage limit while working this issue (interruption #${attempts})."
+            echo ""
+            echo "Auto-resume is scheduled for after **${RESET_HUMAN}** — the resume workflow checks every 15 minutes."
+            if [ -n "$wip" ]; then
+              echo "Partial work was saved on branch \`$wip\`."
+            fi
+            echo ""
+            echo "_Interrupted run: ${RUN_URL}_"
+          } > /tmp/resume-comment.md
+          gh issue comment "$ISSUE" --body-file /tmp/resume-comment.md
+
+          gh label create claude-resume-pending \
+            --description "Claude run paused by usage limit; auto-resumes after reset" \
+            --color FBCA04 || true
+          gh issue edit "$ISSUE" --add-label claude-resume-pending
+          echo "Paused. Resume scheduled after $RESET_HUMAN."
+
+      - name: Fail on real (non-limit) errors
+        if: steps.claude.outcome == 'failure' && steps.limit.outputs.rate_limited != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if ${{ inputs.resume }}; then
+            gh issue comment "${{ inputs.issue_number }}" --body "❌ Auto-resume failed for a reason other than the usage limit — see $RUN_URL. Re-add the \`claude-resume-pending\` label to retry with the saved state, or \`claude\` to start over." || true
+          fi
+          echo "Claude step failed and no usage-limit message was found in the execution log."
+          exit 1
