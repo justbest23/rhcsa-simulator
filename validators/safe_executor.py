@@ -374,6 +374,20 @@ class SafeCommandExecutor:
                     "sshd is only allowed with -t (test configuration) option"
                 )
 
+        # Ensure sudo is only used to list privileges, never to run a command
+        elif base_cmd == 'sudo':
+            if '-l' not in command:
+                raise SecurityError(
+                    "sudo is only allowed with -l (list privileges) option"
+                )
+
+        # Ensure visudo is only used to check syntax, never to edit
+        elif base_cmd == 'visudo':
+            if '-c' not in command and '-cf' not in command:
+                raise SecurityError(
+                    "visudo is only allowed with -c (check syntax) option"
+                )
+
     def can_execute(self, command):
         """
         Check if a command can be executed without actually running it.
