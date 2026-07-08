@@ -544,6 +544,30 @@ class TroubleshootSELinuxDenialTask(BaseTask):
 
         return self
 
+    def _fcontext_avc(self, test_file):
+        """Build (avc_body, journal_msg) for the fcontext scenario's synthetic
+        denial. None of these directories are wired into the service's real
+        config (no vhost/share/alias points at them), so the service never
+        actually touches them and a genuine denial can't be relied on to
+        occur -- seed the evidence a real one would have left instead."""
+        perm = 'write' if self.expected_context == 'httpd_sys_rw_content_t' else 'read'
+        comm, scontext_type = {
+            'httpd': ('httpd', 'httpd_t'),
+            'nginx': ('nginx', 'httpd_t'),
+            'samba': ('smbd', 'smbd_t'),
+        }.get(self.service, (self.service, 'httpd_t'))
+        avc_body = (
+            f'{{ {perm} }} for  pid=2841 comm="{comm}" name="index.html" '
+            'dev="dm-0" ino=17825828 '
+            f'scontext=system_u:system_r:{scontext_type}:s0 '
+            'tcontext=unconfined_u:object_r:tmp_t:s0 tclass=file permissive=0'
+        )
+        journal_msg = (
+            f'SELinux is preventing {comm} from {perm} access on the file '
+            f'{test_file}. For complete SELinux messages run: ausearch -m AVC | audit2why'
+        )
+        return avc_body, journal_msg
+
     def inject_fault(self):
         import subprocess as _sp
         if self.fix_type == 'fcontext' and self.directory:
@@ -553,8 +577,9 @@ class TroubleshootSELinuxDenialTask(BaseTask):
                 with open(test_file, 'w') as f:
                     f.write('<html><body>Test</body></html>\n')
             _sp.run(['chcon', '-Rt', 'tmp_t', self.directory], capture_output=True)
-            from tasks.troubleshooting import save_fault_state
+            from tasks.troubleshooting import save_fault_state, _seed_avc_denial
             save_fault_state(self.id, {'directory': self.directory, 'fix_type': self.fix_type})
+            _seed_avc_denial(*self._fcontext_avc(test_file))
             return True, f"Created {self.directory} with wrong SELinux context (tmp_t)"
 
         # boolean fix_type: actually turn the boolean off so there is a real
