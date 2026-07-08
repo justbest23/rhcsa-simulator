@@ -1,18 +1,24 @@
 """
-Regression tests for issue #69: httpd SELinux-boolean troubleshooting tasks
-must leave real, findable evidence behind — a candidate running
+Regression tests for issues #69 and #76: SELinux troubleshooting tasks must
+leave real, findable evidence behind — a candidate running
 `ausearch -m avc -ts recent | audit2why` should never come up empty.
 
-Two distinct bugs were fixed:
+Three distinct bugs were fixed:
 
   * TroubleshootSELinuxDenialTask (tasks/selinux.py) did nothing at all for
     its "boolean" scenario — the boolean was never turned off and no AVC
     evidence was ever written, so there was no fault to find in the first
-    place.
+    place. (#69)
   * SELinuxHttpdBooleanFaultTask (tasks/troubleshooting.py) tried to trigger
     a real denial by curling http://localhost:8080 as a *client* — but that
     never makes httpd itself originate an outbound connection, so no genuine
-    name_connect denial was ever produced even with httpd installed.
+    name_connect denial was ever produced even with httpd installed. (#69)
+  * TroubleshootSELinuxDenialTask's "fcontext" scenarios (httpd/nginx/samba
+    directories) never wire the mislabelled directory into the service's
+    real config, so the service never touches it and no genuine denial can
+    occur no matter what the candidate does — ausearch came up empty and,
+    since the fault never affected anything the service actually serves,
+    curl kept working whether or not SELinux was fixed. (#76)
 """
 
 import subprocess
@@ -110,6 +116,33 @@ class TestTroubleshootSELinuxDenialBooleanScenario:
         assert any(c[0] == 'chcon' for c in fake.calls)
         # No boolean flip for the fcontext scenario
         assert not any(c[0] == 'setsebool' for c in fake.calls)
+
+    @pytest.mark.parametrize("service,expected_context,comm", [
+        ("httpd", "httpd_sys_content_t", "httpd"),
+        ("httpd", "httpd_sys_rw_content_t", "httpd"),
+        ("samba", "samba_share_t", "smbd"),
+        ("nginx", "httpd_sys_content_t", "nginx"),
+    ])
+    def test_fcontext_scenario_seeds_avc(self, sandbox, service, expected_context, comm):
+        """Issue #76: the directory these scenarios mislabel is never wired
+        into the service's real config, so nothing ever makes the service
+        touch it and a genuine denial can't be relied on to occur. Seed the
+        evidence a real one would have left."""
+        _, tmp_path = sandbox
+        task = sel.TroubleshootSELinuxDenialTask()
+        task.service = service
+        task.directory = str(tmp_path / 'custom')
+        task.expected_context = expected_context
+        task.fix_type = 'fcontext'
+
+        ok, msg = task.inject_fault()
+
+        assert ok, msg
+        log = tmp_path / 'audit.log'
+        assert log.exists(), "ausearch would find nothing without this"
+        content = log.read_text()
+        assert 'type=AVC' in content
+        assert f'comm="{comm}"' in content
 
 
 class TestSELinuxHttpdBooleanFaultTaskAlwaysSeedsAvc:
